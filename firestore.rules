@@ -1,0 +1,212 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId} (Firebase Auth UID)
+    // Fields:
+    //   - email: string (required)
+    //   - role: string (required, 'admin' | 'pharmacy')
+    //   - created_at: string (required, ISO 8601)
+    //
+    // Collection: pharmacies
+    // Document ID: {pharmacyId} (UUID)
+    // Fields:
+    //   - user_id: string (required, owner UID)
+    //   - name: string (required)
+    //   - phone: string
+    //   - whatsapp: string
+    //   - email: string
+    //   - website: string
+    //   - street: string
+    //   - number: string
+    //   - neighborhood: string
+    //   - city: string (required)
+    //   - state: string (required)
+    //   - zip: string
+    //   - is_active: number (required, 0 or 1)
+    //   - created_at: string (required, ISO 8601)
+    //
+    // Collection: subscriptions
+    // Document ID: {subscriptionId}
+    // Fields:
+    //   - pharmacy_id: string (required)
+    //   - status: string (required, 'pending' | 'active' | 'expired')
+    //   - expires_at: string (ISO 8601)
+    //   - created_at: string (required, ISO 8601)
+    //
+    // Collection: highlights
+    // Document ID: {highlightId}
+    // Fields:
+    //   - pharmacy_id: string (required)
+    //   - type: string (required, 'day')
+    //   - date_start: string (required, ISO 8601)
+    //   - date_end: string (required, ISO 8601)
+    //   - city: string (required)
+    //   - state: string (required)
+    //   - created_at: string (required, ISO 8601)
+    //
+    // Collection: payments
+    // Document ID: {paymentId}
+    // Fields:
+    //   - pharmacy_id: string (required)
+    //   - amount: number (required)
+    //   - method: string
+    //   - status: string (required, 'pending' | 'approved' | 'rejected')
+    //   - mp_payment_id: string
+    //   - created_at: string (required, ISO 8601)
+    //
+    // Collection: shifts
+    // Document ID: {shiftId}
+    // Fields:
+    //   - pharmacy_id: string (required)
+    //   - date: string (required, YYYY-MM-DD)
+    //   - start_time: string (required, HH:MM)
+    //   - end_time: string (required, HH:MM)
+    //   - is_24h: number (required, 0 or 1)
+    //   - created_at: string (required, ISO 8601)
+    //   - updated_at: string (ISO 8601)
+    //
+    // Collection: clicks
+    // Document ID: {clickId}
+    // Fields:
+    //   - pharmacy_id: string (required)
+    //   - type: string (required, 'whatsapp' | 'map')
+    //   - created_at: string (required, ISO 8601)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "sys.farmaciasdeplantao@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return hasRequiredFields(['email', 'role', 'created_at']) &&
+             data.email is string && isValidEmail(data.email) &&
+             data.role in ['admin', 'pharmacy'] &&
+             isValidDateString(data.created_at);
+    }
+
+    function isValidPharmacy(data) {
+      return hasRequiredFields(['user_id', 'name', 'city', 'state', 'is_active', 'created_at']) &&
+             data.user_id is string &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.city is string && data.city.size() > 0 &&
+             data.state is string && data.state.size() == 2 &&
+             data.is_active is number &&
+             isValidDateString(data.created_at);
+    }
+
+    function isValidShift(data) {
+      return hasRequiredFields(['pharmacy_id', 'date', 'start_time', 'end_time', 'is_24h', 'created_at']) &&
+             data.pharmacy_id is string &&
+             data.date is string && data.date.matches("^\\d{4}-\\d{2}-\\d{2}$") &&
+             data.start_time is string && data.start_time.matches("^\\d{2}:\\d{2}$") &&
+             data.end_time is string && data.end_time.matches("^\\d{2}:\\d{2}$") &&
+             data.is_24h is number &&
+             isValidDateString(data.created_at);
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isAuthenticated() && isValidUser(request.resource.data) && 
+                    (isOwner(userId) && request.resource.data.role == 'pharmacy' || isAdmin());
+      allow update: if isAuthenticated() && isValidUser(request.resource.data) && 
+                    (isOwner(userId) && request.resource.data.role == resource.data.role || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /pharmacies/{pharmacyId} {
+      allow read: if true; // Publicly readable
+      allow create: if isAuthenticated() && isValidPharmacy(request.resource.data) && 
+                    (request.resource.data.user_id == request.auth.uid || isAdmin());
+      allow update: if isAuthenticated() && isValidPharmacy(request.resource.data) && 
+                    (resource.data.user_id == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /subscriptions/{subscriptionId} {
+      allow read: if isAuthenticated() && (isAdmin() || 
+                    get(/databases/$(database)/documents/pharmacies/$(resource.data.pharmacy_id)).data.user_id == request.auth.uid);
+      allow create, update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /highlights/{highlightId} {
+      allow read: if true;
+      allow create, update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /payments/{paymentId} {
+      allow read: if isAuthenticated() && (isAdmin() || 
+                    get(/databases/$(database)/documents/pharmacies/$(resource.data.pharmacy_id)).data.user_id == request.auth.uid);
+      allow create: if isAuthenticated() && (isAdmin() || 
+                    get(/databases/$(database)/documents/pharmacies/$(request.resource.data.pharmacy_id)).data.user_id == request.auth.uid);
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /shifts/{shiftId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && isValidShift(request.resource.data) && 
+                    (get(/databases/$(database)/documents/pharmacies/$(request.resource.data.pharmacy_id)).data.user_id == request.auth.uid || isAdmin());
+      allow update: if isAuthenticated() && isValidShift(request.resource.data) && 
+                    (get(/databases/$(database)/documents/pharmacies/$(resource.data.pharmacy_id)).data.user_id == request.auth.uid || isAdmin());
+      allow delete: if isAuthenticated() && 
+                    (get(/databases/$(database)/documents/pharmacies/$(resource.data.pharmacy_id)).data.user_id == request.auth.uid || isAdmin());
+    }
+
+    match /clicks/{clickId} {
+      allow read: if isAdmin() || (isAuthenticated() && 
+                    get(/databases/$(database)/documents/pharmacies/$(resource.data.pharmacy_id)).data.user_id == request.auth.uid);
+      allow create: if true; // Public can register clicks
+      allow update, delete: if isAdmin();
+    }
+    
+    match /test/connection {
+      allow read: if true;
+    }
+  }
+}

@@ -1,0 +1,134 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Application user profile",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["admin", "pharmacy"] },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "role", "created_at"]
+    },
+    "Pharmacy": {
+      "title": "Pharmacy",
+      "description": "Pharmacy profile details",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "whatsapp": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "website": { "type": "string" },
+        "street": { "type": "string" },
+        "number": { "type": "string" },
+        "neighborhood": { "type": "string" },
+        "city": { "type": "string" },
+        "state": { "type": "string" },
+        "zip": { "type": "string" },
+        "is_active": { "type": "number" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["user_id", "name", "city", "state", "is_active", "created_at"]
+    },
+    "Subscription": {
+      "title": "Subscription",
+      "description": "Pharmacy subscription status",
+      "type": "object",
+      "properties": {
+        "pharmacy_id": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "active", "expired"] },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["pharmacy_id", "status", "created_at"]
+    },
+    "Highlight": {
+      "title": "Highlight",
+      "description": "Exclusive highlight for a pharmacy in a city",
+      "type": "object",
+      "properties": {
+        "pharmacy_id": { "type": "string" },
+        "type": { "type": "string", "enum": ["day"] },
+        "date_start": { "type": "string", "format": "date-time" },
+        "date_end": { "type": "string", "format": "date-time" },
+        "city": { "type": "string" },
+        "state": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["pharmacy_id", "type", "date_start", "date_end", "city", "state", "created_at"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "Payment records for subscriptions",
+      "type": "object",
+      "properties": {
+        "pharmacy_id": { "type": "string" },
+        "amount": { "type": "number" },
+        "method": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "mp_payment_id": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["pharmacy_id", "amount", "status", "created_at"]
+    },
+    "Shift": {
+      "title": "Shift",
+      "description": "On-call shift for a pharmacy",
+      "type": "object",
+      "properties": {
+        "pharmacy_id": { "type": "string" },
+        "date": { "type": "string" },
+        "start_time": { "type": "string" },
+        "end_time": { "type": "string" },
+        "is_24h": { "type": "number" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["pharmacy_id", "date", "start_time", "end_time", "is_24h", "created_at"]
+    },
+    "Click": {
+      "title": "Click",
+      "description": "Metric tracking for pharmacy interactions",
+      "type": "object",
+      "properties": {
+        "pharmacy_id": { "type": "string" },
+        "type": { "type": "string", "enum": ["whatsapp", "map"] },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["pharmacy_id", "type", "created_at"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile documents"
+    },
+    "/pharmacies/{pharmacyId}": {
+      "schema": "Pharmacy",
+      "description": "Pharmacy profile documents"
+    },
+    "/subscriptions/{subscriptionId}": {
+      "schema": "Subscription",
+      "description": "Subscription records"
+    },
+    "/highlights/{highlightId}": {
+      "schema": "Highlight",
+      "description": "Exclusive highlights"
+    },
+    "/payments/{paymentId}": {
+      "schema": "Payment",
+      "description": "Payment records"
+    },
+    "/shifts/{shiftId}": {
+      "schema": "Shift",
+      "description": "On-call shifts"
+    },
+    "/clicks/{clickId}": {
+      "schema": "Click",
+      "description": "Interaction metrics"
+    }
+  }
+}

@@ -1,0 +1,528 @@
+import React, { useState, useEffect } from 'react';
+import { CheckCircle, AlertCircle, QrCode, CreditCard, Star, Edit, Calendar, Plus, Trash2, TrendingUp } from 'lucide-react';
+import PixPaymentManager from '../../components/PixPaymentManager';
+import { isShiftPast, formatToBRDate } from '../../lib/dateUtils';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+
+export default function PharmacyDashboard() {
+  const [profile, setProfile] = useState<any>(null);
+  const [highlights, setHighlights] = useState<any[]>([]);
+  const [payments, setPayments] = useState<any[]>([]);
+  const [shifts, setShifts] = useState<any[]>([]);
+  const [reports, setReports] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('overview');
+
+  const [editForm, setEditForm] = useState<any>({});
+  const [saving, setSaving] = useState(false);
+
+  const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
+  const [shiftForm, setShiftForm] = useState({ date: '', start_time: '07:00', end_time: '22:00', is_24h: false });
+  const [editingShiftId, setEditingShiftId] = useState<string | null>(null);
+
+  const fetchData = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const headers = { 
+        'Authorization': `Bearer ${token}`,
+        'X-App-Token': `Bearer ${token}` 
+      };
+      
+      const [profRes, highRes, payRes, shiftRes, repRes] = await Promise.all([
+        fetch('/api/pharmacy/profile', { headers }),
+        fetch('/api/pharmacy/highlights', { headers }),
+        fetch('/api/pharmacy/payments', { headers }),
+        fetch('/api/pharmacy/shifts', { headers }),
+        fetch('/api/pharmacy/reports', { headers })
+      ]);
+
+      const profData = await profRes.json();
+      setProfile(profData);
+      setEditForm(profData);
+      
+      if (highRes.ok) {
+        const data = await highRes.json();
+        setHighlights(Array.isArray(data) ? data : []);
+      }
+      if (payRes.ok) {
+        const data = await payRes.json();
+        setPayments(Array.isArray(data) ? data : []);
+      }
+      if (shiftRes.ok) {
+        const data = await shiftRes.json();
+        setShifts(Array.isArray(data) ? data : []);
+      }
+      if (repRes.ok) setReports(await repRes.json());
+    } catch (error) {
+      console.error('Error fetching data', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const token = localStorage.getItem('token');
+      await fetch('/api/pharmacy/profile', {
+        method: 'PUT',
+        headers: { 
+          'Authorization': `Bearer ${token}`,
+          'X-App-Token': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(editForm)
+      });
+      setProfile(editForm);
+      alert('Perfil atualizado com sucesso!');
+    } catch (error) {
+      console.error('Error saving profile', error);
+      alert('Erro ao salvar perfil.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveShift = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const token = localStorage.getItem('token');
+      const url = editingShiftId ? `/api/pharmacy/shifts/${editingShiftId}` : '/api/pharmacy/shifts';
+      const method = editingShiftId ? 'PUT' : 'POST';
+      
+      await fetch(url, {
+        method,
+        headers: { 
+          'Authorization': `Bearer ${token}`,
+          'X-App-Token': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(shiftForm)
+      });
+      
+      setIsShiftModalOpen(false);
+      fetchData();
+    } catch (error) {
+      console.error('Error saving shift', error);
+      alert('Erro ao salvar plantão.');
+    }
+  };
+
+  const handleDeleteShift = async (id: string) => {
+    if (!window.confirm('Tem certeza que deseja excluir este plantão?')) return;
+    try {
+      const token = localStorage.getItem('token');
+      await fetch(`/api/pharmacy/shifts/${id}`, {
+        method: 'DELETE',
+        headers: { 
+          'Authorization': `Bearer ${token}`,
+          'X-App-Token': `Bearer ${token}` 
+        }
+      });
+      fetchData();
+    } catch (error) {
+      console.error('Error deleting shift', error);
+    }
+  };
+
+  const openNewShiftModal = () => {
+    setEditingShiftId(null);
+    setShiftForm({ date: '', start_time: '07:00', end_time: '22:00', is_24h: false });
+    setIsShiftModalOpen(true);
+  };
+
+  const openEditShiftModal = (shift: any) => {
+    setEditingShiftId(shift.id);
+    setShiftForm({
+      date: shift.date,
+      start_time: shift.start_time,
+      end_time: shift.end_time,
+      is_24h: shift.is_24h === 1
+    });
+    setIsShiftModalOpen(true);
+  };
+
+  if (loading) return <div className="p-8">Carregando...</div>;
+  if (!profile) return <div className="p-8">Erro ao carregar perfil.</div>;
+
+  const isPending = profile.subscription?.status === 'pending';
+  const isActive = profile.is_active === 1;
+
+  return (
+    <div className="p-8 max-w-5xl mx-auto">
+      <h1 className="text-2xl font-bold text-gray-900 mb-6">Painel da Farmácia</h1>
+
+      {/* Tabs */}
+      <div className="border-b border-gray-200 mb-8">
+        <nav className="-mb-px flex space-x-8 overflow-x-auto">
+          {['overview', 'metrics', 'edit', 'shifts', 'highlights', 'history'].map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`${
+                activeTab === tab
+                  ? 'border-emerald-500 text-emerald-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm capitalize`}
+            >
+              {tab === 'overview' && 'Visão Geral'}
+              {tab === 'metrics' && 'Métricas'}
+              {tab === 'edit' && 'Editar Perfil'}
+              {tab === 'shifts' && 'Plantões'}
+              {tab === 'highlights' && 'Meus Destaques'}
+              {tab === 'history' && 'Histórico de Pagamentos'}
+            </button>
+          ))}
+        </nav>
+      </div>
+
+      {activeTab === 'overview' && (
+        <div className="space-y-8">
+          {/* Subscription Status */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+            <h2 className="text-lg font-semibold mb-4">Status da Assinatura</h2>
+            
+            {isActive ? (
+              <div className="flex items-center gap-3 text-emerald-700 bg-emerald-50 p-4 rounded-lg">
+                <CheckCircle className="w-6 h-6" />
+                <div>
+                  <p className="font-medium">Assinatura Ativa</p>
+                  <p className="text-sm">Sua farmácia está visível nas buscas. Expira em: {new Date(profile.subscription?.expires_at).toLocaleDateString('pt-BR')}</p>
+                </div>
+              </div>
+            ) : isPending ? (
+              <div className="flex flex-col gap-4">
+                <div className="flex items-center gap-3 text-amber-700 bg-amber-50 p-4 rounded-lg">
+                  <AlertCircle className="w-6 h-6" />
+                  <div>
+                    <p className="font-medium">Pagamento Pendente</p>
+                    <p className="text-sm">Realize o pagamento para ativar sua conta.</p>
+                  </div>
+                </div>
+                
+                <div className="border border-gray-200 rounded-lg p-6 bg-gray-50">
+                  <h3 className="font-bold text-xl mb-2 text-center">Plano Anual: R$ 69,96</h3>
+                  <p className="text-gray-600 mb-6 text-center">Pague via Pix para liberação imediata.</p>
+                  
+                  <PixPaymentManager onPaymentSuccess={fetchData} />
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-4">
+                <div className="flex items-center gap-3 text-red-700 bg-red-50 p-4 rounded-lg">
+                  <AlertCircle className="w-6 h-6" />
+                  <div>
+                    <p className="font-medium">Assinatura Expirada</p>
+                    <p className="text-sm">Renove sua assinatura para voltar a aparecer nas buscas.</p>
+                  </div>
+                </div>
+                
+                <div className="border border-gray-200 rounded-lg p-6 bg-gray-50 mt-4">
+                  <h3 className="font-bold text-xl mb-2 text-center">Renovação Anual: R$ 69,96</h3>
+                  <p className="text-gray-600 mb-6 text-center">Gere um novo Pix para renovar sua assinatura.</p>
+                  <PixPaymentManager onPaymentSuccess={fetchData} />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Profile Data */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+            <h2 className="text-lg font-semibold mb-4">Dados Cadastrais</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <p className="text-sm text-gray-500">Nome da Farmácia</p>
+                <p className="font-medium">{profile.name}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500">Telefone</p>
+                <p className="font-medium">{profile.phone}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500">WhatsApp</p>
+                <p className="font-medium">{profile.whatsapp}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500">Endereço</p>
+                <p className="font-medium">{profile.street}, {profile.number} - {profile.neighborhood}</p>
+                <p className="font-medium">{profile.city}/{profile.state}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'metrics' && reports?.dailyClicks && (
+        <div className="space-y-6">
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+            <div className="flex items-center gap-2 mb-6">
+              <TrendingUp className="w-6 h-6 text-emerald-600" />
+              <h2 className="text-lg font-semibold text-gray-900">Engajamento de Clientes (Últimos 30 dias)</h2>
+            </div>
+            <div className="h-80">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={reports.dailyClicks} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="date" axisLine={false} tickLine={false} />
+                  <YAxis axisLine={false} tickLine={false} allowDecimals={false} />
+                  <Tooltip cursor={{ fill: '#f3f4f6' }} />
+                  <Legend />
+                  <Bar dataKey="whatsapp" name="Cliques no WhatsApp" fill="#10b981" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="map" name="Cliques no Mapa" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'edit' && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <h2 className="text-lg font-semibold mb-6">Editar Perfil</h2>
+          <form onSubmit={handleSaveProfile} className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium text-gray-700">Nome da Farmácia</label>
+                <input type="text" value={editForm.name || ''} onChange={e => setEditForm({...editForm, name: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Telefone</label>
+                <input type="text" value={editForm.phone || ''} onChange={e => setEditForm({...editForm, phone: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">WhatsApp</label>
+                <input type="text" value={editForm.whatsapp || ''} onChange={e => setEditForm({...editForm, whatsapp: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" />
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium text-gray-700">Rua</label>
+                <input type="text" value={editForm.street || ''} onChange={e => setEditForm({...editForm, street: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Número</label>
+                <input type="text" value={editForm.number || ''} onChange={e => setEditForm({...editForm, number: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Bairro</label>
+                <input type="text" value={editForm.neighborhood || ''} onChange={e => setEditForm({...editForm, neighborhood: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Cidade</label>
+                <input type="text" value={editForm.city || ''} onChange={e => setEditForm({...editForm, city: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Estado</label>
+                <input type="text" value={editForm.state || ''} onChange={e => setEditForm({...editForm, state: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md uppercase" maxLength={2} />
+              </div>
+            </div>
+            <button type="submit" disabled={saving} className="bg-emerald-600 text-white px-6 py-2 rounded-md font-medium hover:bg-emerald-700 disabled:opacity-50">
+              {saving ? 'Salvando...' : 'Salvar Alterações'}
+            </button>
+          </form>
+        </div>
+      )}
+
+      {activeTab === 'shifts' && (
+        <div className="space-y-4">
+          <div className="flex justify-between items-center bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">Meus Plantões</h2>
+              <p className="text-sm text-gray-500">Gerencie os dias em que sua farmácia estará de plantão.</p>
+            </div>
+            <button onClick={openNewShiftModal} className="bg-emerald-600 text-white px-4 py-2 rounded-md font-medium hover:bg-emerald-700 flex items-center gap-2">
+              <Plus className="w-5 h-5" /> Novo Plantão
+            </button>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+            {shifts.length === 0 ? (
+              <div className="p-8 text-center text-gray-500">Nenhum plantão cadastrado.</div>
+            ) : (
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Data</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Horário</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Ações</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {shifts.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((shift) => {
+                    const isPast = isShiftPast(shift.date);
+                    return (
+                      <tr key={shift.id} className={isPast ? 'bg-gray-50' : ''}>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                          {formatToBRDate(shift.date)}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {shift.is_24h ? '24 Horas' : `${shift.start_time} às ${shift.end_time}`}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          {isPast ? (
+                            <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
+                              Finalizado (Histórico)
+                            </span>
+                          ) : (
+                            <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-emerald-100 text-emerald-800">
+                              Ativo
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
+                          <button onClick={() => openEditShiftModal(shift)} className="text-blue-600 hover:text-blue-900 bg-blue-50 px-3 py-1 rounded inline-flex items-center gap-1">
+                            <Edit className="w-4 h-4" /> Editar
+                          </button>
+                          <button onClick={() => handleDeleteShift(shift.id)} className="text-red-600 hover:text-red-900 bg-red-50 px-3 py-1 rounded inline-flex items-center gap-1">
+                            <Trash2 className="w-4 h-4" /> Excluir
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Plantão */}
+      {isShiftModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl shadow-lg max-w-md w-full">
+            <div className="flex justify-between items-center p-6 border-b border-gray-200">
+              <h2 className="text-xl font-bold text-gray-900">
+                {editingShiftId ? 'Editar Plantão' : 'Novo Plantão'}
+              </h2>
+              <button onClick={() => setIsShiftModalOpen(false)} className="text-gray-400 hover:text-gray-500">
+                &times;
+              </button>
+            </div>
+            <form onSubmit={handleSaveShift} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Data do Plantão</label>
+                <input 
+                  type="date" 
+                  required 
+                  value={shiftForm.date} 
+                  onChange={e => setShiftForm({...shiftForm, date: e.target.value})} 
+                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" 
+                />
+              </div>
+              
+              <div className="flex items-center gap-2 mt-4 mb-4">
+                <input 
+                  type="checkbox" 
+                  id="is_24h" 
+                  checked={shiftForm.is_24h} 
+                  onChange={e => setShiftForm({...shiftForm, is_24h: e.target.checked})} 
+                  className="w-4 h-4 text-emerald-600 border-gray-300 rounded focus:ring-emerald-500"
+                />
+                <label htmlFor="is_24h" className="text-sm font-medium text-gray-700">Plantão 24 Horas</label>
+              </div>
+
+              {!shiftForm.is_24h && (
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Hora Início</label>
+                    <input 
+                      type="time" 
+                      required={!shiftForm.is_24h} 
+                      value={shiftForm.start_time} 
+                      onChange={e => setShiftForm({...shiftForm, start_time: e.target.value})} 
+                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" 
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Hora Fim</label>
+                    <input 
+                      type="time" 
+                      required={!shiftForm.is_24h} 
+                      value={shiftForm.end_time} 
+                      onChange={e => setShiftForm({...shiftForm, end_time: e.target.value})} 
+                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" 
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="pt-4 flex justify-end gap-3">
+                <button type="button" onClick={() => setIsShiftModalOpen(false)} className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50">
+                  Cancelar
+                </button>
+                <button type="submit" className="px-4 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700">
+                  Salvar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'highlights' && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <h2 className="text-lg font-semibold mb-6">Meus Destaques</h2>
+          {highlights.length === 0 ? (
+            <p className="text-gray-500">Você não possui destaques programados no momento.</p>
+          ) : (
+            <div className="space-y-4">
+              {highlights.map((h, i) => (
+                <div key={i} className="flex items-center justify-between p-4 border border-gray-200 rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <Star className="w-5 h-5 text-amber-500" />
+                    <div>
+                      <p className="font-medium capitalize">Destaque do {h.type === 'day' ? 'Dia' : h.type === 'week' ? 'Semana' : 'Mês'}</p>
+                      <p className="text-sm text-gray-500">
+                        De: {new Date(h.date_start).toLocaleDateString('pt-BR')} até {new Date(h.date_end).toLocaleDateString('pt-BR')}
+                      </p>
+                    </div>
+                  </div>
+                  <span className="px-3 py-1 bg-amber-100 text-amber-800 rounded-full text-xs font-medium">
+                    {new Date(h.date_end) > new Date() ? 'Ativo' : 'Expirado'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'history' && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <h2 className="text-lg font-semibold mb-6">Histórico de Pagamentos</h2>
+          {payments.length === 0 ? (
+            <p className="text-gray-500">Nenhum pagamento registrado.</p>
+          ) : (
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead>
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Data</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Valor</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Método</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {payments.map((p, i) => (
+                  <tr key={i}>
+                    <td className="px-4 py-3 text-sm text-gray-900">{new Date(p.created_at).toLocaleDateString('pt-BR')}</td>
+                    <td className="px-4 py-3 text-sm text-gray-900">R$ {p.amount.toFixed(2).replace('.', ',')}</td>
+                    <td className="px-4 py-3 text-sm text-gray-500">{p.method}</td>
+                    <td className="px-4 py-3 text-sm">
+                      <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">Pago</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

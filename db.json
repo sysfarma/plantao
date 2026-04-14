@@ -1,0 +1,844 @@
+{
+  "users": [
+    {
+      "id": "bc97684d-bde9-4b55-89e3-73ff0ff5fbf8",
+      "email": "admin@farmaciadeplantao.com.br",
+      "password_hash": "$2b$10$STy1JpvgcfdQK7fzErvcsuprAQk.mAxHDeleedqZViZqJXsTRV5ja",
+      "role": "admin",
+      "created_at": "2026-04-12T11:17:49.140Z"
+    },
+    {
+      "id": "9bfac410-0819-4c32-b82c-4e4914b41034",
+      "email": "biadrogaria@farmacia.com",
+      "password_hash": "$2b$10$pEcZaAT6zC6OTm1RKnIxXerBk3eDMgG2GgQ36SqlTRl09T.1AeGs2",
+      "role": "pharmacy",
+      "created_at": "2026-04-12T13:28:15.786Z"
+    },
+    {
+      "id": "fec90a49-0b29-400b-b59e-0f007fe9042d",
+      "email": "farmaemvida@farmacia.com",
+      "password_hash": "$2b$10$pEcZaAT6zC6OTm1RKnIxXerBk3eDMgG2GgQ36SqlTRl09T.1AeGs2",
+      "role": "pharmacy",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "8fb234b1-9776-4aa1-8108-78faad39184e",
+      "email": "farmaciapopular@farmacia.com",
+      "password_hash": "$2b$10$pEcZaAT6zC6OTm1RKnIxXerBk3eDMgG2GgQ36SqlTRl09T.1AeGs2",
+      "role": "pharmacy",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "5b0c6fc9-1941-4333-8f73-3fa61db2cfc1",
+      "email": "biadrogariafilial@farmacia.com",
+      "password_hash": "$2b$10$pEcZaAT6zC6OTm1RKnIxXerBk3eDMgG2GgQ36SqlTRl09T.1AeGs2",
+      "role": "pharmacy",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "7490a38e-ea9f-4f22-a0f1-c66ed8e3aba4",
+      "email": "drogariamisfarma@farmacia.com",
+      "password_hash": "$2b$10$pEcZaAT6zC6OTm1RKnIxXerBk3eDMgG2GgQ36SqlTRl09T.1AeGs2",
+      "role": "pharmacy",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "1b92b47e-6f75-45df-a680-7025becea1ed",
+      "email": "farmciaindiana@farmacia.com",
+      "password_hash": "$2b$10$pEcZaAT6zC6OTm1RKnIxXerBk3eDMgG2GgQ36SqlTRl09T.1AeGs2",
+      "role": "pharmacy",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "cb4396e1-0711-407c-a850-3a988fdbb749",
+      "email": "matos@farmacia.com",
+      "password_hash": "$2b$10$pEcZaAT6zC6OTm1RKnIxXerBk3eDMgG2GgQ36SqlTRl09T.1AeGs2",
+      "role": "pharmacy",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "22f87ee9-8633-4db7-a7e7-220dcdaa181d",
+      "email": "farmciavivabem@farmacia.com",
+      "password_hash": "$2b$10$pEcZaAT6zC6OTm1RKnIxXerBk3eDMgG2GgQ36SqlTRl09T.1AeGs2",
+      "role": "pharmacy",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "dc03e67d-dce5-4a35-84aa-fac08c72ac6d",
+      "email": "drogariaultrapopular@farmacia.com",
+      "password_hash": "$2b$10$pEcZaAT6zC6OTm1RKnIxXerBk3eDMgG2GgQ36SqlTRl09T.1AeGs2",
+      "role": "pharmacy",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "c28a6a0c-dccb-4d95-a4ee-170b9830284d",
+      "email": "hipercentral@farmacia.com",
+      "password_hash": "$2b$10$pEcZaAT6zC6OTm1RKnIxXerBk3eDMgG2GgQ36SqlTRl09T.1AeGs2",
+      "role": "pharmacy",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "57523758-2e01-4a92-bb97-37b8ce4dd960",
+      "email": "drogariacastelo@farmacia.com",
+      "password_hash": "$2b$10$pEcZaAT6zC6OTm1RKnIxXerBk3eDMgG2GgQ36SqlTRl09T.1AeGs2",
+      "role": "pharmacy",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "9b312e24-36b2-4ec8-a15d-c02a6a6b281e",
+      "email": "sade@farmacia.com",
+      "password_hash": "$2b$10$pEcZaAT6zC6OTm1RKnIxXerBk3eDMgG2GgQ36SqlTRl09T.1AeGs2",
+      "role": "pharmacy",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "ec512102-8b4c-4783-ae09-365b73e36870",
+      "email": "mineira@farmacia.com",
+      "password_hash": "$2b$10$pEcZaAT6zC6OTm1RKnIxXerBk3eDMgG2GgQ36SqlTRl09T.1AeGs2",
+      "role": "pharmacy",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "97fedd8a-a936-459d-9fb5-2001f0acc4ef",
+      "email": "drogariaesplanada@farmacia.com",
+      "password_hash": "$2b$10$pEcZaAT6zC6OTm1RKnIxXerBk3eDMgG2GgQ36SqlTRl09T.1AeGs2",
+      "role": "pharmacy",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "61fe6985-63e7-49bf-9945-4cb132247a8c",
+      "email": "avenida01@farmacia.com",
+      "password_hash": "$2b$10$pEcZaAT6zC6OTm1RKnIxXerBk3eDMgG2GgQ36SqlTRl09T.1AeGs2",
+      "role": "pharmacy",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "1ea54c79-002b-4e92-a1d3-0f1715499f72",
+      "email": "farmania@farmacia.com",
+      "password_hash": "$2b$10$pEcZaAT6zC6OTm1RKnIxXerBk3eDMgG2GgQ36SqlTRl09T.1AeGs2",
+      "role": "pharmacy",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "db5a7b4b-e2c8-4149-8b33-dc3a710de495",
+      "email": "central@farmacia.com",
+      "password_hash": "$2b$10$pEcZaAT6zC6OTm1RKnIxXerBk3eDMgG2GgQ36SqlTRl09T.1AeGs2",
+      "role": "pharmacy",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    }
+  ],
+  "pharmacies": [
+    {
+      "id": "f7250ea2-261b-4d52-9d30-bca4a8174141",
+      "user_id": "9bfac410-0819-4c32-b82c-4e4914b41034",
+      "name": "BIA DROGARIA",
+      "phone": "3542-4632",
+      "whatsapp": "(28)99904-8682",
+      "email": "biadrogaria@farmacia.com",
+      "website": "",
+      "street": "Centro",
+      "number": "S/N",
+      "neighborhood": "Centro",
+      "city": "Castelo",
+      "state": "ES",
+      "zip": "",
+      "is_active": 1,
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "7fffb1c9-6a2f-41ed-abec-5c1280e4dfe2",
+      "user_id": "fec90a49-0b29-400b-b59e-0f007fe9042d",
+      "name": "FARMA EM VIDA",
+      "phone": "3542-4656",
+      "whatsapp": "(28)99969-6198",
+      "email": "farmaemvida@farmacia.com",
+      "website": "",
+      "street": "Centro",
+      "number": "S/N",
+      "neighborhood": "Centro",
+      "city": "Castelo",
+      "state": "ES",
+      "zip": "",
+      "is_active": 1,
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "66c8cc2c-3034-41e0-9a2b-7707be1b66c3",
+      "user_id": "8fb234b1-9776-4aa1-8108-78faad39184e",
+      "name": "FARMACIA POPULAR",
+      "phone": "3542-1328",
+      "whatsapp": "(28)99933-4888",
+      "email": "farmaciapopular@farmacia.com",
+      "website": "",
+      "street": "Centro",
+      "number": "S/N",
+      "neighborhood": "Centro",
+      "city": "Castelo",
+      "state": "ES",
+      "zip": "",
+      "is_active": 1,
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "7afa4749-b1df-48b0-bdb1-f3eb84296a15",
+      "user_id": "5b0c6fc9-1941-4333-8f73-3fa61db2cfc1",
+      "name": "BIA DROGARIA- FILIAL",
+      "phone": "3310-3546",
+      "whatsapp": "(28)99904-8682",
+      "email": "biadrogariafilial@farmacia.com",
+      "website": "",
+      "street": "Centro",
+      "number": "S/N",
+      "neighborhood": "Centro",
+      "city": "Castelo",
+      "state": "ES",
+      "zip": "",
+      "is_active": 1,
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "645b0e2b-c5f4-428d-8dc4-bd7f65704b64",
+      "user_id": "7490a38e-ea9f-4f22-a0f1-c66ed8e3aba4",
+      "name": "DROGARIA MISFARMA",
+      "phone": "99999-3112",
+      "whatsapp": "(28)99985-8746",
+      "email": "drogariamisfarma@farmacia.com",
+      "website": "",
+      "street": "Centro",
+      "number": "S/N",
+      "neighborhood": "Centro",
+      "city": "Castelo",
+      "state": "ES",
+      "zip": "",
+      "is_active": 1,
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "2b16ecac-0859-4035-a0d8-f2f3a0087e4d",
+      "user_id": "1b92b47e-6f75-45df-a680-7025becea1ed",
+      "name": "FARMÁCIA INDIANA",
+      "phone": "",
+      "whatsapp": "(27)99992-0554",
+      "email": "farmciaindiana@farmacia.com",
+      "website": "",
+      "street": "Centro",
+      "number": "S/N",
+      "neighborhood": "Centro",
+      "city": "Castelo",
+      "state": "ES",
+      "zip": "",
+      "is_active": 1,
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "6adcdfd1-a825-4b17-b604-38cda56ecadb",
+      "user_id": "cb4396e1-0711-407c-a850-3a988fdbb749",
+      "name": "MATOS",
+      "phone": "3542-1312",
+      "whatsapp": "(28)99945-5640",
+      "email": "matos@farmacia.com",
+      "website": "",
+      "street": "Centro",
+      "number": "S/N",
+      "neighborhood": "Centro",
+      "city": "Castelo",
+      "state": "ES",
+      "zip": "",
+      "is_active": 1,
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "35876d87-7582-4856-a4e2-3c52c98f6cef",
+      "user_id": "22f87ee9-8633-4db7-a7e7-220dcdaa181d",
+      "name": "FARMÁCIA VIVA BEM",
+      "phone": "",
+      "whatsapp": "(28)99933-4117",
+      "email": "farmciavivabem@farmacia.com",
+      "website": "",
+      "street": "Centro",
+      "number": "S/N",
+      "neighborhood": "Centro",
+      "city": "Castelo",
+      "state": "ES",
+      "zip": "",
+      "is_active": 1,
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "9fc79686-6858-448d-9758-e2e2f1c2acc5",
+      "user_id": "dc03e67d-dce5-4a35-84aa-fac08c72ac6d",
+      "name": "DROGARIA ULTRA POPULAR",
+      "phone": "",
+      "whatsapp": "(28)99913-8205",
+      "email": "drogariaultrapopular@farmacia.com",
+      "website": "",
+      "street": "Centro",
+      "number": "S/N",
+      "neighborhood": "Centro",
+      "city": "Castelo",
+      "state": "ES",
+      "zip": "",
+      "is_active": 1,
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "09ef5fe8-b434-40cd-9681-860e81f18917",
+      "user_id": "c28a6a0c-dccb-4d95-a4ee-170b9830284d",
+      "name": "HIPER CENTRAL",
+      "phone": "3542-6268",
+      "whatsapp": "(28)98808-1117",
+      "email": "hipercentral@farmacia.com",
+      "website": "",
+      "street": "Centro",
+      "number": "S/N",
+      "neighborhood": "Centro",
+      "city": "Castelo",
+      "state": "ES",
+      "zip": "",
+      "is_active": 1,
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "17d59894-4fea-49d0-b132-5379a34dfa99",
+      "user_id": "57523758-2e01-4a92-bb97-37b8ce4dd960",
+      "name": "DROGARIA CASTELO",
+      "phone": "3310-3040",
+      "whatsapp": "(28)99957-5721",
+      "email": "drogariacastelo@farmacia.com",
+      "website": "",
+      "street": "Centro",
+      "number": "S/N",
+      "neighborhood": "Centro",
+      "city": "Castelo",
+      "state": "ES",
+      "zip": "",
+      "is_active": 1,
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "0a604a8d-bf4e-497d-9314-de4c783cbdeb",
+      "user_id": "9b312e24-36b2-4ec8-a15d-c02a6a6b281e",
+      "name": "SAÚDE",
+      "phone": "3542-3365",
+      "whatsapp": "(28)99985-6894",
+      "email": "sade@farmacia.com",
+      "website": "",
+      "street": "Centro",
+      "number": "S/N",
+      "neighborhood": "Centro",
+      "city": "Castelo",
+      "state": "ES",
+      "zip": "",
+      "is_active": 1,
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "52c312b8-5266-4372-8d5e-09cc6a8f1755",
+      "user_id": "ec512102-8b4c-4783-ae09-365b73e36870",
+      "name": "MINEIRA",
+      "phone": "3542-1181",
+      "whatsapp": "(28)99926-6126",
+      "email": "mineira@farmacia.com",
+      "website": "",
+      "street": "Centro",
+      "number": "S/N",
+      "neighborhood": "Centro",
+      "city": "Castelo",
+      "state": "ES",
+      "zip": "",
+      "is_active": 1,
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "23f41b53-7da3-4cf1-8fd2-6ec226a0a5a9",
+      "user_id": "97fedd8a-a936-459d-9fb5-2001f0acc4ef",
+      "name": "DROGARIA ESPLANADA",
+      "phone": "3310-6260",
+      "whatsapp": "(28)99940-5152",
+      "email": "drogariaesplanada@farmacia.com",
+      "website": "",
+      "street": "Centro",
+      "number": "S/N",
+      "neighborhood": "Centro",
+      "city": "Castelo",
+      "state": "ES",
+      "zip": "",
+      "is_active": 1,
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "cb4863c8-ec3c-4985-b35e-9473a4b86f90",
+      "user_id": "61fe6985-63e7-49bf-9945-4cb132247a8c",
+      "name": "AVENIDA (01)",
+      "phone": "3542-1554",
+      "whatsapp": "(28)99912-1554",
+      "email": "avenida01@farmacia.com",
+      "website": "",
+      "street": "Centro",
+      "number": "S/N",
+      "neighborhood": "Centro",
+      "city": "Castelo",
+      "state": "ES",
+      "zip": "",
+      "is_active": 1,
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "1b6f94bc-20b0-4305-bb46-9c91c517d35d",
+      "user_id": "1ea54c79-002b-4e92-a1d3-0f1715499f72",
+      "name": "FARMANIA",
+      "phone": "",
+      "whatsapp": "(28)99999-2523",
+      "email": "farmania@farmacia.com",
+      "website": "",
+      "street": "Centro",
+      "number": "S/N",
+      "neighborhood": "Centro",
+      "city": "Castelo",
+      "state": "ES",
+      "zip": "",
+      "is_active": 1,
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "3ac8859c-6fae-4b30-9dff-15631668fbc8",
+      "user_id": "db5a7b4b-e2c8-4149-8b33-dc3a710de495",
+      "name": "CENTRAL",
+      "phone": "3542-4623",
+      "whatsapp": "(28)99962-7328",
+      "email": "central@farmacia.com",
+      "website": "",
+      "street": "Centro",
+      "number": "S/N",
+      "neighborhood": "Centro",
+      "city": "Castelo",
+      "state": "ES",
+      "zip": "",
+      "is_active": 1,
+      "created_at": "2026-04-12T13:28:15.787Z"
+    }
+  ],
+  "subscriptions": [
+    {
+      "id": "50bca638-5af8-4ce6-a9d8-3b894e3b0c3f",
+      "pharmacy_id": "f7250ea2-261b-4d52-9d30-bca4a8174141",
+      "status": "active",
+      "expires_at": "2027-04-12T13:28:15.787Z",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "18b9c62a-5a51-4a54-b747-ccfc3f2d686b",
+      "pharmacy_id": "7fffb1c9-6a2f-41ed-abec-5c1280e4dfe2",
+      "status": "active",
+      "expires_at": "2027-04-12T13:28:15.787Z",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "374c672a-c96a-4e6a-9ca8-d2b439c6d0f5",
+      "pharmacy_id": "66c8cc2c-3034-41e0-9a2b-7707be1b66c3",
+      "status": "active",
+      "expires_at": "2027-04-12T13:28:15.787Z",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "33071711-5b9e-41f5-8a80-343ee86308f8",
+      "pharmacy_id": "7afa4749-b1df-48b0-bdb1-f3eb84296a15",
+      "status": "active",
+      "expires_at": "2027-04-12T13:28:15.787Z",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "a29dd3d8-e17c-4a04-bda9-5205476602c1",
+      "pharmacy_id": "645b0e2b-c5f4-428d-8dc4-bd7f65704b64",
+      "status": "active",
+      "expires_at": "2027-04-12T13:28:15.787Z",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "f2345c25-33dd-4601-8929-2f5d29108ebb",
+      "pharmacy_id": "2b16ecac-0859-4035-a0d8-f2f3a0087e4d",
+      "status": "active",
+      "expires_at": "2027-04-12T13:28:15.787Z",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "b9a5155f-22ee-4b8f-9655-4d0a14470265",
+      "pharmacy_id": "6adcdfd1-a825-4b17-b604-38cda56ecadb",
+      "status": "active",
+      "expires_at": "2027-04-12T13:28:15.787Z",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "78fa30a0-7c66-47f1-b14b-b7b694cf2e30",
+      "pharmacy_id": "35876d87-7582-4856-a4e2-3c52c98f6cef",
+      "status": "active",
+      "expires_at": "2027-04-12T13:28:15.787Z",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "9eb14290-f960-4c68-a52a-ce1cb9e83450",
+      "pharmacy_id": "9fc79686-6858-448d-9758-e2e2f1c2acc5",
+      "status": "active",
+      "expires_at": "2027-04-12T13:28:15.787Z",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "d037d05e-3eed-4aff-86b7-97486b001930",
+      "pharmacy_id": "09ef5fe8-b434-40cd-9681-860e81f18917",
+      "status": "active",
+      "expires_at": "2027-04-12T13:28:15.787Z",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "a9c51711-235e-4c23-ba4d-10013e831642",
+      "pharmacy_id": "17d59894-4fea-49d0-b132-5379a34dfa99",
+      "status": "active",
+      "expires_at": "2027-04-12T13:28:15.787Z",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "05408253-3d13-4bbc-90bc-24c7d5d7a026",
+      "pharmacy_id": "0a604a8d-bf4e-497d-9314-de4c783cbdeb",
+      "status": "active",
+      "expires_at": "2027-04-12T13:28:15.787Z",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "dab84d24-0cf7-4d2e-9347-d2f65d9e16f2",
+      "pharmacy_id": "52c312b8-5266-4372-8d5e-09cc6a8f1755",
+      "status": "active",
+      "expires_at": "2027-04-12T13:28:15.787Z",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "9cbe6c70-ead2-4175-8ca6-9c35aa75ef2e",
+      "pharmacy_id": "23f41b53-7da3-4cf1-8fd2-6ec226a0a5a9",
+      "status": "active",
+      "expires_at": "2027-04-12T13:28:15.787Z",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "596e8826-3002-4c94-84cc-b9ab09d19ba5",
+      "pharmacy_id": "cb4863c8-ec3c-4985-b35e-9473a4b86f90",
+      "status": "active",
+      "expires_at": "2027-04-12T13:28:15.787Z",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "3e8215e1-6226-4d55-88b0-51ddc9573921",
+      "pharmacy_id": "1b6f94bc-20b0-4305-bb46-9c91c517d35d",
+      "status": "active",
+      "expires_at": "2027-04-12T13:28:15.787Z",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "8e40beed-7704-429b-adb7-bb5b9e4d2567",
+      "pharmacy_id": "3ac8859c-6fae-4b30-9dff-15631668fbc8",
+      "status": "active",
+      "expires_at": "2027-04-12T13:28:15.787Z",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    }
+  ],
+  "highlights": [
+    {
+      "id": "9e696905-ccc3-4330-b7a2-d4b2725db06d",
+      "pharmacy_id": "f7250ea2-261b-4d52-9d30-bca4a8174141",
+      "type": "day",
+      "date_start": "2026-04-01T00:00:00.000Z",
+      "date_end": "2026-04-01T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.787Z"
+    },
+    {
+      "id": "c00dd057-12f2-47fa-9d16-eb646eece163",
+      "pharmacy_id": "7fffb1c9-6a2f-41ed-abec-5c1280e4dfe2",
+      "type": "day",
+      "date_start": "2026-04-02T00:00:00.000Z",
+      "date_end": "2026-04-02T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "7d279acb-b57e-426b-8258-07a7b3e96b4f",
+      "pharmacy_id": "66c8cc2c-3034-41e0-9a2b-7707be1b66c3",
+      "type": "day",
+      "date_start": "2026-04-03T00:00:00.000Z",
+      "date_end": "2026-04-03T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "e31b9df6-43da-4294-a4a6-ddff95e4fda9",
+      "pharmacy_id": "7afa4749-b1df-48b0-bdb1-f3eb84296a15",
+      "type": "day",
+      "date_start": "2026-04-04T00:00:00.000Z",
+      "date_end": "2026-04-04T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "eaf928fb-dca8-46c9-bd92-d367ef9991a2",
+      "pharmacy_id": "645b0e2b-c5f4-428d-8dc4-bd7f65704b64",
+      "type": "day",
+      "date_start": "2026-04-05T00:00:00.000Z",
+      "date_end": "2026-04-05T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "1ec0f968-d19d-4c0f-a8cd-44333ce84723",
+      "pharmacy_id": "2b16ecac-0859-4035-a0d8-f2f3a0087e4d",
+      "type": "day",
+      "date_start": "2026-04-06T00:00:00.000Z",
+      "date_end": "2026-04-06T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "25b5e27e-ff02-4f7b-af43-9ba9dd9770f2",
+      "pharmacy_id": "6adcdfd1-a825-4b17-b604-38cda56ecadb",
+      "type": "day",
+      "date_start": "2026-04-07T00:00:00.000Z",
+      "date_end": "2026-04-07T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "85db40c9-23a5-474e-a842-f5e52696556c",
+      "pharmacy_id": "35876d87-7582-4856-a4e2-3c52c98f6cef",
+      "type": "day",
+      "date_start": "2026-04-08T00:00:00.000Z",
+      "date_end": "2026-04-08T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "cbfe381d-fa00-471c-8bc1-a02e1d5a0b40",
+      "pharmacy_id": "9fc79686-6858-448d-9758-e2e2f1c2acc5",
+      "type": "day",
+      "date_start": "2026-04-09T00:00:00.000Z",
+      "date_end": "2026-04-09T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "e47f227b-8a8d-4182-9333-e2c6e49751a3",
+      "pharmacy_id": "09ef5fe8-b434-40cd-9681-860e81f18917",
+      "type": "day",
+      "date_start": "2026-04-10T00:00:00.000Z",
+      "date_end": "2026-04-10T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "9d93768b-b20b-4be6-9697-b57c367e3a83",
+      "pharmacy_id": "17d59894-4fea-49d0-b132-5379a34dfa99",
+      "type": "day",
+      "date_start": "2026-04-11T00:00:00.000Z",
+      "date_end": "2026-04-11T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "ef25256f-c5d3-4e7a-8964-d9c364c8b362",
+      "pharmacy_id": "0a604a8d-bf4e-497d-9314-de4c783cbdeb",
+      "type": "day",
+      "date_start": "2026-04-12T00:00:00.000Z",
+      "date_end": "2026-04-12T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "92afa7cb-3cbd-4670-af4d-0d31fd41ba25",
+      "pharmacy_id": "52c312b8-5266-4372-8d5e-09cc6a8f1755",
+      "type": "day",
+      "date_start": "2026-04-13T00:00:00.000Z",
+      "date_end": "2026-04-13T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "c138f7a3-4872-43a2-895b-eccd7ee63635",
+      "pharmacy_id": "23f41b53-7da3-4cf1-8fd2-6ec226a0a5a9",
+      "type": "day",
+      "date_start": "2026-04-14T00:00:00.000Z",
+      "date_end": "2026-04-14T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "c299becd-eb62-4aaf-a3a3-3b491fd175cd",
+      "pharmacy_id": "cb4863c8-ec3c-4985-b35e-9473a4b86f90",
+      "type": "day",
+      "date_start": "2026-04-15T00:00:00.000Z",
+      "date_end": "2026-04-15T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "ad738cc9-366a-4caf-80f0-86306d0a85e8",
+      "pharmacy_id": "1b6f94bc-20b0-4305-bb46-9c91c517d35d",
+      "type": "day",
+      "date_start": "2026-04-16T00:00:00.000Z",
+      "date_end": "2026-04-16T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "a3a5b06a-a6ce-4ef9-bf89-8d469ca31cd1",
+      "pharmacy_id": "3ac8859c-6fae-4b30-9dff-15631668fbc8",
+      "type": "day",
+      "date_start": "2026-04-17T00:00:00.000Z",
+      "date_end": "2026-04-17T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "b91fab4e-6de3-4b52-89c6-2147f3f44a5c",
+      "pharmacy_id": "f7250ea2-261b-4d52-9d30-bca4a8174141",
+      "type": "day",
+      "date_start": "2026-04-18T00:00:00.000Z",
+      "date_end": "2026-04-18T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "a9562229-c3af-40fb-99d4-09eef9a31254",
+      "pharmacy_id": "7fffb1c9-6a2f-41ed-abec-5c1280e4dfe2",
+      "type": "day",
+      "date_start": "2026-04-19T00:00:00.000Z",
+      "date_end": "2026-04-19T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "a214cd38-7dfd-485c-b3f2-b661661aa45c",
+      "pharmacy_id": "66c8cc2c-3034-41e0-9a2b-7707be1b66c3",
+      "type": "day",
+      "date_start": "2026-04-20T00:00:00.000Z",
+      "date_end": "2026-04-20T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "bd1f0637-7a48-4554-9559-f9e2765e2f7a",
+      "pharmacy_id": "7afa4749-b1df-48b0-bdb1-f3eb84296a15",
+      "type": "day",
+      "date_start": "2026-04-21T00:00:00.000Z",
+      "date_end": "2026-04-21T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "a10cbc3b-187d-4421-94e7-c8c7a0f8d13f",
+      "pharmacy_id": "645b0e2b-c5f4-428d-8dc4-bd7f65704b64",
+      "type": "day",
+      "date_start": "2026-04-22T00:00:00.000Z",
+      "date_end": "2026-04-22T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "8509684b-950e-4f51-a3b8-a95198813c05",
+      "pharmacy_id": "2b16ecac-0859-4035-a0d8-f2f3a0087e4d",
+      "type": "day",
+      "date_start": "2026-04-23T00:00:00.000Z",
+      "date_end": "2026-04-23T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "145b7bef-a775-46e7-815e-2fcbd5da5f2b",
+      "pharmacy_id": "6adcdfd1-a825-4b17-b604-38cda56ecadb",
+      "type": "day",
+      "date_start": "2026-04-24T00:00:00.000Z",
+      "date_end": "2026-04-24T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "819d43cc-41e2-4670-9b9d-4996e612d6c0",
+      "pharmacy_id": "35876d87-7582-4856-a4e2-3c52c98f6cef",
+      "type": "day",
+      "date_start": "2026-04-25T00:00:00.000Z",
+      "date_end": "2026-04-25T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "7a653e82-5818-462d-ba1c-ff1fd591c640",
+      "pharmacy_id": "9fc79686-6858-448d-9758-e2e2f1c2acc5",
+      "type": "day",
+      "date_start": "2026-04-26T00:00:00.000Z",
+      "date_end": "2026-04-26T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "8673ba6d-fa2b-4dae-9b14-57f5281d1104",
+      "pharmacy_id": "09ef5fe8-b434-40cd-9681-860e81f18917",
+      "type": "day",
+      "date_start": "2026-04-27T00:00:00.000Z",
+      "date_end": "2026-04-27T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "b93de42e-fa27-4998-bd24-d1b58b537e7b",
+      "pharmacy_id": "17d59894-4fea-49d0-b132-5379a34dfa99",
+      "type": "day",
+      "date_start": "2026-04-28T00:00:00.000Z",
+      "date_end": "2026-04-28T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "fa784147-8f42-46de-83c5-9cf6dc5bb4cf",
+      "pharmacy_id": "0a604a8d-bf4e-497d-9314-de4c783cbdeb",
+      "type": "day",
+      "date_start": "2026-04-29T00:00:00.000Z",
+      "date_end": "2026-04-29T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    },
+    {
+      "id": "8125255e-d9f2-4cfb-aff0-85980f4c568e",
+      "pharmacy_id": "52c312b8-5266-4372-8d5e-09cc6a8f1755",
+      "type": "day",
+      "date_start": "2026-04-30T00:00:00.000Z",
+      "date_end": "2026-04-30T23:59:59.000Z",
+      "city": "Castelo",
+      "state": "ES",
+      "created_at": "2026-04-12T13:28:15.788Z"
+    }
+  ]
+}
