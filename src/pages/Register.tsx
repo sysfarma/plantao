@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Pill } from 'lucide-react';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '../lib/firebase';
+import { collection, addDoc, setDoc, doc } from 'firebase/firestore';
+import { auth, db } from '../lib/firebase';
 import GoogleLoginButton from '../components/GoogleLoginButton';
 
 export default function Register() {
@@ -35,38 +36,40 @@ export default function Register() {
 
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
-      const token = await userCredential.user.getIdToken();
+      const user = userCredential.user;
 
-      const res = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-          'X-App-Token': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          email: formData.email,
-          pharmacyData: {
-            name: formData.name,
-            phone: formData.phone,
-            whatsapp: formData.whatsapp,
-            email: formData.email,
-            website: formData.website,
-            street: formData.street,
-            number: formData.number,
-            neighborhood: formData.neighborhood,
-            city: formData.city,
-            state: formData.state,
-            zip: formData.zip
-          }
-        })
+      // Create User Document
+      await setDoc(doc(db, 'users', user.uid), {
+        email: formData.email,
+        role: 'pharmacy',
+        created_at: new Date().toISOString()
       });
 
-      const data = await res.json();
+      // Create Pharmacy Document
+      const pharmacyRef = await addDoc(collection(db, 'pharmacies'), {
+        user_id: user.uid,
+        name: formData.name,
+        phone: formData.phone,
+        whatsapp: formData.whatsapp,
+        email: formData.email,
+        website: formData.website,
+        street: formData.street,
+        number: formData.number,
+        neighborhood: formData.neighborhood,
+        city: formData.city,
+        state: formData.state,
+        zip: formData.zip,
+        is_active: 0,
+        created_at: new Date().toISOString()
+      });
 
-      if (!res.ok) {
-        throw new Error(data.error || 'Erro ao cadastrar');
-      }
+      // Create Subscription Document
+      await addDoc(collection(db, 'subscriptions'), {
+        pharmacy_id: pharmacyRef.id,
+        status: 'pending',
+        expires_at: null,
+        created_at: new Date().toISOString()
+      });
 
       navigate('/login');
     } catch (err: any) {

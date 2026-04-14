@@ -3,6 +3,8 @@ import { CheckCircle, AlertCircle, QrCode, CreditCard, Star, Edit, Calendar, Plu
 import PixPaymentManager from '../../components/PixPaymentManager';
 import { isShiftPast, formatToBRDate } from '../../lib/dateUtils';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { collection, getDocs, doc, getDoc, addDoc, updateDoc, deleteDoc, query, where } from 'firebase/firestore';
+import { db, auth } from '../../lib/firebase';
 
 export default function PharmacyDashboard() {
   const [profile, setProfile] = useState<any>(null);
@@ -21,38 +23,75 @@ export default function PharmacyDashboard() {
   const [editingShiftId, setEditingShiftId] = useState<string | null>(null);
 
   const fetchData = async () => {
+    setLoading(true);
     try {
-      const token = localStorage.getItem('token');
-      const headers = { 
-        'Authorization': `Bearer ${token}`,
-        'X-App-Token': `Bearer ${token}` 
-      };
-      
-      const [profRes, highRes, payRes, shiftRes, repRes] = await Promise.all([
-        fetch('/api/pharmacy/profile', { headers }),
-        fetch('/api/pharmacy/highlights', { headers }),
-        fetch('/api/pharmacy/payments', { headers }),
-        fetch('/api/pharmacy/shifts', { headers }),
-        fetch('/api/pharmacy/reports', { headers })
-      ]);
+      const user = auth.currentUser;
+      if (!user) {
+        setLoading(false);
+        return;
+      }
 
-      const profData = await profRes.json();
-      setProfile(profData);
-      setEditForm(profData);
+      // Fetch Profile
+      const pharmQuery = query(collection(db, 'pharmacies'), where('user_id', '==', user.uid));
+      const pharmSnapshot = await getDocs(pharmQuery);
       
-      if (highRes.ok) {
-        const data = await highRes.json();
-        setHighlights(Array.isArray(data) ? data : []);
+      if (pharmSnapshot.empty) {
+        setProfile(null);
+        setLoading(false);
+        return;
       }
-      if (payRes.ok) {
-        const data = await payRes.json();
-        setPayments(Array.isArray(data) ? data : []);
+      
+      const pDoc = pharmSnapshot.docs[0];
+      const pData = pDoc.data();
+      const pharmacyId = pDoc.id;
+      
+      // Fetch Subscription
+      const subsQuery = query(collection(db, 'subscriptions'), where('pharmacy_id', '==', pharmacyId));
+      const subsSnapshot = await getDocs(subsQuery);
+      const subs = subsSnapshot.docs.map(d => d.data());
+      let subscription = null;
+      if (subs.length > 0) {
+        subs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        subscription = subs[0];
       }
-      if (shiftRes.ok) {
-        const data = await shiftRes.json();
-        setShifts(Array.isArray(data) ? data : []);
-      }
-      if (repRes.ok) setReports(await repRes.json());
+      
+      const profileData = { id: pharmacyId, ...pData, subscription };
+      setProfile(profileData);
+      setEditForm(profileData);
+      
+      // Fetch Highlights
+      const highQuery = query(collection(db, 'highlights'), where('pharmacy_id', '==', pharmacyId));
+      const highSnapshot = await getDocs(highQuery);
+      setHighlights(highSnapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+      
+      // Fetch Payments
+      const payQuery = query(collection(db, 'payments'), where('pharmacy_id', '==', pharmacyId));
+      const paySnapshot = await getDocs(payQuery);
+      setPayments(paySnapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+      
+      // Fetch Shifts
+      const shiftQuery = query(collection(db, 'shifts'), where('pharmacy_id', '==', pharmacyId));
+      const shiftSnapshot = await getDocs(shiftQuery);
+      setShifts(shiftSnapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+      
+      // Fetch Reports (Clicks)
+      const clicksQuery = query(collection(db, 'clicks'), where('pharmacy_id', '==', pharmacyId));
+      const clicksSnapshot = await getDocs(clicksQuery);
+      
+      const dailyClicks: Record<string, { date: string, whatsapp: number, map: number }> = {};
+      
+      clicksSnapshot.forEach(doc => {
+        const click = doc.data();
+        const date = new Date(click.created_at).toLocaleDateString('pt-BR');
+        if (!dailyClicks[date]) {
+          dailyClicks[date] = { date, whatsapp: 0, map: 0 };
+        }
+        if (click.type === 'whatsapp') dailyClicks[date].whatsapp++;
+        if (click.type === 'map') dailyClicks[date].map++;
+      });
+      
+      setReports({ dailyClicks: Object.values(dailyClicks) });
+      
     } catch (error) {
       console.error('Error fetching data', error);
     } finally {
@@ -68,17 +107,12 @@ export default function PharmacyDashboard() {
     e.preventDefault();
     setSaving(true);
     try {
-      const token = localStorage.getItem('token');
-      await fetch('/api/pharmacy/profile', {
-        method: 'PUT',
-        headers: { 
-          'Authorization': `Bearer ${token}`,
-          'X-App-Token': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(editForm)
+      const { name, phone, whatsapp, street, number, neighborhood, city, state } = editForm;
+      await updateDoc(doc(db, 'pharmacies', profile.id), {
+        name, phone, whatsapp, street, number, neighborhood, city, state,
+        updated_at: new Date().toISOString()
       });
-      setProfile(editForm);
+      setProfile({ ...profile, ...editForm });
       alert('Perfil atualizado com sucesso!');
     } catch (error) {
       console.error('Error saving profile', error);
@@ -91,19 +125,23 @@ export default function PharmacyDashboard() {
   const handleSaveShift = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const token = localStorage.getItem('token');
-      const url = editingShiftId ? `/api/pharmacy/shifts/${editingShiftId}` : '/api/pharmacy/shifts';
-      const method = editingShiftId ? 'PUT' : 'POST';
+      const shiftData = {
+        pharmacy_id: profile.id,
+        date: shiftForm.date,
+        start_time: shiftForm.is_24h ? '00:00' : shiftForm.start_time,
+        end_time: shiftForm.is_24h ? '23:59' : shiftForm.end_time,
+        is_24h: shiftForm.is_24h ? 1 : 0,
+        updated_at: new Date().toISOString()
+      };
       
-      await fetch(url, {
-        method,
-        headers: { 
-          'Authorization': `Bearer ${token}`,
-          'X-App-Token': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(shiftForm)
-      });
+      if (editingShiftId) {
+        await updateDoc(doc(db, 'shifts', editingShiftId), shiftData);
+      } else {
+        await addDoc(collection(db, 'shifts'), {
+          ...shiftData,
+          created_at: new Date().toISOString()
+        });
+      }
       
       setIsShiftModalOpen(false);
       fetchData();
@@ -116,14 +154,7 @@ export default function PharmacyDashboard() {
   const handleDeleteShift = async (id: string) => {
     if (!window.confirm('Tem certeza que deseja excluir este plantão?')) return;
     try {
-      const token = localStorage.getItem('token');
-      await fetch(`/api/pharmacy/shifts/${id}`, {
-        method: 'DELETE',
-        headers: { 
-          'Authorization': `Bearer ${token}`,
-          'X-App-Token': `Bearer ${token}` 
-        }
-      });
+      await deleteDoc(doc(db, 'shifts', id));
       fetchData();
     } catch (error) {
       console.error('Error deleting shift', error);

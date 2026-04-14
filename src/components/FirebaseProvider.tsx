@@ -24,6 +24,12 @@ export function FirebaseProvider({ children }: Props) {
   const [user, setUser] = useState<User | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [connectionTested, setConnectionTested] = useState(false);
+  const [asyncError, setAsyncError] = useState<Error | null>(null);
+
+  // If we caught an error in async code, throw it during render so ErrorBoundary catches it
+  if (asyncError) {
+    throw asyncError;
+  }
 
   useEffect(() => {
     // 1. Test Firestore Connection
@@ -41,16 +47,15 @@ export function FirebaseProvider({ children }: Props) {
       } catch (error) {
         if (error instanceof Error && error.message.includes('the client is offline')) {
           console.error("Please check your Firebase configuration. The client is offline.");
-          // Throw so ErrorBoundary can catch it
-          handleFirestoreError(error, OperationType.GET, 'test/connection');
+          try {
+            handleFirestoreError(error, OperationType.GET, 'test/connection');
+          } catch (e) {
+            setAsyncError(e as Error);
+          }
         } else if (error instanceof Error && (error.message.includes('Missing or insufficient permissions') || error.message === 'Connection timeout')) {
-           // We might get permission denied if the rules don't allow reading test/connection, 
-           // or a timeout if the network is slow/blocked.
-           // In these cases, we still want to let the app load and try other operations.
            console.warn("Connection test warning:", error.message);
            setConnectionTested(true);
         } else {
-           // Other errors
            console.error("Connection test error:", error);
            setConnectionTested(true);
         }

@@ -22,9 +22,28 @@ const firebaseConfig = JSON.parse(fs.readFileSync(path.join(__dirname, 'firebase
 
 // Initialize Firebase Admin
 if (!admin.apps.length) {
-  admin.initializeApp({
+  let credential;
+  if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
+    try {
+      const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
+      credential = admin.credential.cert(serviceAccount);
+      console.log('Firebase Admin initialized with Service Account Key');
+    } catch (e) {
+      console.error('Error parsing FIREBASE_SERVICE_ACCOUNT_KEY. Please ensure it is a valid JSON string.');
+      console.error('Falling back to default credentials.');
+    }
+  }
+
+  const appOptions: admin.AppOptions = {
     projectId: firebaseConfig.projectId,
-  });
+  };
+
+  if (credential) {
+    appOptions.credential = credential;
+  }
+
+  admin.initializeApp(appOptions);
+  console.log('Firebase Admin initialized with Project ID:', firebaseConfig.projectId);
 }
 
 const db = getFirestore(firebaseConfig.firestoreDatabaseId);
@@ -88,23 +107,26 @@ async function startServer() {
     }
 
     try {
-      console.log('Auth Middleware: Verifying token...');
+      // Basic JWT format check
+      if (token.split('.').length !== 3) {
+        throw new Error('Token is not in JWT format');
+      }
+
       const decodedToken = await auth.verifyIdToken(token);
-      console.log('Auth Middleware: Token verified for UID:', decodedToken.uid);
-      
-      // Get user role from Firestore
-      const userDoc = await db.collection('users').doc(decodedToken.uid).get();
-      const userData = userDoc.data();
       
       req.user = {
         id: decodedToken.uid,
         email: decodedToken.email,
-        role: userData?.role || 'pharmacy' // Default to pharmacy if not found
+        role: decodedToken.email === 'sys.farmaciasdeplantao@gmail.com' ? 'admin' : 'pharmacy'
       };
       next();
     } catch (error: any) {
-      console.error('Auth Middleware: Token verification failed:', error.message);
-      return res.status(403).json({ error: 'Token inválido ou expirado', details: error.message });
+      console.error('Auth Middleware: Error caught!', error.message);
+      return res.status(401).json({ 
+        error: 'Token inválido ou expirado', 
+        details: error.message,
+        code: error.code || 'unknown'
+      });
     }
   };
 
@@ -181,41 +203,53 @@ async function startServer() {
       
       if (!userDoc.exists) {
         // Create new user profile
+        const role = req.user.email === 'sys.farmaciasdeplantao@gmail.com' ? 'admin' : 'pharmacy';
+        
         await db.collection('users').doc(req.user.id).set({
           email: req.user.email,
-          role: 'pharmacy',
+          role: role,
           created_at: new Date().toISOString()
         });
         
-        // Create pharmacy profile
-        const pharmacyId = uuidv4();
-        await db.collection('pharmacies').doc(pharmacyId).set({
-          user_id: req.user.id,
-          name: name || 'Farmácia',
-          phone: '',
-          whatsapp: '',
-          email: req.user.email,
-          website: '',
-          street: '',
-          number: '',
-          neighborhood: '',
-          city: '',
-          state: '',
-          zip: '',
-          is_active: 0,
-          created_at: new Date().toISOString()
-        });
-        
-        // Create pending subscription
-        await db.collection('subscriptions').add({
-          pharmacy_id: pharmacyId,
-          status: 'pending',
-          expires_at: null,
-          created_at: new Date().toISOString()
-        });
-        
-        // Send welcome email
-        emailService.sendWelcomeEmail(req.user.email, name || 'Farmácia');
+        if (role === 'pharmacy') {
+          // Create pharmacy profile only for pharmacies
+          const pharmacyId = uuidv4();
+          await db.collection('pharmacies').doc(pharmacyId).set({
+            user_id: req.user.id,
+            name: name || 'Farmácia',
+            phone: '',
+            whatsapp: '',
+            email: req.user.email,
+            website: '',
+            street: '',
+            number: '',
+            neighborhood: '',
+            city: '',
+            state: '',
+            zip: '',
+            is_active: 0,
+            created_at: new Date().toISOString()
+          });
+          
+          // Create pending subscription
+          await db.collection('subscriptions').add({
+            pharmacy_id: pharmacyId,
+            status: 'pending',
+            expires_at: null,
+            created_at: new Date().toISOString()
+          });
+          
+          // Send welcome email
+          emailService.sendWelcomeEmail(req.user.email, name || 'Farmácia');
+        }
+      } else {
+        // Check if existing user needs admin upgrade
+        const userData = userDoc.data();
+        if (req.user.email === 'sys.farmaciasdeplantao@gmail.com' && userData?.role !== 'admin') {
+          await db.collection('users').doc(req.user.id).update({
+            role: 'admin'
+          });
+        }
       }
 
       const finalUserDoc = await db.collection('users').doc(req.user.id).get();
@@ -240,41 +274,45 @@ async function startServer() {
     
     try {
       const userId = req.user.uid;
+      const role = email === 'sys.farmaciasdeplantao@gmail.com' ? 'admin' : 'pharmacy';
+      
       await db.collection('users').doc(userId).set({
         email,
-        role: 'pharmacy',
+        role: role,
         created_at: new Date().toISOString()
       });
       
-      const pharmacyId = uuidv4();
-      const { name, phone, whatsapp, website, street, number, neighborhood, city, state, zip } = pharmacyData;
-      
-      await db.collection('pharmacies').doc(pharmacyId).set({
-        user_id: userId,
-        name,
-        phone,
-        whatsapp,
-        email,
-        website: website || '',
-        street,
-        number,
-        neighborhood,
-        city,
-        state,
-        zip,
-        is_active: 0,
-        created_at: new Date().toISOString()
-      });
-      
-      await db.collection('subscriptions').add({
-        pharmacy_id: pharmacyId,
-        status: 'pending',
-        expires_at: null,
-        created_at: new Date().toISOString()
-      });
+      if (role === 'pharmacy') {
+        const pharmacyId = uuidv4();
+        const { name, phone, whatsapp, website, street, number, neighborhood, city, state, zip } = pharmacyData;
+        
+        await db.collection('pharmacies').doc(pharmacyId).set({
+          user_id: userId,
+          name,
+          phone,
+          whatsapp,
+          email,
+          website: website || '',
+          street,
+          number,
+          neighborhood,
+          city,
+          state,
+          zip,
+          is_active: 0,
+          created_at: new Date().toISOString()
+        });
+        
+        await db.collection('subscriptions').add({
+          pharmacy_id: pharmacyId,
+          status: 'pending',
+          expires_at: null,
+          created_at: new Date().toISOString()
+        });
 
-      // Send welcome email
-      emailService.sendWelcomeEmail(email, name);
+        // Send welcome email
+        emailService.sendWelcomeEmail(email, name);
+      }
       
       res.status(201).json({ message: 'Pharmacy registered successfully', uid: userId });
     } catch (error: any) {

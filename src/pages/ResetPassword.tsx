@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Pill, ArrowLeft } from 'lucide-react';
+import { confirmPasswordReset } from 'firebase/auth';
+import { auth } from '../lib/firebase';
 
 export default function ResetPassword() {
   const [searchParams] = useSearchParams();
-  const token = searchParams.get('token');
+  const oobCode = searchParams.get('oobCode'); // Firebase uses oobCode
   const navigate = useNavigate();
   
   const [password, setPassword] = useState('');
@@ -14,18 +16,18 @@ export default function ResetPassword() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!token) {
-      setError('Token de recuperação não encontrado.');
+    if (!oobCode) {
+      setError('Código de recuperação não encontrado.');
     }
-  }, [token]);
+  }, [oobCode]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setMessage('');
 
-    if (!token) {
-      setError('Token inválido.');
+    if (!oobCode) {
+      setError('Código inválido.');
       return;
     }
 
@@ -42,24 +44,14 @@ export default function ResetPassword() {
     setLoading(true);
 
     try {
-      const res = await fetch('/api/auth/reset-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, password })
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || 'Erro ao redefinir senha');
-      }
+      await confirmPasswordReset(auth, oobCode, password);
 
       setMessage('Senha redefinida com sucesso! Redirecionando...');
       setTimeout(() => {
         navigate('/login');
       }, 3000);
     } catch (err: any) {
-      setError(err.message);
+      setError(err.message || 'Erro ao redefinir senha');
     } finally {
       setLoading(false);
     }
@@ -97,9 +89,10 @@ export default function ResetPassword() {
                 className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                disabled={!token || !!message}
+                disabled={!oobCode || !!message}
               />
             </div>
+
             <div>
               <label className="block text-sm font-medium text-gray-700">Confirmar Nova Senha</label>
               <input
@@ -108,7 +101,7 @@ export default function ResetPassword() {
                 className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                disabled={!token || !!message}
+                disabled={!oobCode || !!message}
               />
             </div>
           </div>

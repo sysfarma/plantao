@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Pill, ArrowLeft } from 'lucide-react';
+import { sendPasswordResetEmail } from 'firebase/auth';
+import { auth } from '../lib/firebase';
 
 export default function ForgotPassword() {
   const [email, setEmail] = useState('');
@@ -15,21 +17,11 @@ export default function ForgotPassword() {
     setLoading(true);
 
     try {
-      const res = await fetch('/api/auth/forgot-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email })
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || 'Erro ao solicitar recuperação');
-      }
-
+      await sendPasswordResetEmail(auth, email);
       setMessage('Se o e-mail existir em nossa base, você receberá um link de recuperação em instantes.');
     } catch (err: any) {
-      setError(err.message);
+      // Don't expose whether the email exists or not for security reasons
+      setMessage('Se o e-mail existir em nossa base, você receberá um link de recuperação em instantes.');
     } finally {
       setLoading(false);
     }

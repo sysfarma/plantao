@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { CheckCircle, XCircle, Star, Trash2, Ban, Edit, Plus, X, Calendar } from 'lucide-react';
 import { calculateHighlightEnd, isShiftPast, formatToBRDate } from '../../lib/dateUtils';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
+import { collection, getDocs, doc, getDoc, addDoc, updateDoc, deleteDoc, query, where } from 'firebase/firestore';
+import { db } from '../../lib/firebase';
 
 interface Pharmacy {
   id: string;
@@ -16,6 +18,7 @@ interface Pharmacy {
   street: string;
   number: string;
   neighborhood: string;
+  user_id?: string;
 }
 
 export default function AdminDashboard() {
@@ -47,31 +50,44 @@ export default function AdminDashboard() {
   const handleSavePharmacy = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const token = localStorage.getItem('token');
       if (editingPharmacy) {
-        await fetch(`/api/admin/pharmacies/${editingPharmacy.id}`, {
-          method: 'PUT',
-          headers: { 
-            'Authorization': `Bearer ${token}`,
-            'X-App-Token': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(formData)
+        const { name, phone, whatsapp, street, number, neighborhood, city, state } = formData;
+        await updateDoc(doc(db, 'pharmacies', editingPharmacy.id), {
+          name, phone, whatsapp, street, number, neighborhood, city, state,
+          updated_at: new Date().toISOString()
         });
       } else {
-        const res = await fetch('/api/admin/pharmacies', {
-          method: 'POST',
-          headers: { 
-            'Authorization': `Bearer ${token}`,
-            'X-App-Token': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(formData)
+        // Create new pharmacy logic (simplified, without auth creation)
+        const userId = `dummy_${Math.random().toString(36).substring(7)}`;
+        await addDoc(collection(db, 'users'), {
+          email: formData.email,
+          role: 'pharmacy',
+          created_at: new Date().toISOString()
         });
-        if (!res.ok) {
-          const data = await res.json();
-          throw new Error(data.error || 'Erro ao criar farmácia');
-        }
+        
+        const pharmacyRef = await addDoc(collection(db, 'pharmacies'), {
+          user_id: userId,
+          name: formData.name,
+          phone: formData.phone || '',
+          whatsapp: formData.whatsapp || '',
+          email: formData.email,
+          website: '',
+          street: formData.street || '',
+          number: formData.number || '',
+          neighborhood: formData.neighborhood || '',
+          city: formData.city || '',
+          state: formData.state || '',
+          zip: '',
+          is_active: 0,
+          created_at: new Date().toISOString()
+        });
+        
+        await addDoc(collection(db, 'subscriptions'), {
+          pharmacy_id: pharmacyRef.id,
+          status: 'pending',
+          expires_at: null,
+          created_at: new Date().toISOString()
+        });
       }
       setIsModalOpen(false);
       fetchData();
@@ -82,28 +98,77 @@ export default function AdminDashboard() {
   };
 
   const fetchData = async () => {
+    setLoading(true);
     try {
-      const token = localStorage.getItem('token');
-      const headers = { 
-        'Authorization': `Bearer ${token}`,
-        'X-App-Token': `Bearer ${token}` 
-      };
+      // Fetch Pharmacies
+      const pharmSnapshot = await getDocs(collection(db, 'pharmacies'));
+      const pharmData: Pharmacy[] = [];
+      let activeCount = 0;
       
-      const [pharmRes, repRes, shiftRes] = await Promise.all([
-        fetch('/api/admin/pharmacies', { headers }),
-        fetch('/api/admin/reports', { headers }),
-        fetch('/api/admin/shifts', { headers })
-      ]);
+      for (const pDoc of pharmSnapshot.docs) {
+        const p = pDoc.data();
+        let userEmail = '';
+        if (p.user_id) {
+          const userDoc = await getDoc(doc(db, 'users', p.user_id));
+          if (userDoc.exists()) {
+            userEmail = userDoc.data().email;
+          }
+        }
+        
+        let subStatus = 'N/A';
+        const subsQuery = query(collection(db, 'subscriptions'), where('pharmacy_id', '==', pDoc.id));
+        const subsSnapshot = await getDocs(subsQuery);
+        const subs = subsSnapshot.docs.map(d => d.data());
+        if (subs.length > 0) {
+          subs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+          subStatus = subs[0].status;
+        }
+        
+        if (p.is_active === 1) activeCount++;
+        
+        pharmData.push({
+          id: pDoc.id,
+          ...p,
+          user_email: userEmail,
+          sub_status: subStatus
+        } as Pharmacy);
+      }
+      setPharmacies(pharmData);
       
-      if (pharmRes.ok) {
-        const data = await pharmRes.json();
-        setPharmacies(Array.isArray(data) ? data : []);
+      // Fetch Shifts
+      const shiftsSnapshot = await getDocs(collection(db, 'shifts'));
+      const shiftsData = [];
+      for (const sDoc of shiftsSnapshot.docs) {
+        const s = sDoc.data();
+        const pDoc = await getDoc(doc(db, 'pharmacies', s.pharmacy_id));
+        shiftsData.push({
+          id: sDoc.id,
+          ...s,
+          pharmacy_name: pDoc.exists() ? pDoc.data().name : 'Desconhecida'
+        });
       }
-      if (repRes.ok) setReports(await repRes.json());
-      if (shiftRes.ok) {
-        const data = await shiftRes.json();
-        setAdminShifts(Array.isArray(data) ? data : []);
-      }
+      setAdminShifts(shiftsData);
+      
+      // Calculate Reports
+      const paymentsSnapshot = await getDocs(collection(db, 'payments'));
+      let totalRevenue = 0;
+      paymentsSnapshot.forEach(doc => {
+        if (doc.data().status === 'approved') {
+          totalRevenue += doc.data().amount || 0;
+        }
+      });
+      
+      setReports({
+        totalPharmacies: pharmData.length,
+        activePharmacies: activeCount,
+        totalRevenue,
+        revenueByMonth: [], // Simplified for now
+        pharmacyStatus: [
+          { name: 'Ativas', value: activeCount },
+          { name: 'Inativas', value: pharmData.length - activeCount }
+        ]
+      });
+      
     } catch (error) {
       console.error('Error fetching data', error);
     } finally {
@@ -136,19 +201,23 @@ export default function AdminDashboard() {
   const handleSaveShift = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const token = localStorage.getItem('token');
-      const url = editingShiftId ? `/api/admin/shifts/${editingShiftId}` : '/api/admin/shifts';
-      const method = editingShiftId ? 'PUT' : 'POST';
+      const shiftData = {
+        pharmacy_id: shiftForm.pharmacy_id,
+        date: shiftForm.date,
+        start_time: shiftForm.is_24h ? '00:00' : shiftForm.start_time,
+        end_time: shiftForm.is_24h ? '23:59' : shiftForm.end_time,
+        is_24h: shiftForm.is_24h ? 1 : 0,
+        updated_at: new Date().toISOString()
+      };
       
-      await fetch(url, {
-        method,
-        headers: { 
-          'Authorization': `Bearer ${token}`,
-          'X-App-Token': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(shiftForm)
-      });
+      if (editingShiftId) {
+        await updateDoc(doc(db, 'shifts', editingShiftId), shiftData);
+      } else {
+        await addDoc(collection(db, 'shifts'), {
+          ...shiftData,
+          created_at: new Date().toISOString()
+        });
+      }
       
       setIsShiftModalOpen(false);
       fetchData();
@@ -161,14 +230,7 @@ export default function AdminDashboard() {
   const handleDeleteShift = async (id: string) => {
     if (!window.confirm('Tem certeza que deseja excluir este plantão?')) return;
     try {
-      const token = localStorage.getItem('token');
-      await fetch(`/api/admin/shifts/${id}`, {
-        method: 'DELETE',
-        headers: { 
-          'Authorization': `Bearer ${token}`,
-          'X-App-Token': `Bearer ${token}` 
-        }
-      });
+      await deleteDoc(doc(db, 'shifts', id));
       fetchData();
     } catch (error) {
       console.error('Error deleting shift', error);
@@ -177,13 +239,9 @@ export default function AdminDashboard() {
 
   const handleActivate = async (id: string) => {
     try {
-      const token = localStorage.getItem('token');
-      await fetch(`/api/admin/pharmacies/${id}/activate`, {
-        method: 'POST',
-        headers: { 
-          'Authorization': `Bearer ${token}`,
-          'X-App-Token': `Bearer ${token}` 
-        }
+      await updateDoc(doc(db, 'pharmacies', id), {
+        is_active: 1,
+        updated_at: new Date().toISOString()
       });
       fetchData();
     } catch (error) {
@@ -194,13 +252,9 @@ export default function AdminDashboard() {
   const handleDeactivate = async (id: string) => {
     if (!window.confirm('Tem certeza que deseja desativar esta farmácia?')) return;
     try {
-      const token = localStorage.getItem('token');
-      await fetch(`/api/admin/pharmacies/${id}/deactivate`, {
-        method: 'POST',
-        headers: { 
-          'Authorization': `Bearer ${token}`,
-          'X-App-Token': `Bearer ${token}` 
-        }
+      await updateDoc(doc(db, 'pharmacies', id), {
+        is_active: 0,
+        updated_at: new Date().toISOString()
       });
       fetchData();
     } catch (error) {
@@ -211,14 +265,7 @@ export default function AdminDashboard() {
   const handleDelete = async (id: string) => {
     if (!window.confirm('Tem certeza que deseja EXCLUIR esta farmácia permanentemente?')) return;
     try {
-      const token = localStorage.getItem('token');
-      await fetch(`/api/admin/pharmacies/${id}`, {
-        method: 'DELETE',
-        headers: { 
-          'Authorization': `Bearer ${token}`,
-          'X-App-Token': `Bearer ${token}` 
-        }
-      });
+      await deleteDoc(doc(db, 'pharmacies', id));
       fetchData();
     } catch (error) {
       console.error('Error deleting', error);
@@ -227,32 +274,18 @@ export default function AdminDashboard() {
 
   const handleSetHighlight = async (id: string, type: 'day' | 'week' | 'month', city: string, state: string) => {
     try {
-      const token = localStorage.getItem('token');
       const now = new Date();
       const end = calculateHighlightEnd(type);
 
-      const res = await fetch('/api/admin/highlights', {
-        method: 'POST',
-        headers: { 
-          'Authorization': `Bearer ${token}`,
-          'X-App-Token': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          pharmacy_id: id,
-          type,
-          date_start: now.toISOString(),
-          date_end: end.toISOString(),
-          city,
-          state
-        })
+      await addDoc(collection(db, 'highlights'), {
+        pharmacy_id: id,
+        type,
+        date_start: now.toISOString(),
+        date_end: end.toISOString(),
+        city,
+        state,
+        created_at: now.toISOString()
       });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || 'Erro ao configurar destaque');
-      }
 
       alert('Destaque configurado com sucesso!');
     } catch (error: any) {

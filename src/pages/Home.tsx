@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Search, MapPin, Phone, MessageCircle, Star } from 'lucide-react';
+import { collection, query, where, getDocs, doc, getDoc, addDoc } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 
 interface Pharmacy {
   id: string;
@@ -28,21 +30,63 @@ export default function Home() {
   const fetchPharmacies = async (searchCity: string, searchState: string, searchName: string) => {
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (searchCity) params.append('city', searchCity);
-      if (searchState) params.append('state', searchState);
-      if (searchName) params.append('name', searchName);
+      // Fetch Pharmacies
+      const pharmRef = collection(db, 'pharmacies');
+      const pharmConstraints: any[] = [where('is_active', '==', 1)];
+      
+      if (searchCity && searchState) {
+        pharmConstraints.push(where('city', '==', searchCity));
+        pharmConstraints.push(where('state', '==', searchState));
+      }
+      
+      const q = query(pharmRef, ...pharmConstraints);
+      const pharmSnapshot = await getDocs(q);
+      
+      let pharmData = pharmSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Pharmacy));
+      
+      if (searchName) {
+        pharmData = pharmData.filter(p => p.name.toLowerCase().includes(searchName.toLowerCase()));
+      }
 
-      const [highRes, pharmRes] = await Promise.all([
-        fetch(`/api/public/highlights?${params.toString()}`),
-        fetch(`/api/public/pharmacies?${params.toString()}`)
-      ]);
+      // Fetch Highlights
+      const now = new Date().toISOString();
+      const highQuery = query(collection(db, 'highlights'), where('date_start', '<=', now));
+      const highSnapshot = await getDocs(highQuery);
+      
+      const highDataRaw = highSnapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() } as any))
+        .filter(h => h.date_end >= now);
+        
+      const highData: Highlight[] = [];
+      
+      for (const h of highDataRaw) {
+        if (searchCity && searchState) {
+          if (h.city.toLowerCase() !== searchCity.toLowerCase() || 
+              h.state.toLowerCase() !== searchState.toLowerCase()) {
+            continue;
+          }
+        }
 
-      const highData = await highRes.json();
-      const pharmData = await pharmRes.json();
+        const pDoc = await getDoc(doc(db, 'pharmacies', h.pharmacy_id));
+        const p = pDoc.data();
+        
+        if (p && p.is_active === 1) {
+          highData.push({ 
+            ...h, 
+            name: p.name, 
+            phone: p.phone, 
+            whatsapp: p.whatsapp, 
+            street: p.street, 
+            number: p.number, 
+            neighborhood: p.neighborhood, 
+            city: p.city, 
+            state: p.state 
+          });
+        }
+      }
 
-      setHighlights(Array.isArray(highData) ? highData : []);
-      setPharmacies(Array.isArray(pharmData) ? pharmData : []);
+      setHighlights(highData);
+      setPharmacies(pharmData);
     } catch (error) {
       console.error('Error fetching data', error);
       setHighlights([]);
@@ -77,12 +121,16 @@ export default function Home() {
     fetchPharmacies(city, state, name);
   };
 
-  const handleTrackClick = (id: string, type: 'whatsapp' | 'map') => {
-    fetch(`/api/public/pharmacies/${id}/click`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type })
-    }).catch(err => console.error('Error tracking click', err));
+  const handleTrackClick = async (id: string, type: 'whatsapp' | 'map') => {
+    try {
+      await addDoc(collection(db, 'clicks'), {
+        pharmacy_id: id,
+        type,
+        created_at: new Date().toISOString()
+      });
+    } catch (err) {
+      console.error('Error tracking click', err);
+    }
   };
 
   const weekHighlights = highlights.filter(h => h.type === 'week');

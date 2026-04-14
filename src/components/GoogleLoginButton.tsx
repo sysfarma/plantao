@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { signInWithPopup, getIdToken } from 'firebase/auth';
-import { auth, googleProvider } from '../lib/firebase';
+import { doc, getDoc, setDoc, collection, addDoc } from 'firebase/firestore';
+import { auth, googleProvider, db } from '../lib/firebase';
 import { useNavigate } from 'react-router-dom';
+import { v4 as uuidv4 } from 'uuid';
 
 interface GoogleLoginButtonProps {
   text?: "signin_with" | "signup_with" | "continue_with";
@@ -19,34 +21,59 @@ export default function GoogleLoginButton({ text = "continue_with" }: GoogleLogi
       const result = await signInWithPopup(auth, googleProvider);
       const token = await getIdToken(result.user);
 
-      // Sync with server to get role and other data
-      const res = await fetch('/api/auth/google-sync', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-          'X-App-Token': `Bearer ${token}`
-        },
-        body: JSON.stringify({ name: result.user.displayName || '', token })
-      });
+      // Sync with Firestore directly from frontend
+      const userRef = doc(db, 'users', result.user.uid);
+      const userSnap = await getDoc(userRef);
 
-      const dataText = await res.text();
-      let data;
-      try {
-        data = JSON.parse(dataText);
-      } catch (e) {
-        console.error('Server returned non-JSON response:', dataText);
-        throw new Error(`O servidor retornou uma resposta inválida: ${dataText.substring(0, 100)}`);
-      }
+      let userData;
+      if (!userSnap.exists()) {
+        const role = result.user.email === 'sys.farmaciasdeplantao@gmail.com' ? 'admin' : 'pharmacy';
+        userData = {
+          email: result.user.email,
+          role: role,
+          created_at: new Date().toISOString()
+        };
+        await setDoc(userRef, userData);
 
-      if (!res.ok) {
-        throw new Error(data.error || 'Erro ao sincronizar perfil');
+        if (role === 'pharmacy') {
+          const pharmacyId = uuidv4();
+          await setDoc(doc(db, 'pharmacies', pharmacyId), {
+            user_id: result.user.uid,
+            name: result.user.displayName || 'Farmácia',
+            phone: '',
+            whatsapp: '',
+            email: result.user.email,
+            website: '',
+            street: '',
+            number: '',
+            neighborhood: '',
+            city: '',
+            state: '',
+            zip: '',
+            is_active: 0,
+            created_at: new Date().toISOString()
+          });
+
+          await addDoc(collection(db, 'subscriptions'), {
+            pharmacy_id: pharmacyId,
+            status: 'pending',
+            expires_at: null,
+            created_at: new Date().toISOString()
+          });
+        }
+      } else {
+        userData = userSnap.data();
+        // Upgrade to admin if email matches
+        if (result.user.email === 'sys.farmaciasdeplantao@gmail.com' && userData.role !== 'admin') {
+          userData.role = 'admin';
+          await setDoc(userRef, { role: 'admin' }, { merge: true });
+        }
       }
 
       localStorage.setItem('token', token);
-      localStorage.setItem('user', JSON.stringify(data.user));
+      localStorage.setItem('user', JSON.stringify({ id: result.user.uid, ...userData }));
 
-      if (data.user.role === 'admin') {
+      if (userData.role === 'admin') {
         navigate('/admin');
       } else {
         navigate('/pharmacy');

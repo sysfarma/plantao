@@ -21,34 +21,21 @@ export default function Login() {
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const token = await getIdToken(userCredential.user);
 
-      // Sync with server to get role and other data
-      const res = await fetch('/api/auth/google-sync', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-          'X-App-Token': `Bearer ${token}`
-        },
-        body: JSON.stringify({ name: userCredential.user.displayName || '' })
-      });
-
-      const dataText = await res.text();
-      let data;
-      try {
-        data = JSON.parse(dataText);
-      } catch (e) {
-        console.error('Server returned non-JSON response:', dataText);
-        throw new Error(`O servidor retornou uma resposta inválida: ${dataText.substring(0, 100)}`);
+      // Get role from Firestore
+      const { doc, getDoc } = await import('firebase/firestore');
+      const { db } = await import('../lib/firebase');
+      const userDoc = await getDoc(doc(db, 'users', userCredential.user.uid));
+      
+      if (!userDoc.exists()) {
+        throw new Error('Perfil de usuário não encontrado');
       }
-
-      if (!res.ok) {
-        throw new Error(data.error || 'Erro ao sincronizar perfil');
-      }
+      
+      const userData = userDoc.data();
 
       localStorage.setItem('token', token);
-      localStorage.setItem('user', JSON.stringify(data.user));
+      localStorage.setItem('user', JSON.stringify({ id: userCredential.user.uid, ...userData }));
 
-      if (data.user.role === 'admin') {
+      if (userData.role === 'admin') {
         navigate('/admin');
       } else {
         navigate('/pharmacy');

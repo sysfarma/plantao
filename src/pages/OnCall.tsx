@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Search, MapPin, Phone, MessageCircle, Clock } from 'lucide-react';
+import { collection, query, where, getDocs, doc, getDoc, addDoc } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 
 interface Shift {
   start_time: string;
@@ -29,13 +31,43 @@ export default function OnCall() {
   const fetchOnCallPharmacies = async (searchCity: string, searchState: string) => {
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (searchCity) params.append('city', searchCity);
-      if (searchState) params.append('state', searchState);
-
-      const res = await fetch(`/api/public/on-call?${params.toString()}`);
-      const data = await res.json();
-      setPharmacies(Array.isArray(data) ? data : []);
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+      
+      const shiftsRef = collection(db, 'shifts');
+      const q = query(shiftsRef, where('date', '==', today));
+      const shiftsSnapshot = await getDocs(q);
+      
+      const onCallPharmacies: Pharmacy[] = [];
+      
+      for (const shiftDoc of shiftsSnapshot.docs) {
+        const shift = shiftDoc.data();
+        const pharmacyRef = doc(db, 'pharmacies', shift.pharmacy_id);
+        const pharmacySnap = await getDoc(pharmacyRef);
+        
+        if (pharmacySnap.exists()) {
+          const pharmacy = pharmacySnap.data();
+          if (pharmacy.is_active === 1) {
+            if (searchCity && searchState) {
+              if (pharmacy.city.toLowerCase() !== searchCity.toLowerCase() || 
+                  pharmacy.state.toLowerCase() !== searchState.toLowerCase()) {
+                continue;
+              }
+            }
+            
+            onCallPharmacies.push({
+              id: pharmacySnap.id,
+              ...pharmacy,
+              shift: {
+                start_time: shift.start_time,
+                end_time: shift.end_time,
+                is_24h: shift.is_24h
+              }
+            } as Pharmacy);
+          }
+        }
+      }
+      
+      setPharmacies(onCallPharmacies);
     } catch (error) {
       console.error('Error fetching on-call pharmacies', error);
       setPharmacies([]);
@@ -69,12 +101,16 @@ export default function OnCall() {
     fetchOnCallPharmacies(city, state);
   };
 
-  const handleTrackClick = (id: string, type: 'whatsapp' | 'map') => {
-    fetch(`/api/public/pharmacies/${id}/click`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type })
-    }).catch(err => console.error('Error tracking click', err));
+  const handleTrackClick = async (id: string, type: 'whatsapp' | 'map') => {
+    try {
+      await addDoc(collection(db, 'clicks'), {
+        pharmacy_id: id,
+        type,
+        created_at: new Date().toISOString()
+      });
+    } catch (err) {
+      console.error('Error tracking click', err);
+    }
   };
 
   return (

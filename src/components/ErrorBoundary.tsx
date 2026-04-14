@@ -1,6 +1,6 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
 import { AlertTriangle, WifiOff, Lock } from 'lucide-react';
-import { FirestoreErrorInfo } from '../lib/firebaseError';
+import type { FirestoreErrorInfo } from '../lib/firebaseError';
 
 interface Props {
   children: ReactNode;

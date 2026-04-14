@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { QrCode, Copy, CheckCircle, RefreshCw } from 'lucide-react';
+import { collection, addDoc, updateDoc, doc, getDocs, query, where, onSnapshot } from 'firebase/firestore';
+import { db, auth } from '../lib/firebase';
 
 interface PixPaymentManagerProps {
   onPaymentSuccess: () => void;
@@ -11,24 +13,45 @@ export default function PixPaymentManager({ onPaymentSuccess }: PixPaymentManage
   const [pixData, setPixData] = useState<{ payment_id: string; qr_code: string; qr_code_base64: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const [status, setStatus] = useState<'pending' | 'approved'>('pending');
+  const [pharmacyId, setPharmacyId] = useState<string | null>(null);
+  const [subscriptionId, setSubscriptionId] = useState<string | null>(null);
 
   const generatePix = async () => {
     setLoading(true);
     setError('');
     try {
-      const token = localStorage.getItem('token');
-      const res = await fetch('/api/payments/pix', {
-        method: 'POST',
-        headers: { 
-          'Authorization': `Bearer ${token}`,
-          'X-App-Token': `Bearer ${token}` 
-        }
+      const user = auth.currentUser;
+      if (!user) throw new Error('Usuário não autenticado');
+
+      // Find pharmacy
+      const pharmQuery = query(collection(db, 'pharmacies'), where('user_id', '==', user.uid));
+      const pharmSnapshot = await getDocs(pharmQuery);
+      if (pharmSnapshot.empty) throw new Error('Farmácia não encontrada');
+      const pId = pharmSnapshot.docs[0].id;
+      setPharmacyId(pId);
+
+      // Find subscription
+      const subsQuery = query(collection(db, 'subscriptions'), where('pharmacy_id', '==', pId));
+      const subsSnapshot = await getDocs(subsQuery);
+      if (!subsSnapshot.empty) {
+        setSubscriptionId(subsSnapshot.docs[0].id);
+      }
+
+      // Create a dummy payment
+      const paymentRef = await addDoc(collection(db, 'payments'), {
+        pharmacy_id: pId,
+        user_id: user.uid,
+        amount: 97.00,
+        status: 'pending',
+        payment_method: 'pix',
+        created_at: new Date().toISOString()
       });
-      
-      if (!res.ok) throw new Error('Falha ao gerar Pix');
-      
-      const data = await res.json();
-      setPixData(data);
+
+      setPixData({
+        payment_id: paymentRef.id,
+        qr_code: '00020126580014br.gov.bcb.pix0136123e4567-e89b-12d3-a456-426655440000520400005303986540597.005802BR5913Test Pharmacy6008BRASILIA62070503***63041D3D', // Dummy QR code string
+        qr_code_base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' // Dummy 1x1 image
+      });
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -40,34 +63,19 @@ export default function PixPaymentManager({ onPaymentSuccess }: PixPaymentManage
     generatePix();
   }, []);
 
-  // Polling for payment status
+  // Listen for payment status
   useEffect(() => {
-    if (!pixData || status === 'approved') return;
+    if (!pixData || !subscriptionId) return;
 
-    const intervalId = setInterval(async () => {
-      try {
-        const token = localStorage.getItem('token');
-        const res = await fetch('/api/pharmacy/profile', {
-          headers: { 
-            'Authorization': `Bearer ${token}`,
-            'X-App-Token': `Bearer ${token}` 
-          }
-        });
-        if (res.ok) {
-          const profile = await res.json();
-          if (profile.subscription?.status === 'active') {
-            setStatus('approved');
-            clearInterval(intervalId);
-            onPaymentSuccess();
-          }
-        }
-      } catch (err) {
-        console.error('Polling error', err);
+    const unsubscribe = onSnapshot(doc(db, 'subscriptions', subscriptionId), (docSnap) => {
+      if (docSnap.exists() && docSnap.data().status === 'active') {
+        setStatus('approved');
+        onPaymentSuccess();
       }
-    }, 5000); // Check every 5 seconds
+    });
 
-    return () => clearInterval(intervalId);
-  }, [pixData, status, onPaymentSuccess]);
+    return () => unsubscribe();
+  }, [pixData, subscriptionId, onPaymentSuccess]);
 
   const handleCopy = () => {
     if (pixData?.qr_code) {
@@ -78,19 +86,30 @@ export default function PixPaymentManager({ onPaymentSuccess }: PixPaymentManage
   };
 
   const handleSimulatePayment = async () => {
-    if (!pixData) return;
+    if (!pixData || !pharmacyId || !subscriptionId) return;
     try {
-      const token = localStorage.getItem('token');
-      await fetch('/api/dev/simulate-payment', {
-        method: 'POST',
-        headers: { 
-          'Authorization': `Bearer ${token}`,
-          'X-App-Token': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ payment_id: pixData.payment_id })
+      // Update payment
+      await updateDoc(doc(db, 'payments', pixData.payment_id), {
+        status: 'approved',
+        updated_at: new Date().toISOString()
       });
-      // The polling will catch the update shortly, or we could manually trigger it here.
+
+      // Update subscription
+      const expiresAt = new Date();
+      expiresAt.setMonth(expiresAt.getMonth() + 1);
+
+      await updateDoc(doc(db, 'subscriptions', subscriptionId), {
+        status: 'active',
+        expires_at: expiresAt.toISOString(),
+        updated_at: new Date().toISOString()
+      });
+      
+      // Update pharmacy active status
+      await updateDoc(doc(db, 'pharmacies', pharmacyId), {
+        is_active: 1,
+        updated_at: new Date().toISOString()
+      });
+
     } catch (err) {
       console.error('Simulation error', err);
     }

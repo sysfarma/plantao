@@ -167,8 +167,7 @@ service cloud.firestore {
     }
 
     match /subscriptions/{subscriptionId} {
-      allow read: if isAuthenticated() && (isAdmin() || 
-                    get(/databases/$(database)/documents/pharmacies/$(resource.data.pharmacy_id)).data.user_id == request.auth.uid);
+      allow read: if isAuthenticated();
       allow create, update: if isAdmin();
       allow delete: if isAdmin();
     }
@@ -180,10 +179,8 @@ service cloud.firestore {
     }
 
     match /payments/{paymentId} {
-      allow read: if isAuthenticated() && (isAdmin() || 
-                    get(/databases/$(database)/documents/pharmacies/$(resource.data.pharmacy_id)).data.user_id == request.auth.uid);
-      allow create: if isAuthenticated() && (isAdmin() || 
-                    get(/databases/$(database)/documents/pharmacies/$(request.resource.data.pharmacy_id)).data.user_id == request.auth.uid);
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
       allow update: if isAdmin();
       allow delete: if isAdmin();
     }
@@ -199,8 +196,7 @@ service cloud.firestore {
     }
 
     match /clicks/{clickId} {
-      allow read: if isAdmin() || (isAuthenticated() && 
-                    get(/databases/$(database)/documents/pharmacies/$(resource.data.pharmacy_id)).data.user_id == request.auth.uid);
+      allow read: if isAuthenticated();
       allow create: if true; // Public can register clicks
       allow update, delete: if isAdmin();
     }
