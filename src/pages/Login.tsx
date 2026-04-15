@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Pill } from 'lucide-react';
 import { signInWithEmailAndPassword, getIdToken } from 'firebase/auth';
-import { auth } from '../lib/firebase';
+import { doc, getDoc } from 'firebase/firestore';
+import { auth, db } from '../lib/firebase';
 import GoogleLoginButton from '../components/GoogleLoginButton';
 
 export default function Login() {
@@ -22,8 +23,6 @@ export default function Login() {
       const token = await getIdToken(userCredential.user);
 
       // Get role from Firestore
-      const { doc, getDoc } = await import('firebase/firestore');
-      const { db } = await import('../lib/firebase');
       const userDoc = await getDoc(doc(db, 'users', userCredential.user.uid));
       
       if (!userDoc.exists()) {
@@ -37,8 +36,10 @@ export default function Login() {
 
       if (userData.role === 'admin') {
         navigate('/admin');
-      } else {
+      } else if (userData.role === 'pharmacy') {
         navigate('/pharmacy');
+      } else {
+        navigate('/');
       }
     } catch (err: any) {
       console.error('Login error:', err);

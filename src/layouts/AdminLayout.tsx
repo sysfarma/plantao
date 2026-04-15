@@ -1,11 +1,23 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Outlet, Link, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, LogOut, Pill, Menu, X, Home, Clock } from 'lucide-react';
+import { LayoutDashboard, LogOut, Pill, Menu, X, Home, Clock, User } from 'lucide-react';
 import MobileBottomNav from '../components/MobileBottomNav';
 
 export default function AdminLayout() {
   const navigate = useNavigate();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+  useEffect(() => {
+    const userStr = localStorage.getItem('user');
+    if (!userStr) {
+      navigate('/login');
+      return;
+    }
+    const user = JSON.parse(userStr);
+    if (user.role !== 'admin') {
+      navigate('/');
+    }
+  }, [navigate]);
 
   const handleLogout = () => {
     localStorage.removeItem('token');
@@ -41,11 +53,15 @@ export default function AdminLayout() {
           </Link>
           <Link to="/plantao" onClick={() => setIsMenuOpen(false)} className="flex items-center gap-3 px-3 py-2 rounded-md text-slate-300 hover:text-white hover:bg-slate-800 transition-colors">
             <Clock className="w-5 h-5" />
-            Plantão
+            Plantão Hoje
           </Link>
-          <Link to="/admin" onClick={() => setIsMenuOpen(false)} className="flex items-center gap-3 px-3 py-2 rounded-md bg-slate-800 text-white">
+          <Link to="/admin" onClick={() => setIsMenuOpen(false)} className="flex items-center gap-3 px-3 py-2 rounded-md text-slate-300 hover:text-white hover:bg-slate-800 transition-colors">
             <LayoutDashboard className="w-5 h-5" />
             Dashboard
+          </Link>
+          <Link to="/perfil" onClick={() => setIsMenuOpen(false)} className="flex items-center gap-3 px-3 py-2 rounded-md text-slate-300 hover:text-white hover:bg-slate-800 transition-colors">
+            <User className="w-5 h-5" />
+            Meu Perfil
           </Link>
         </nav>
         <div className="p-4 border-t border-slate-800">
@@ -59,7 +75,7 @@ export default function AdminLayout() {
         </div>
       </aside>
       
-      <main className="flex-1 overflow-auto">
+      <main className="flex-1 overflow-auto max-w-[80%] mx-auto w-full">
         <Outlet />
       </main>
       <MobileBottomNav />

@@ -6,7 +6,14 @@
       "type": "object",
       "properties": {
         "email": { "type": "string", "format": "email" },
-        "role": { "type": "string", "enum": ["admin", "pharmacy"] },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "pharmacy", "client"] },
+        "cep": { "type": "string" },
+        "street": { "type": "string" },
+        "number": { "type": "string" },
+        "neighborhood": { "type": "string" },
+        "city": { "type": "string" },
+        "state": { "type": "string" },
         "created_at": { "type": "string", "format": "date-time" }
       },
       "required": ["email", "role", "created_at"]
@@ -28,6 +35,9 @@
         "city": { "type": "string" },
         "state": { "type": "string" },
         "zip": { "type": "string" },
+        "cep": { "type": "string" },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
         "is_active": { "type": "number" },
         "created_at": { "type": "string", "format": "date-time" }
       },

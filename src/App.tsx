@@ -16,6 +16,7 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
+import Profile from './pages/Profile';
 
 import AdminDashboard from './pages/admin/Dashboard';
 import PharmacyDashboard from './pages/pharmacy/Dashboard';
@@ -34,6 +35,7 @@ export default function App() {
           <Route path="/register" element={<Register />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
+          <Route path="/perfil" element={<Profile />} />
         </Route>
 
         {/* Admin Routes */}

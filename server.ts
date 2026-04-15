@@ -57,12 +57,6 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // Request Logging
-  app.use((req, res, next) => {
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-    next();
-  });
-
   app.use(cors());
   app.use(express.json());
 
@@ -203,10 +197,11 @@ async function startServer() {
       
       if (!userDoc.exists) {
         // Create new user profile
-        const role = req.user.email === 'sys.farmaciasdeplantao@gmail.com' ? 'admin' : 'pharmacy';
+        const role = (req.user.email === 'sys.farmaciasdeplantao@gmail.com' ? 'admin' : 'client') as 'admin' | 'pharmacy' | 'client';
         
         await db.collection('users').doc(req.user.id).set({
           email: req.user.email,
+          name: name || '',
           role: role,
           created_at: new Date().toISOString()
         });
@@ -848,6 +843,83 @@ async function startServer() {
     }
   });
 
+  // User: Get Profile (Self)
+  app.get('/api/user/profile', authenticateToken, async (req: any, res) => {
+    try {
+      const userDoc = await db.collection('users').doc(req.user.id).get();
+      if (!userDoc.exists) return res.status(404).json({ error: 'Usuário não encontrado' });
+      
+      const userData = userDoc.data();
+      let profileData: any = { ...userData, id: req.user.id };
+
+      if (userData?.role === 'pharmacy') {
+        const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
+        if (!pharmacySnapshot.empty) {
+          const pharmacyData = pharmacySnapshot.docs[0].data();
+          profileData = { ...profileData, ...pharmacyData, pharmacy_id: pharmacySnapshot.docs[0].id, user_id: req.user.id };
+        }
+      }
+
+      res.json(profileData);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // User: Update Profile (Self)
+  app.put('/api/user/profile', authenticateToken, async (req: any, res) => {
+    const userId = req.user.id;
+    const { password, cep, street, number, neighborhood, city, state, name, phone, whatsapp } = req.body;
+    
+    try {
+      // Update User Document
+      const userUpdate: any = {
+        updated_at: new Date().toISOString()
+      };
+      if (cep) userUpdate.cep = cep;
+      if (street) userUpdate.street = street;
+      if (number) userUpdate.number = number;
+      if (neighborhood) userUpdate.neighborhood = neighborhood;
+      if (city) userUpdate.city = city;
+      if (state) userUpdate.state = state;
+      if (name) userUpdate.name = name;
+
+      await db.collection('users').doc(userId).update(userUpdate);
+
+      // If Pharmacy, update Pharmacy Document too
+      if (req.user.role === 'pharmacy') {
+        const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', userId).get();
+        if (!pharmacySnapshot.empty) {
+          const pharmacyId = pharmacySnapshot.docs[0].id;
+          const pharmacyUpdate: any = {
+            updated_at: new Date().toISOString()
+          };
+          if (cep) pharmacyUpdate.cep = cep;
+          if (street) pharmacyUpdate.street = street;
+          if (number) pharmacyUpdate.number = number;
+          if (neighborhood) pharmacyUpdate.neighborhood = neighborhood;
+          if (city) pharmacyUpdate.city = city;
+          if (state) pharmacyUpdate.state = state;
+          if (name) pharmacyUpdate.name = name;
+          if (phone) pharmacyUpdate.phone = phone;
+          if (whatsapp) pharmacyUpdate.whatsapp = whatsapp;
+          
+          await db.collection('pharmacies').doc(pharmacyId).update(pharmacyUpdate);
+        }
+      }
+
+      // Update Password if provided
+      if (password) {
+        await auth.updateUser(userId, { password });
+      }
+
+      res.json({ success: true, message: 'Perfil atualizado com sucesso' });
+    } catch (err: any) {
+      console.error('Error updating profile:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Admin: Get all pharmacies
   app.get('/api/admin/pharmacies', authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
@@ -998,20 +1070,64 @@ async function startServer() {
   app.put('/api/admin/pharmacies/:id', authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
     const { id } = req.params;
+    const { email, password, name, phone, whatsapp, street, number, neighborhood, city, state, cep } = req.body;
     
     try {
       const pharmacyDoc = await db.collection('pharmacies').doc(id).get();
-      if (!pharmacyDoc.exists) return res.status(404).json({ error: 'Pharmacy not found' });
-      
-      const { name, phone, whatsapp, street, number, neighborhood, city, state } = req.body;
-      
-      const updatedData = {
-        name, phone, whatsapp, street, number, neighborhood, city, state,
+      if (!pharmacyDoc.exists) {
+        return res.status(404).json({ error: 'Farmácia não encontrada' });
+      }
+      const pharmacyData = pharmacyDoc.data()!;
+      const userId = pharmacyData.user_id;
+
+      // Update Auth User if email or password provided
+      if (email || password) {
+        try {
+          const updateData: any = {};
+          if (email) updateData.email = email;
+          if (password) updateData.password = password;
+          
+          if (userId && !userId.startsWith('dummy_')) {
+            await auth.updateUser(userId, updateData);
+          } else if (email && password) {
+            // Create real user if it was a dummy
+            const userRecord = await auth.createUser({ email, password });
+            await db.collection('users').doc(userRecord.uid).set({
+              email,
+              role: 'pharmacy',
+              created_at: new Date().toISOString()
+            });
+            await db.collection('pharmacies').doc(id).update({ user_id: userRecord.uid });
+          }
+        } catch (authError: any) {
+          console.error('Error updating Auth user:', authError);
+          // Continue updating Firestore even if Auth fails
+        }
+      }
+
+      const updatedData: any = {
+        name, phone, whatsapp, street, number, neighborhood, city, state, cep,
         updated_at: new Date().toISOString()
       };
+      if (email) updatedData.email = email;
       
       await db.collection('pharmacies').doc(id).update(updatedData);
-      res.json({ id, ...pharmacyDoc.data(), ...updatedData });
+      
+      // Also update user doc if exists
+      if (userId && !userId.startsWith('dummy_')) {
+        const userUpdate: any = { updated_at: new Date().toISOString() };
+        if (email) userUpdate.email = email;
+        if (cep) userUpdate.cep = cep;
+        if (street) userUpdate.street = street;
+        if (number) userUpdate.number = number;
+        if (neighborhood) userUpdate.neighborhood = neighborhood;
+        if (city) userUpdate.city = city;
+        if (state) userUpdate.state = state;
+        
+        await db.collection('users').doc(userId).update(userUpdate);
+      }
+
+      res.json({ id, ...pharmacyData, ...updatedData });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1023,9 +1139,27 @@ async function startServer() {
     const { email, password, name, phone, whatsapp, street, number, neighborhood, city, state } = req.body;
     
     try {
-      // In AI Studio, we cannot create Auth users from the backend without a service account.
-      // We will use a dummy user ID for now. The pharmacy will need to register via the frontend.
-      const userId = `dummy_${uuidv4()}`;
+      let userId;
+      try {
+        const userRecord = await auth.createUser({
+          email,
+          password,
+        });
+        userId = userRecord.uid;
+      } catch (authError: any) {
+        console.error('Error creating Auth user:', authError);
+        if (authError.code === 'auth/email-already-exists') {
+          const userRecord = await auth.getUserByEmail(email);
+          userId = userRecord.uid;
+          if (password) {
+            await auth.updateUser(userId, { password });
+          }
+        } else {
+          // Fallback to dummy user if auth creation fails (e.g., no service account)
+          userId = `dummy_${uuidv4()}`;
+        }
+      }
+
       await db.collection('users').doc(userId).set({
         email,
         role: 'pharmacy',

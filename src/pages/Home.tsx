@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Search, MapPin, Phone, MessageCircle, Star } from 'lucide-react';
+import { Search, MapPin, Phone, MessageCircle, Star, Clock } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { collection, query, where, getDocs, doc, getDoc, addDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 
@@ -13,6 +14,20 @@ interface Pharmacy {
   neighborhood: string;
   city: string;
   state: string;
+  lat?: number;
+  lng?: number;
+}
+
+function getDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const R = 6371; // Radius of the earth in km
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c; // Distance in km
 }
 
 interface Highlight extends Pharmacy {
@@ -22,20 +37,25 @@ interface Highlight extends Pharmacy {
 export default function Home() {
   const [city, setCity] = useState('');
   const [state, setState] = useState('');
+  const [cep, setCep] = useState('');
   const [name, setName] = useState('');
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [pharmacies, setPharmacies] = useState<Pharmacy[]>([]);
   const [loading, setLoading] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
+  const [userCoords, setUserCoords] = useState<{lat: number, lng: number} | null>(null);
 
-  const fetchPharmacies = async (searchCity: string, searchState: string, searchName: string) => {
+  const fetchPharmacies = async (searchCity: string, searchState: string, searchName: string, coords?: {lat: number, lng: number}) => {
     setLoading(true);
     try {
       // Fetch Pharmacies
       const pharmRef = collection(db, 'pharmacies');
-      const pharmConstraints: any[] = [where('is_active', '==', 1)];
+      let pharmConstraints: any[] = [where('is_active', '==', 1)];
       
-      if (searchCity && searchState) {
+      if (searchCity) {
         pharmConstraints.push(where('city', '==', searchCity));
+      }
+      if (searchState) {
         pharmConstraints.push(where('state', '==', searchState));
       }
       
@@ -43,6 +63,17 @@ export default function Home() {
       const pharmSnapshot = await getDocs(q);
       
       let pharmData = pharmSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Pharmacy));
+      
+      // Filter by distance if coords are available and no city search is active
+      if (coords && !searchCity) {
+        pharmData = pharmData.filter(p => {
+          if (p.lat && p.lng) {
+            const dist = getDistance(coords.lat, coords.lng, Number(p.lat), Number(p.lng));
+            return dist <= 20; // 20km radius
+          }
+          return false;
+        });
+      }
       
       if (searchName) {
         pharmData = pharmData.filter(p => p.name.toLowerCase().includes(searchName.toLowerCase()));
@@ -96,15 +127,100 @@ export default function Home() {
     }
   };
 
+  const handleCepSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanCep = cep.replace(/\D/g, '');
+    if (cleanCep.length !== 8) return;
+
+    setLoading(true);
+    try {
+      const res = await fetch(`https://viacep.com.br/ws/${cleanCep}/json/`);
+      const data = await res.json();
+      if (!data.erro) {
+        setCity(data.localidade);
+        setState(data.uf);
+        setHasSearched(true);
+        
+        // Geocode CEP to get coords
+        const geoRes = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(`${data.logradouro}, ${data.localidade}, ${data.uf}, Brazil`)}`, {
+          headers: {
+            'User-Agent': 'FarmaciasDePlantao/1.0',
+            'Accept-Language': 'pt-BR'
+          }
+        });
+        const geoData = await geoRes.json();
+        
+        if (geoData && geoData.length > 0) {
+          const coords = { lat: parseFloat(geoData[0].lat), lng: parseFloat(geoData[0].lon) };
+          setUserCoords(coords);
+          fetchPharmacies(data.localidade, data.uf, name, coords);
+        } else {
+          fetchPharmacies(data.localidade, data.uf, name);
+        }
+      }
+    } catch (err) {
+      console.error('Error searching CEP', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     const init = async () => {
+      // Try Browser Geolocation first
+      if ("geolocation" in navigator) {
+        navigator.geolocation.getCurrentPosition(
+          async (position) => {
+            const coords = { lat: position.coords.latitude, lng: position.coords.longitude };
+            setUserCoords(coords);
+            
+            // Try to get city/state from coords for fallback
+            try {
+              const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${coords.lat}&lon=${coords.lng}`, {
+                headers: {
+                  'User-Agent': 'FarmaciasDePlantao/1.0',
+                  'Accept-Language': 'pt-BR'
+                }
+              });
+              const data = await res.json();
+              if (data.address) {
+                const detectedCity = data.address.city || data.address.town || data.address.village || data.address.suburb || '';
+                // For Brazil, state_code is often not present, but ISO3166-2-lvl4 has it like "BR-SP"
+                let detectedState = data.address.state_code || '';
+                if (!detectedState && data.address['ISO3166-2-lvl4']) {
+                  detectedState = data.address['ISO3166-2-lvl4'].split('-')[1];
+                }
+                
+                setCity(detectedCity);
+                setState(detectedState);
+                fetchPharmacies(detectedCity, detectedState, '', coords);
+              } else {
+                fetchPharmacies('', '', '', coords);
+              }
+            } catch (e) {
+              fetchPharmacies('', '', '', coords);
+            }
+          },
+          async () => {
+            // Fallback to IP if denied or error
+            fallbackToIp();
+          }
+        );
+      } else {
+        fallbackToIp();
+      }
+    };
+
+    const fallbackToIp = async () => {
       try {
         const res = await fetch('https://ipwho.is/');
         const data = await res.json();
         if (data.success && data.city && data.region_code) {
           setCity(data.city);
           setState(data.region_code);
-          fetchPharmacies(data.city, data.region_code, '');
+          const coords = { lat: data.latitude, lng: data.longitude };
+          setUserCoords(coords);
+          fetchPharmacies(data.city, data.region_code, '', coords);
         } else {
           fetchPharmacies('', '', '');
         }
@@ -113,12 +229,14 @@ export default function Home() {
         fetchPharmacies('', '', '');
       }
     };
+
     init();
   }, []);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    fetchPharmacies(city, state, name);
+    setHasSearched(true);
+    fetchPharmacies(city, state, name, userCoords || undefined);
   };
 
   const handleTrackClick = async (id: string, type: 'whatsapp' | 'map') => {
@@ -133,104 +251,185 @@ export default function Home() {
     }
   };
 
+  const dayHighlights = highlights.filter(h => h.type === 'day');
   const weekHighlights = highlights.filter(h => h.type === 'week');
   const monthHighlights = highlights.filter(h => h.type === 'month');
+
+  const showResultsFirst = hasSearched && pharmacies.length > 0;
+
+  const highlightsSection = (
+    <div className="space-y-12">
+      {dayHighlights.length > 0 && (
+        <section>
+          <h2 className="text-xl font-bold text-gray-900 mb-4 border-b pb-2 flex items-center gap-2">
+            <Star className="w-5 h-5 text-yellow-500 fill-yellow-500" />
+            Destaques do Dia
+          </h2>
+          <div className="flex flex-col gap-4">
+            {dayHighlights.map(pharmacy => (
+              <PharmacyCard key={pharmacy.id} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {weekHighlights.length > 0 && (
+        <section>
+          <h2 className="text-xl font-bold text-gray-900 mb-4 border-b pb-2 flex items-center gap-2">
+            <Star className="w-5 h-5 text-emerald-500 fill-emerald-500" />
+            Destaques da Semana
+          </h2>
+          <div className="flex flex-col gap-4">
+            {weekHighlights.map(pharmacy => (
+              <PharmacyCard key={pharmacy.id} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {monthHighlights.length > 0 && (
+        <section>
+          <h2 className="text-xl font-bold text-gray-900 mb-4 border-b pb-2 flex items-center gap-2">
+            <Star className="w-5 h-5 text-blue-500 fill-blue-500" />
+            Destaques do Mês
+          </h2>
+          <div className="flex flex-col gap-4">
+            {monthHighlights.map(pharmacy => (
+              <PharmacyCard key={pharmacy.id} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+
+  const resultsSection = (
+    <section>
+      <h2 className="text-2xl font-bold text-gray-900 mb-6">
+        {hasSearched ? 'Resultado da Pesquisa' : 'Todas as Farmácias'}
+      </h2>
+      {loading ? (
+        <div className="text-center py-12 text-gray-500">Carregando...</div>
+      ) : pharmacies.length > 0 ? (
+        <div className="flex flex-col gap-6">
+          {pharmacies.map(pharmacy => (
+            <PharmacyCard key={pharmacy.id} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
+          ))}
+        </div>
+      ) : (
+        <div className="text-center py-12 bg-gray-50 rounded-lg border border-dashed border-gray-300 text-gray-500">
+          Nenhuma farmácia encontrada para esta busca.
+        </div>
+      )}
+    </section>
+  );
 
   return (
     <div className="pb-12">
       {/* Hero Search Section */}
       <section className="bg-emerald-600 text-white py-16 px-4">
-        <div className="max-w-3xl mx-auto text-center">
+        <div className="max-w-4xl lg:max-w-none mx-auto text-center">
           <h1 className="text-4xl font-bold mb-4">Encontre as Farmácias de Plantão</h1>
           <p className="text-emerald-100 mb-8 text-lg">Busque por farmácias abertas agora na sua cidade</p>
           
-          <form onSubmit={handleSearch} className="bg-white p-2 rounded-lg shadow-lg flex flex-col sm:flex-row gap-2">
-            <div className="flex-1 flex items-center px-3 bg-gray-50 rounded-md border border-gray-200">
-              <MapPin className="text-gray-400 w-5 h-5" />
-              <input 
-                type="text" 
-                placeholder="Cidade" 
-                className="w-full bg-transparent border-none focus:ring-0 text-gray-900 p-3 outline-none"
-                value={city}
-                onChange={(e) => setCity(e.target.value)}
-              />
+          <div className="flex flex-col gap-4">
+            <div className="bg-white p-2 rounded-lg shadow-lg">
+              <form onSubmit={handleSearch} className="flex flex-col sm:flex-row gap-2">
+                <div className="flex-1 flex items-center px-3 bg-gray-50 rounded-md border border-gray-200">
+                  <MapPin className="text-gray-400 w-5 h-5" />
+                  <input 
+                    type="text" 
+                    placeholder="Cidade" 
+                    className="w-full bg-transparent border-none focus:ring-0 text-gray-900 p-3 outline-none"
+                    value={city}
+                    onChange={(e) => setCity(e.target.value)}
+                  />
+                </div>
+                <div className="flex-1 flex items-center px-3 bg-gray-50 rounded-md border border-gray-200">
+                  <Search className="text-gray-400 w-5 h-5" />
+                  <input 
+                    type="text" 
+                    placeholder="Nome da Farmácia (Opcional)" 
+                    className="w-full bg-transparent border-none focus:ring-0 text-gray-900 p-3 outline-none"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                  />
+                </div>
+                <div className="w-full sm:w-24 flex items-center px-3 bg-gray-50 rounded-md border border-gray-200">
+                  <input 
+                    type="text" 
+                    placeholder="UF" 
+                    maxLength={2}
+                    className="w-full bg-transparent border-none focus:ring-0 text-gray-900 p-3 outline-none uppercase"
+                    value={state}
+                    onChange={(e) => setState(e.target.value.toUpperCase())}
+                  />
+                </div>
+                <button 
+                  type="submit"
+                  className="bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-3 rounded-md font-bold flex items-center justify-center gap-2 transition-colors"
+                >
+                  <Search className="w-5 h-5" />
+                  Buscar
+                </button>
+              </form>
             </div>
-            <div className="flex-1 flex items-center px-3 bg-gray-50 rounded-md border border-gray-200">
-              <Search className="text-gray-400 w-5 h-5" />
-              <input 
-                type="text" 
-                placeholder="Nome da Farmácia (Opcional)" 
-                className="w-full bg-transparent border-none focus:ring-0 text-gray-900 p-3 outline-none"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
+
+            <div className="bg-white p-2 rounded-lg shadow-lg">
+              <form onSubmit={handleCepSearch} className="flex gap-2">
+                <div className="flex-1 flex items-center px-3 bg-gray-50 rounded-md border border-gray-200">
+                  <MapPin className="text-gray-400 w-5 h-5" />
+                  <input 
+                    type="text" 
+                    placeholder="Buscar por CEP (ex: 01001-000)" 
+                    className="w-full bg-transparent border-none focus:ring-0 text-gray-900 p-3 outline-none"
+                    value={cep}
+                    onChange={(e) => setCep(e.target.value)}
+                  />
+                </div>
+                <button 
+                  type="submit"
+                  className="bg-emerald-700 hover:bg-emerald-800 text-white px-8 py-3 rounded-md font-bold flex items-center justify-center gap-2 transition-colors"
+                >
+                  <Search className="w-5 h-5" />
+                  CEP
+                </button>
+              </form>
             </div>
-            <div className="w-full sm:w-32 flex items-center px-3 bg-gray-50 rounded-md border border-gray-200">
-              <input 
-                type="text" 
-                placeholder="UF (ex: SP)" 
-                maxLength={2}
-                className="w-full bg-transparent border-none focus:ring-0 text-gray-900 p-3 outline-none uppercase"
-                value={state}
-                onChange={(e) => setState(e.target.value.toUpperCase())}
-              />
-            </div>
-            <button 
-              type="submit"
-              className="bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-3 rounded-md font-medium flex items-center justify-center gap-2 transition-colors"
+          </div>
+
+          <div className="flex flex-col items-center gap-3 mt-8">
+            <p className="text-emerald-100 text-sm font-medium">Ou use o acesso rápido:</p>
+            <Link 
+              to="/plantao"
+              className="bg-white text-emerald-700 hover:bg-emerald-50 px-8 py-4 rounded-full font-bold flex items-center justify-center gap-3 transition-all shadow-xl hover:scale-105 active:scale-95 border-2 border-emerald-100"
             >
-              <Search className="w-5 h-5" />
-              Buscar
-            </button>
-          </form>
+              <Clock className="w-6 h-6 animate-pulse" />
+              <span className="text-lg">Ver Plantão Hoje na Minha Região</span>
+            </Link>
+            <p className="text-emerald-200 text-xs">
+              {userCoords ? '✓ Localização detectada' : 'Detectando sua localização...'}
+            </p>
+          </div>
         </div>
       </section>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-12 space-y-12">
-        
-        {/* Week & Month Highlights */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-          {weekHighlights.length > 0 && (
-            <section>
-              <h2 className="text-xl font-bold text-gray-900 mb-4 border-b pb-2">Destaques da Semana</h2>
-              <div className="space-y-4">
-                {weekHighlights.map(pharmacy => (
-                  <PharmacyCard key={pharmacy.id} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
-                ))}
-              </div>
-            </section>
-          )}
-
-          {monthHighlights.length > 0 && (
-            <section>
-              <h2 className="text-xl font-bold text-gray-900 mb-4 border-b pb-2">Destaques do Mês</h2>
-              <div className="space-y-4">
-                {monthHighlights.map(pharmacy => (
-                  <PharmacyCard key={pharmacy.id} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
-                ))}
-              </div>
-            </section>
-          )}
-        </div>
-
-        {/* All Pharmacies */}
-        <section>
-          <h2 className="text-2xl font-bold text-gray-900 mb-6">Todas as Farmácias</h2>
-          {loading ? (
-            <div className="text-center py-12 text-gray-500">Carregando...</div>
-          ) : pharmacies.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {pharmacies.map(pharmacy => (
-                <PharmacyCard key={pharmacy.id} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
-              ))}
+      <div className="max-w-7xl lg:max-w-none mx-auto px-4 sm:px-6 lg:px-8 mt-12 space-y-12">
+        {showResultsFirst ? (
+          <>
+            <div className="w-full">
+              {resultsSection}
             </div>
-          ) : (
-            <div className="text-center py-12 bg-gray-50 rounded-lg border border-dashed border-gray-300 text-gray-500">
-              Nenhuma farmácia encontrada para esta busca.
+            {highlightsSection}
+          </>
+        ) : (
+          <>
+            {highlightsSection}
+            <div className="w-full">
+              {resultsSection}
             </div>
-          )}
-        </section>
-
+          </>
+        )}
       </div>
     </div>
   );
@@ -238,7 +437,7 @@ export default function Home() {
 
 function PharmacyCard({ pharmacy, onTrackClick }: { pharmacy: Pharmacy; onTrackClick: (id: string, type: 'whatsapp' | 'map') => void; key?: React.Key }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-5 shadow-sm hover:shadow-md transition-shadow">
+    <div className="bg-white border border-gray-200 rounded-lg p-5 shadow-sm hover:shadow-md transition-shadow w-full">
       <h3 className="text-lg font-bold text-gray-900 mb-1">{pharmacy.name}</h3>
       <p className="text-sm text-gray-500 mb-4 line-clamp-2">
         {pharmacy.street}, {pharmacy.number} - {pharmacy.neighborhood}<br/>

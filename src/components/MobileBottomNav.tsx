@@ -22,10 +22,10 @@ export default function MobileBottomNav() {
       </Link>
       <Link to="/plantao" className="flex flex-col items-center justify-center w-full h-full text-gray-500 hover:text-emerald-600 transition-colors">
         <Clock className="w-6 h-6 mb-1" />
-        <span className="text-[10px] font-medium">Plantão</span>
+        <span className="text-[10px] font-medium">Plantão Hoje</span>
       </Link>
       <Link 
-        to={user ? (user.role === 'admin' ? '/admin' : '/pharmacy') : '/login'} 
+        to={user ? '/perfil' : '/login'} 
         className="flex flex-col items-center justify-center w-full h-full text-gray-500 hover:text-emerald-600 transition-colors"
       >
         <User className="w-6 h-6 mb-1" />

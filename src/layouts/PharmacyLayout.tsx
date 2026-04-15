@@ -1,11 +1,23 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Outlet, Link, useNavigate } from 'react-router-dom';
-import { Store, LogOut, Home, Menu, X, User, Clock } from 'lucide-react';
+import { Store, LogOut, Home, Menu, X, User, Clock, LayoutDashboard } from 'lucide-react';
 import MobileBottomNav from '../components/MobileBottomNav';
 
 export default function PharmacyLayout() {
   const navigate = useNavigate();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+  useEffect(() => {
+    const userStr = localStorage.getItem('user');
+    if (!userStr) {
+      navigate('/login');
+      return;
+    }
+    const user = JSON.parse(userStr);
+    if (user.role !== 'pharmacy' && user.role !== 'admin') {
+      navigate('/');
+    }
+  }, [navigate]);
 
   const handleLogout = () => {
     localStorage.removeItem('token');
@@ -39,9 +51,13 @@ export default function PharmacyLayout() {
           </Link>
           <Link to="/plantao" onClick={() => setIsMenuOpen(false)} className="flex items-center gap-3 px-3 py-2 rounded-md text-emerald-100 hover:text-white hover:bg-emerald-800 transition-colors">
             <Clock className="w-5 h-5" />
-            Plantão
+            Plantão Hoje
           </Link>
-          <Link to="/pharmacy" onClick={() => setIsMenuOpen(false)} className="flex items-center gap-3 px-3 py-2 rounded-md bg-emerald-800 text-white">
+          <Link to="/pharmacy" onClick={() => setIsMenuOpen(false)} className="flex items-center gap-3 px-3 py-2 rounded-md text-emerald-100 hover:text-white hover:bg-emerald-800 transition-colors">
+            <LayoutDashboard className="w-5 h-5" />
+            Dashboard
+          </Link>
+          <Link to="/perfil" onClick={() => setIsMenuOpen(false)} className="flex items-center gap-3 px-3 py-2 rounded-md text-emerald-100 hover:text-white hover:bg-emerald-800 transition-colors">
             <User className="w-5 h-5" />
             Meu Perfil
           </Link>
@@ -57,7 +73,7 @@ export default function PharmacyLayout() {
         </div>
       </aside>
       
-      <main className="flex-1 overflow-auto">
+      <main className="flex-1 overflow-auto max-w-[80%] mx-auto w-full">
         <Outlet />
       </main>
       <MobileBottomNav />

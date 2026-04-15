@@ -25,6 +25,7 @@ export default function AdminDashboard() {
   const [pharmacies, setPharmacies] = useState<Pharmacy[]>([]);
   const [reports, setReports] = useState<any>(null);
   const [adminShifts, setAdminShifts] = useState<any[]>([]);
+  const [adminHighlights, setAdminHighlights] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('pharmacies');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -50,44 +51,33 @@ export default function AdminDashboard() {
   const handleSavePharmacy = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const token = localStorage.getItem('token');
       if (editingPharmacy) {
-        const { name, phone, whatsapp, street, number, neighborhood, city, state } = formData;
-        await updateDoc(doc(db, 'pharmacies', editingPharmacy.id), {
-          name, phone, whatsapp, street, number, neighborhood, city, state,
-          updated_at: new Date().toISOString()
+        const res = await fetch(`/api/admin/pharmacies/${editingPharmacy.id}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify(formData)
         });
+        if (!res.ok) {
+          const data = await res.json();
+          throw new Error(data.error || 'Erro ao atualizar farmácia');
+        }
       } else {
-        // Create new pharmacy logic (simplified, without auth creation)
-        const userId = `dummy_${Math.random().toString(36).substring(7)}`;
-        await addDoc(collection(db, 'users'), {
-          email: formData.email,
-          role: 'pharmacy',
-          created_at: new Date().toISOString()
+        const res = await fetch('/api/admin/pharmacies', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify(formData)
         });
-        
-        const pharmacyRef = await addDoc(collection(db, 'pharmacies'), {
-          user_id: userId,
-          name: formData.name,
-          phone: formData.phone || '',
-          whatsapp: formData.whatsapp || '',
-          email: formData.email,
-          website: '',
-          street: formData.street || '',
-          number: formData.number || '',
-          neighborhood: formData.neighborhood || '',
-          city: formData.city || '',
-          state: formData.state || '',
-          zip: '',
-          is_active: 0,
-          created_at: new Date().toISOString()
-        });
-        
-        await addDoc(collection(db, 'subscriptions'), {
-          pharmacy_id: pharmacyRef.id,
-          status: 'pending',
-          expires_at: null,
-          created_at: new Date().toISOString()
-        });
+        if (!res.ok) {
+          const data = await res.json();
+          throw new Error(data.error || 'Erro ao criar farmácia');
+        }
       }
       setIsModalOpen(false);
       fetchData();
@@ -148,6 +138,20 @@ export default function AdminDashboard() {
         });
       }
       setAdminShifts(shiftsData);
+      
+      // Fetch Highlights
+      const highSnapshot = await getDocs(collection(db, 'highlights'));
+      const highData = [];
+      for (const hDoc of highSnapshot.docs) {
+        const h = hDoc.data();
+        const pDoc = await getDoc(doc(db, 'pharmacies', h.pharmacy_id));
+        highData.push({
+          id: hDoc.id,
+          ...h,
+          pharmacy_name: pDoc.exists() ? pDoc.data().name : 'Desconhecida'
+        });
+      }
+      setAdminHighlights(highData);
       
       // Calculate Reports
       const paymentsSnapshot = await getDocs(collection(db, 'payments'));
@@ -237,6 +241,17 @@ export default function AdminDashboard() {
     }
   };
 
+  const handleDeleteHighlight = async (id: string) => {
+    if (!window.confirm('Tem certeza que deseja remover este destaque?')) return;
+    try {
+      await deleteDoc(doc(db, 'highlights', id));
+      fetchData();
+    } catch (error) {
+      console.error('Error deleting highlight', error);
+      alert('Erro ao remover destaque.');
+    }
+  };
+
   const handleActivate = async (id: string) => {
     try {
       await updateDoc(doc(db, 'pharmacies', id), {
@@ -301,7 +316,7 @@ export default function AdminDashboard() {
       {/* Tabs */}
       <div className="border-b border-gray-200 mb-8">
         <nav className="-mb-px flex space-x-8">
-          {['pharmacies', 'shifts', 'reports'].map((tab) => (
+          {['pharmacies', 'shifts', 'highlights', 'reports'].map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -313,6 +328,7 @@ export default function AdminDashboard() {
             >
               {tab === 'pharmacies' && 'Gerenciar Farmácias'}
               {tab === 'shifts' && 'Plantões'}
+              {tab === 'highlights' && 'Destaques'}
               {tab === 'reports' && 'Relatórios e Métricas'}
             </button>
           ))}
@@ -482,6 +498,73 @@ export default function AdminDashboard() {
         </div>
       )}
 
+      {activeTab === 'highlights' && (
+        <div className="space-y-4">
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Farmácia</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tipo</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Local</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Período</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ações</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {adminHighlights.map((high) => {
+                  const isExpired = new Date(high.date_end) < new Date();
+                  return (
+                    <tr key={high.id}>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                        {high.pharmacy_name}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 capitalize">
+                        {high.type === 'day' ? 'Dia' : high.type === 'week' ? 'Semana' : 'Mês'}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {high.city}/{high.state}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {formatToBRDate(high.date_start)} até {formatToBRDate(high.date_end)}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {isExpired ? (
+                          <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
+                            Expirado
+                          </span>
+                        ) : (
+                          <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
+                            Ativo
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                        <button 
+                          onClick={() => handleDeleteHighlight(high.id)}
+                          className="text-red-600 hover:text-red-900"
+                          title="Remover Destaque"
+                        >
+                          <Trash2 className="w-5 h-5" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {adminHighlights.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-10 text-center text-gray-500">
+                      Nenhum destaque configurado.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {activeTab === 'reports' && reports?.totalPharmacies !== undefined && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -564,18 +647,18 @@ export default function AdminDashboard() {
               </button>
             </div>
             <form onSubmit={handleSavePharmacy} className="p-6 space-y-4">
-              {!editingPharmacy && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">E-mail (Login)</label>
-                    <input type="email" required value={formData.email || ''} onChange={e => setFormData({...formData, email: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Senha</label>
-                    <input type="password" required value={formData.password || ''} onChange={e => setFormData({...formData, password: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" />
-                  </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">E-mail (Login)</label>
+                  <input type="email" required value={formData.email || ''} onChange={e => setFormData({...formData, email: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" />
                 </div>
-              )}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Senha {editingPharmacy && <span className="text-gray-400 font-normal">(Deixe em branco para manter)</span>}
+                  </label>
+                  <input type="password" required={!editingPharmacy} value={formData.password || ''} onChange={e => setFormData({...formData, password: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" />
+                </div>
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="md:col-span-2">
                   <label className="block text-sm font-medium text-gray-700">Nome da Farmácia</label>
@@ -608,6 +691,10 @@ export default function AdminDashboard() {
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Estado (UF)</label>
                   <input type="text" required maxLength={2} value={formData.state || ''} onChange={e => setFormData({...formData, state: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md uppercase" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">CEP</label>
+                  <input type="text" value={formData.cep || ''} onChange={e => setFormData({...formData, cep: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="00000-000" />
                 </div>
               </div>
               <div className="pt-4 flex justify-end gap-3">

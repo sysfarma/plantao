@@ -27,7 +27,7 @@ export default function GoogleLoginButton({ text = "continue_with" }: GoogleLogi
 
       let userData;
       if (!userSnap.exists()) {
-        const role = result.user.email === 'sys.farmaciasdeplantao@gmail.com' ? 'admin' : 'pharmacy';
+        const role = (result.user.email === 'sys.farmaciasdeplantao@gmail.com' ? 'admin' : 'client') as 'admin' | 'pharmacy' | 'client';
         userData = {
           email: result.user.email,
           role: role,
@@ -75,8 +75,10 @@ export default function GoogleLoginButton({ text = "continue_with" }: GoogleLogi
 
       if (userData.role === 'admin') {
         navigate('/admin');
-      } else {
+      } else if (userData.role === 'pharmacy') {
         navigate('/pharmacy');
+      } else {
+        navigate('/');
       }
     } catch (err: any) {
       console.error('Google Login Error:', err);

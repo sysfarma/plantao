@@ -3,7 +3,7 @@ import { CheckCircle, AlertCircle, QrCode, CreditCard, Star, Edit, Calendar, Plu
 import PixPaymentManager from '../../components/PixPaymentManager';
 import { isShiftPast, formatToBRDate } from '../../lib/dateUtils';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { collection, getDocs, doc, getDoc, addDoc, updateDoc, deleteDoc, query, where } from 'firebase/firestore';
+import { collection, doc, addDoc, updateDoc, deleteDoc, query, where, onSnapshot } from 'firebase/firestore';
 import { db, auth } from '../../lib/firebase';
 
 export default function PharmacyDashboard() {
@@ -22,65 +22,60 @@ export default function PharmacyDashboard() {
   const [shiftForm, setShiftForm] = useState({ date: '', start_time: '07:00', end_time: '22:00', is_24h: false });
   const [editingShiftId, setEditingShiftId] = useState<string | null>(null);
 
-  const fetchData = async () => {
-    setLoading(true);
-    try {
-      const user = auth.currentUser;
-      if (!user) {
-        setLoading(false);
-        return;
-      }
+  useEffect(() => {
+    const user = auth.currentUser;
+    if (!user) {
+      setLoading(false);
+      return;
+    }
 
-      // Fetch Profile
-      const pharmQuery = query(collection(db, 'pharmacies'), where('user_id', '==', user.uid));
-      const pharmSnapshot = await getDocs(pharmQuery);
-      
-      if (pharmSnapshot.empty) {
+    const q = query(collection(db, 'pharmacies'), where('user_id', '==', user.uid));
+    const unsub = onSnapshot(q, (snapshot) => {
+      if (!snapshot.empty) {
+        const pDoc = snapshot.docs[0];
+        const pData = pDoc.data();
+        setProfile((prev: any) => ({ ...prev, id: pDoc.id, ...pData }));
+        setEditForm((prev: any) => ({ ...prev, id: pDoc.id, ...pData }));
+      } else {
         setProfile(null);
         setLoading(false);
-        return;
       }
-      
-      const pDoc = pharmSnapshot.docs[0];
-      const pData = pDoc.data();
-      const pharmacyId = pDoc.id;
-      
-      // Fetch Subscription
-      const subsQuery = query(collection(db, 'subscriptions'), where('pharmacy_id', '==', pharmacyId));
-      const subsSnapshot = await getDocs(subsQuery);
-      const subs = subsSnapshot.docs.map(d => d.data());
-      let subscription = null;
+    }, (error) => {
+      console.error('Error in pharmacy listener', error);
+      setLoading(false);
+    });
+
+    return () => unsub();
+  }, [auth.currentUser]);
+
+  useEffect(() => {
+    if (!profile?.id) return;
+
+    const pharmacyId = profile.id;
+
+    const unsubSubs = onSnapshot(query(collection(db, 'subscriptions'), where('pharmacy_id', '==', pharmacyId)), (snapshot) => {
+      const subs = snapshot.docs.map(d => d.data());
       if (subs.length > 0) {
         subs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-        subscription = subs[0];
+        setProfile((prev: any) => ({ ...prev, subscription: subs[0] }));
       }
-      
-      const profileData = { id: pharmacyId, ...pData, subscription };
-      setProfile(profileData);
-      setEditForm(profileData);
-      
-      // Fetch Highlights
-      const highQuery = query(collection(db, 'highlights'), where('pharmacy_id', '==', pharmacyId));
-      const highSnapshot = await getDocs(highQuery);
-      setHighlights(highSnapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-      
-      // Fetch Payments
-      const payQuery = query(collection(db, 'payments'), where('pharmacy_id', '==', pharmacyId));
-      const paySnapshot = await getDocs(payQuery);
-      setPayments(paySnapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-      
-      // Fetch Shifts
-      const shiftQuery = query(collection(db, 'shifts'), where('pharmacy_id', '==', pharmacyId));
-      const shiftSnapshot = await getDocs(shiftQuery);
-      setShifts(shiftSnapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-      
-      // Fetch Reports (Clicks)
-      const clicksQuery = query(collection(db, 'clicks'), where('pharmacy_id', '==', pharmacyId));
-      const clicksSnapshot = await getDocs(clicksQuery);
-      
+    });
+
+    const unsubHigh = onSnapshot(query(collection(db, 'highlights'), where('pharmacy_id', '==', pharmacyId)), (snapshot) => {
+      setHighlights(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    const unsubPay = onSnapshot(query(collection(db, 'payments'), where('pharmacy_id', '==', pharmacyId)), (snapshot) => {
+      setPayments(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    const unsubShifts = onSnapshot(query(collection(db, 'shifts'), where('pharmacy_id', '==', pharmacyId)), (snapshot) => {
+      setShifts(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    const unsubClicks = onSnapshot(query(collection(db, 'clicks'), where('pharmacy_id', '==', pharmacyId)), (snapshot) => {
       const dailyClicks: Record<string, { date: string, whatsapp: number, map: number }> = {};
-      
-      clicksSnapshot.forEach(doc => {
+      snapshot.forEach(doc => {
         const click = doc.data();
         const date = new Date(click.created_at).toLocaleDateString('pt-BR');
         if (!dailyClicks[date]) {
@@ -89,19 +84,18 @@ export default function PharmacyDashboard() {
         if (click.type === 'whatsapp') dailyClicks[date].whatsapp++;
         if (click.type === 'map') dailyClicks[date].map++;
       });
-      
       setReports({ dailyClicks: Object.values(dailyClicks) });
-      
-    } catch (error) {
-      console.error('Error fetching data', error);
-    } finally {
       setLoading(false);
-    }
-  };
+    });
 
-  useEffect(() => {
-    fetchData();
-  }, []);
+    return () => {
+      unsubSubs();
+      unsubHigh();
+      unsubPay();
+      unsubShifts();
+      unsubClicks();
+    };
+  }, [profile?.id]);
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -112,7 +106,6 @@ export default function PharmacyDashboard() {
         name, phone, whatsapp, street, number, neighborhood, city, state,
         updated_at: new Date().toISOString()
       });
-      setProfile({ ...profile, ...editForm });
       alert('Perfil atualizado com sucesso!');
     } catch (error) {
       console.error('Error saving profile', error);
@@ -144,7 +137,6 @@ export default function PharmacyDashboard() {
       }
       
       setIsShiftModalOpen(false);
-      fetchData();
     } catch (error) {
       console.error('Error saving shift', error);
       alert('Erro ao salvar plantão.');
@@ -155,7 +147,6 @@ export default function PharmacyDashboard() {
     if (!window.confirm('Tem certeza que deseja excluir este plantão?')) return;
     try {
       await deleteDoc(doc(db, 'shifts', id));
-      fetchData();
     } catch (error) {
       console.error('Error deleting shift', error);
     }
@@ -240,7 +231,7 @@ export default function PharmacyDashboard() {
                   <h3 className="font-bold text-xl mb-2 text-center">Plano Anual: R$ 69,96</h3>
                   <p className="text-gray-600 mb-6 text-center">Pague via Pix para liberação imediata.</p>
                   
-                  <PixPaymentManager onPaymentSuccess={fetchData} />
+                  <PixPaymentManager onPaymentSuccess={() => {}} />
                 </div>
               </div>
             ) : (
@@ -256,7 +247,7 @@ export default function PharmacyDashboard() {
                 <div className="border border-gray-200 rounded-lg p-6 bg-gray-50 mt-4">
                   <h3 className="font-bold text-xl mb-2 text-center">Renovação Anual: R$ 69,96</h3>
                   <p className="text-gray-600 mb-6 text-center">Gere um novo Pix para renovar sua assinatura.</p>
-                  <PixPaymentManager onPaymentSuccess={fetchData} />
+                  <PixPaymentManager onPaymentSuccess={() => {}} />
                 </div>
               </div>
             )}
@@ -348,6 +339,10 @@ export default function PharmacyDashboard() {
               <div>
                 <label className="block text-sm font-medium text-gray-700">Estado</label>
                 <input type="text" value={editForm.state || ''} onChange={e => setEditForm({...editForm, state: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md uppercase" maxLength={2} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">CEP</label>
+                <input type="text" value={editForm.cep || ''} onChange={e => setEditForm({...editForm, cep: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="00000-000" />
               </div>
             </div>
             <button type="submit" disabled={saving} className="bg-emerald-600 text-white px-6 py-2 rounded-md font-medium hover:bg-emerald-700 disabled:opacity-50">
