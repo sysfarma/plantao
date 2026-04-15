@@ -299,7 +299,8 @@ export default function AdminDashboard() {
         date_end: end.toISOString(),
         city,
         state,
-        created_at: now.toISOString()
+        created_at: now.toISOString(),
+        updated_at: now.toISOString()
       });
 
       alert('Destaque configurado com sucesso!');

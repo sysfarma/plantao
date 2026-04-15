@@ -134,11 +134,13 @@ async function startServer() {
         const token = crypto.randomBytes(32).toString('hex');
         const expiresAt = new Date(Date.now() + 3600000).toISOString(); // 1 hour
         
+        const now = new Date().toISOString();
         await db.collection('password_resets').add({
           email,
           token,
           expires_at: expiresAt,
-          created_at: new Date().toISOString()
+          created_at: now,
+          updated_at: now
         });
 
         const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
@@ -198,12 +200,14 @@ async function startServer() {
       if (!userDoc.exists) {
         // Create new user profile
         const role = (req.user.email === 'sys.farmaciasdeplantao@gmail.com' ? 'admin' : 'client') as 'admin' | 'pharmacy' | 'client';
+        const now = new Date().toISOString();
         
         await db.collection('users').doc(req.user.id).set({
           email: req.user.email,
           name: name || '',
           role: role,
-          created_at: new Date().toISOString()
+          created_at: now,
+          updated_at: now
         });
         
         if (role === 'pharmacy') {
@@ -223,7 +227,8 @@ async function startServer() {
             state: '',
             zip: '',
             is_active: 0,
-            created_at: new Date().toISOString()
+            created_at: now,
+            updated_at: now
           });
           
           // Create pending subscription
@@ -231,7 +236,8 @@ async function startServer() {
             pharmacy_id: pharmacyId,
             status: 'pending',
             expires_at: null,
-            created_at: new Date().toISOString()
+            created_at: now,
+            updated_at: now
           });
           
           // Send welcome email
@@ -242,7 +248,8 @@ async function startServer() {
         const userData = userDoc.data();
         if (req.user.email === 'sys.farmaciasdeplantao@gmail.com' && userData?.role !== 'admin') {
           await db.collection('users').doc(req.user.id).update({
-            role: 'admin'
+            role: 'admin',
+            updated_at: new Date().toISOString()
           });
         }
       }
@@ -270,11 +277,13 @@ async function startServer() {
     try {
       const userId = req.user.uid;
       const role = email === 'sys.farmaciasdeplantao@gmail.com' ? 'admin' : 'pharmacy';
+      const now = new Date().toISOString();
       
       await db.collection('users').doc(userId).set({
         email,
         role: role,
-        created_at: new Date().toISOString()
+        created_at: now,
+        updated_at: now
       });
       
       if (role === 'pharmacy') {
@@ -295,14 +304,16 @@ async function startServer() {
           state,
           zip,
           is_active: 0,
-          created_at: new Date().toISOString()
+          created_at: now,
+          updated_at: now
         });
         
         await db.collection('subscriptions').add({
           pharmacy_id: pharmacyId,
           status: 'pending',
           expires_at: null,
-          created_at: new Date().toISOString()
+          created_at: now,
+          updated_at: now
         });
 
         // Send welcome email
@@ -435,10 +446,12 @@ async function startServer() {
     const { type } = req.body; // 'whatsapp' or 'map'
     
     try {
+      const now = new Date().toISOString();
       await db.collection('clicks').add({
         pharmacy_id: id,
         type,
-        created_at: new Date().toISOString()
+        created_at: now,
+        updated_at: now
       });
       
       res.json({ success: true });
@@ -707,13 +720,15 @@ async function startServer() {
       const mpPaymentId = paymentResponse.id.toString();
 
       // Save payment intent
+      const now = new Date().toISOString();
       await db.collection('payments').add({
         pharmacy_id: pharmacyId,
         amount: transactionAmount,
         method: 'pix',
         status: 'pending',
         mp_payment_id: mpPaymentId,
-        created_at: new Date().toISOString()
+        created_at: now,
+        updated_at: now
       });
 
       res.json({
@@ -759,21 +774,26 @@ async function startServer() {
             if (pendingSub) {
               await db.collection('subscriptions').doc(pendingSub.id).update({
                 status: 'active',
-                expires_at: expiresAt.toISOString()
+                expires_at: expiresAt.toISOString(),
+                updated_at: new Date().toISOString()
               });
             } else {
               await db.collection('subscriptions').add({
                 pharmacy_id: pharmacyId,
                 status: 'active',
                 expires_at: expiresAt.toISOString(),
-                created_at: new Date().toISOString()
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
               });
             }
 
             // Ensure pharmacy is active
             const pharmDoc = await db.collection('pharmacies').doc(pharmacyId).get();
             if (pharmDoc.exists) {
-              await db.collection('pharmacies').doc(pharmacyId).update({ is_active: 1 });
+              await db.collection('pharmacies').doc(pharmacyId).update({ 
+                is_active: 1,
+                updated_at: new Date().toISOString()
+              });
               emailService.sendPaymentApprovedEmail(pharmDoc.data()?.email, pharmDoc.data()?.name);
             }
 
@@ -820,20 +840,25 @@ async function startServer() {
       if (pendingSub) {
         await db.collection('subscriptions').doc(pendingSub.id).update({
           status: 'active',
-          expires_at: expiresAt.toISOString()
+          expires_at: expiresAt.toISOString(),
+          updated_at: new Date().toISOString()
         });
       } else {
         await db.collection('subscriptions').add({
           pharmacy_id: pharmacyId,
           status: 'active',
           expires_at: expiresAt.toISOString(),
-          created_at: new Date().toISOString()
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
         });
       }
 
       const pharmDoc = await db.collection('pharmacies').doc(pharmacyId).get();
       if (pharmDoc.exists) {
-        await db.collection('pharmacies').doc(pharmacyId).update({ is_active: 1 });
+        await db.collection('pharmacies').doc(pharmacyId).update({ 
+          is_active: 1,
+          updated_at: new Date().toISOString()
+        });
         emailService.sendPaymentApprovedEmail(pharmDoc.data()?.email, pharmDoc.data()?.name);
       }
 
@@ -869,7 +894,7 @@ async function startServer() {
   // User: Update Profile (Self)
   app.put('/api/user/profile', authenticateToken, async (req: any, res) => {
     const userId = req.user.id;
-    const { password, cep, street, number, neighborhood, city, state, name, phone, whatsapp } = req.body;
+    const { password, cep, street, number, neighborhood, city, state, name, phone, whatsapp, lat, lng } = req.body;
     
     try {
       // Update User Document
@@ -903,6 +928,8 @@ async function startServer() {
           if (name) pharmacyUpdate.name = name;
           if (phone) pharmacyUpdate.phone = phone;
           if (whatsapp) pharmacyUpdate.whatsapp = whatsapp;
+          if (lat !== undefined) pharmacyUpdate.lat = lat;
+          if (lng !== undefined) pharmacyUpdate.lng = lng;
           
           await db.collection('pharmacies').doc(pharmacyId).update(pharmacyUpdate);
         }
@@ -960,7 +987,11 @@ async function startServer() {
       const pharmacyDoc = await db.collection('pharmacies').doc(id).get();
       if (!pharmacyDoc.exists) return res.status(404).json({ error: 'Pharmacy not found' });
 
-      await db.collection('pharmacies').doc(id).update({ is_active: 1 });
+      const now = new Date().toISOString();
+      await db.collection('pharmacies').doc(id).update({ 
+        is_active: 1,
+        updated_at: now
+      });
 
       const expiresAt = addYears(new Date(), 1);
 
@@ -972,14 +1003,16 @@ async function startServer() {
       if (!subsSnapshot.empty) {
         await db.collection('subscriptions').doc(subsSnapshot.docs[0].id).update({
           status: 'active',
-          expires_at: expiresAt.toISOString()
+          expires_at: expiresAt.toISOString(),
+          updated_at: now
         });
       } else {
         await db.collection('subscriptions').add({
           pharmacy_id: id,
           status: 'active',
           expires_at: expiresAt.toISOString(),
-          created_at: new Date().toISOString()
+          created_at: now,
+          updated_at: now
         });
       }
 
@@ -988,7 +1021,8 @@ async function startServer() {
         amount: 69.96,
         method: 'pix',
         status: 'approved',
-        created_at: new Date().toISOString()
+        created_at: now,
+        updated_at: now
       });
 
       const pharmacy = pharmacyDoc.data();
@@ -1011,7 +1045,11 @@ async function startServer() {
       const pharmacyDoc = await db.collection('pharmacies').doc(id).get();
       if (!pharmacyDoc.exists) return res.status(404).json({ error: 'Pharmacy not found' });
 
-      await db.collection('pharmacies').doc(id).update({ is_active: 0 });
+      const now = new Date().toISOString();
+      await db.collection('pharmacies').doc(id).update({ 
+        is_active: 0,
+        updated_at: now
+      });
 
       const subsSnapshot = await db.collection('subscriptions')
         .where('pharmacy_id', '==', id)
@@ -1020,7 +1058,8 @@ async function startServer() {
       
       if (!subsSnapshot.empty) {
         await db.collection('subscriptions').doc(subsSnapshot.docs[0].id).update({
-          status: 'expired'
+          status: 'expired',
+          updated_at: now
         });
       }
 
@@ -1092,12 +1131,17 @@ async function startServer() {
           } else if (email && password) {
             // Create real user if it was a dummy
             const userRecord = await auth.createUser({ email, password });
+            const now = new Date().toISOString();
             await db.collection('users').doc(userRecord.uid).set({
               email,
               role: 'pharmacy',
-              created_at: new Date().toISOString()
+              created_at: now,
+              updated_at: now
             });
-            await db.collection('pharmacies').doc(id).update({ user_id: userRecord.uid });
+            await db.collection('pharmacies').doc(id).update({ 
+              user_id: userRecord.uid,
+              updated_at: now
+            });
           }
         } catch (authError: any) {
           console.error('Error updating Auth user:', authError);
@@ -1160,10 +1204,12 @@ async function startServer() {
         }
       }
 
+      const now = new Date().toISOString();
       await db.collection('users').doc(userId).set({
         email,
         role: 'pharmacy',
-        created_at: new Date().toISOString()
+        created_at: now,
+        updated_at: now
       });
       
       const pharmacyId = uuidv4();
@@ -1182,7 +1228,8 @@ async function startServer() {
         state,
         zip: '',
         is_active: 1,
-        created_at: new Date().toISOString()
+        created_at: now,
+        updated_at: now
       });
       
       const expiresAt = addYears(new Date(), 1);
@@ -1191,7 +1238,8 @@ async function startServer() {
         pharmacy_id: pharmacyId,
         status: 'active',
         expires_at: expiresAt.toISOString(),
-        created_at: new Date().toISOString()
+        created_at: now,
+        updated_at: now
       });
 
       res.status(201).json({ message: 'Pharmacy created successfully' });
@@ -1326,6 +1374,7 @@ async function startServer() {
     const { pharmacy_id, type, date_start, date_end, city, state } = req.body;
     
     try {
+      const now = new Date().toISOString();
       const docRef = await db.collection('highlights').add({
         pharmacy_id,
         type,
@@ -1333,7 +1382,8 @@ async function startServer() {
         date_end,
         city,
         state,
-        created_at: new Date().toISOString()
+        created_at: now,
+        updated_at: now
       });
       res.json({ message: 'Highlight added', id: docRef.id });
     } catch (err: any) {

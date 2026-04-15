@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Search, MapPin, Phone, MessageCircle, Star, Clock } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { collection, query, where, getDocs, doc, getDoc, addDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, getDoc, addDoc, writeBatch, increment } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 
 interface Pharmacy {
@@ -241,11 +241,24 @@ export default function Home() {
 
   const handleTrackClick = async (id: string, type: 'whatsapp' | 'map') => {
     try {
-      await addDoc(collection(db, 'clicks'), {
+      const batch = writeBatch(db);
+      const clickRef = doc(collection(db, 'clicks'));
+      const pharmacyRef = doc(db, 'pharmacies', id);
+      const now = new Date().toISOString();
+
+      batch.set(clickRef, {
         pharmacy_id: id,
         type,
-        created_at: new Date().toISOString()
+        created_at: now,
+        updated_at: now
       });
+
+      batch.update(pharmacyRef, {
+        [type === 'whatsapp' ? 'whatsapp_clicks' : 'map_clicks']: increment(1),
+        updated_at: now
+      });
+
+      await batch.commit();
     } catch (err) {
       console.error('Error tracking click', err);
     }

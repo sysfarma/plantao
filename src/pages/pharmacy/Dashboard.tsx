@@ -128,7 +128,10 @@ export default function PharmacyDashboard() {
       };
       
       if (editingShiftId) {
-        await updateDoc(doc(db, 'shifts', editingShiftId), shiftData);
+        await updateDoc(doc(db, 'shifts', editingShiftId), {
+          ...shiftData,
+          updated_at: new Date().toISOString()
+        });
       } else {
         await addDoc(collection(db, 'shifts'), {
           ...shiftData,

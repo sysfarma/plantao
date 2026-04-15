@@ -123,15 +123,16 @@ service cloud.firestore {
 
     function isValidUser(data) {
       return hasRequiredFields(['email', 'role', 'created_at']) &&
-             hasOnlyAllowedFields(['email', 'role', 'created_at']) &&
+             hasOnlyAllowedFields(['email', 'role', 'created_at', 'updated_at']) &&
              data.email is string && data.email.size() < 100 && isValidEmail(data.email) &&
              data.role in ['admin', 'pharmacy'] &&
-             isValidDateString(data.created_at);
+             isValidDateString(data.created_at) &&
+             (!('updated_at' in data) || isValidDateString(data.updated_at));
     }
 
     function isValidPharmacy(data) {
       return hasRequiredFields(['user_id', 'name', 'city', 'state', 'is_active', 'created_at']) &&
-             hasOnlyAllowedFields(['user_id', 'name', 'phone', 'whatsapp', 'email', 'website', 'street', 'number', 'neighborhood', 'city', 'state', 'zip', 'is_active', 'created_at', 'updated_at', 'lat', 'lng', 'cep']) &&
+             hasOnlyAllowedFields(['user_id', 'name', 'phone', 'whatsapp', 'email', 'website', 'street', 'number', 'neighborhood', 'city', 'state', 'zip', 'is_active', 'created_at', 'updated_at', 'lat', 'lng', 'cep', 'whatsapp_clicks', 'map_clicks']) &&
              data.user_id is string && data.user_id.size() < 100 &&
              data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
              data.city is string && data.city.size() > 0 && data.city.size() < 100 &&
@@ -139,6 +140,8 @@ service cloud.firestore {
              data.is_active is int && (data.is_active == 0 || data.is_active == 1) &&
              isValidDateString(data.created_at) &&
              (!('updated_at' in data) || isValidDateString(data.updated_at)) &&
+             (!('whatsapp_clicks' in data) || data.whatsapp_clicks is int) &&
+             (!('map_clicks' in data) || data.map_clicks is int) &&
              (!('phone' in data) || (data.phone is string && data.phone.size() < 20)) &&
              (!('whatsapp' in data) || (data.whatsapp is string && data.whatsapp.size() < 20)) &&
              (!('email' in data) || isValidEmail(data.email)) &&
@@ -175,10 +178,18 @@ service cloud.firestore {
 
     function isValidClick(data) {
       return hasRequiredFields(['pharmacy_id', 'type', 'created_at']) &&
-             hasOnlyAllowedFields(['pharmacy_id', 'type', 'created_at']) &&
+             hasOnlyAllowedFields(['pharmacy_id', 'type', 'created_at', 'updated_at']) &&
              data.pharmacy_id is string && data.pharmacy_id.size() < 100 &&
              data.type in ['whatsapp', 'map'] &&
-             isValidDateString(data.created_at);
+             isValidDateString(data.created_at) &&
+             (!('updated_at' in data) || isValidDateString(data.updated_at));
+    }
+
+    function incrementedPharmacyCounter(pharmacyId, type) {
+      let pharmacyAfter = getAfter(/databases/$(database)/documents/pharmacies/$(pharmacyId)).data;
+      let pharmacyBefore = get(/databases/$(database)/documents/pharmacies/$(pharmacyId)).data;
+      let counterField = type == 'whatsapp' ? 'whatsapp_clicks' : 'map_clicks';
+      return pharmacyAfter[counterField] == (pharmacyBefore.get(counterField, 0)) + 1;
     }
 
     // ===============================================================
@@ -191,6 +202,7 @@ service cloud.firestore {
                     (isOwner(userId) && request.resource.data.role == 'pharmacy' || isAdmin());
       allow update: if isAuthenticated() && isValidUser(request.resource.data) && 
                     areImmutableFieldsUnchanged(['created_at']) &&
+                    'updated_at' in request.resource.data &&
                     (isOwner(userId) && request.resource.data.role == resource.data.role || isAdmin());
       allow delete: if isAdmin();
     }
@@ -201,6 +213,7 @@ service cloud.firestore {
                     (request.resource.data.user_id == request.auth.uid || isAdmin());
       allow update: if isAuthenticated() && isValidPharmacy(request.resource.data) && 
                     areImmutableFieldsUnchanged(['user_id', 'created_at']) &&
+                    'updated_at' in request.resource.data &&
                     (resource.data.user_id == request.auth.uid || isAdmin());
       allow delete: if isAdmin();
     }
@@ -237,7 +250,8 @@ service cloud.firestore {
 
     match /clicks/{clickId} {
       allow read: if isAuthenticated();
-      allow create: if isValidClick(request.resource.data); 
+      allow create: if isValidClick(request.resource.data) && 
+                    incrementedPharmacyCounter(request.resource.data.pharmacy_id, request.resource.data.type); 
       allow update, delete: if isAdmin();
     }
     

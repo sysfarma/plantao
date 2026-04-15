@@ -43,6 +43,7 @@ export default function Register() {
       const user = userCredential.user;
 
       // Create User Document
+      const now = new Date().toISOString();
       await setDoc(doc(db, 'users', user.uid), {
         email: formData.email,
         name: formData.name,
@@ -53,7 +54,8 @@ export default function Register() {
         neighborhood: formData.neighborhood,
         city: formData.city,
         state: formData.state,
-        created_at: new Date().toISOString()
+        created_at: now,
+        updated_at: now
       });
 
       if (role === 'pharmacy') {
@@ -75,7 +77,8 @@ export default function Register() {
           lat: formData.lat,
           lng: formData.lng,
           is_active: 0,
-          created_at: new Date().toISOString()
+          created_at: now,
+          updated_at: now
         });
 
         // Create Subscription Document
@@ -83,7 +86,8 @@ export default function Register() {
           pharmacy_id: pharmacyRef.id,
           status: 'pending',
           expires_at: null,
-          created_at: new Date().toISOString()
+          created_at: now,
+          updated_at: now
         });
       }
 

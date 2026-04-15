@@ -14,6 +14,8 @@ export default function Profile() {
     neighborhood: '',
     city: '',
     state: '',
+    lat: 0,
+    lng: 0,
     password: '',
     confirmPassword: ''
   });
@@ -73,6 +75,17 @@ export default function Profile() {
             city: data.localidade,
             state: data.uf
           }));
+
+          // Fetch coordinates
+          const geoRes = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(`${data.logradouro}, ${data.localidade}, ${data.uf}, Brazil`)}`);
+          const geoData = await geoRes.json();
+          if (geoData && geoData.length > 0) {
+            setFormData((prev: any) => ({
+              ...prev,
+              lat: parseFloat(geoData[0].lat),
+              lng: parseFloat(geoData[0].lon)
+            }));
+          }
         }
       } catch (err) {
         console.error('Error fetching CEP', err);

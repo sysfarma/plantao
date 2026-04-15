@@ -14,7 +14,8 @@
         "neighborhood": { "type": "string" },
         "city": { "type": "string" },
         "state": { "type": "string" },
-        "created_at": { "type": "string", "format": "date-time" }
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
       },
       "required": ["email", "role", "created_at"]
     },
@@ -39,7 +40,10 @@
         "lat": { "type": "number" },
         "lng": { "type": "number" },
         "is_active": { "type": "number" },
-        "created_at": { "type": "string", "format": "date-time" }
+        "whatsapp_clicks": { "type": "number" },
+        "map_clicks": { "type": "number" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
       },
       "required": ["user_id", "name", "city", "state", "is_active", "created_at"]
     },
@@ -51,7 +55,8 @@
         "pharmacy_id": { "type": "string" },
         "status": { "type": "string", "enum": ["pending", "active", "expired"] },
         "expires_at": { "type": "string", "format": "date-time" },
-        "created_at": { "type": "string", "format": "date-time" }
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
       },
       "required": ["pharmacy_id", "status", "created_at"]
     },
@@ -66,7 +71,8 @@
         "date_end": { "type": "string", "format": "date-time" },
         "city": { "type": "string" },
         "state": { "type": "string" },
-        "created_at": { "type": "string", "format": "date-time" }
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
       },
       "required": ["pharmacy_id", "type", "date_start", "date_end", "city", "state", "created_at"]
     },
@@ -80,7 +86,8 @@
         "method": { "type": "string" },
         "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
         "mp_payment_id": { "type": "string" },
-        "created_at": { "type": "string", "format": "date-time" }
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
       },
       "required": ["pharmacy_id", "amount", "status", "created_at"]
     },
@@ -106,7 +113,8 @@
       "properties": {
         "pharmacy_id": { "type": "string" },
         "type": { "type": "string", "enum": ["whatsapp", "map"] },
-        "created_at": { "type": "string", "format": "date-time" }
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
       },
       "required": ["pharmacy_id", "type", "created_at"]
     }
