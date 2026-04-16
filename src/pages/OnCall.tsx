@@ -3,6 +3,7 @@ import { Search, MapPin, Phone, MessageCircle, Clock, Navigation } from 'lucide-
 import { collection, query, where, getDocs, doc, getDoc, addDoc, onSnapshot, writeBatch, increment } from 'firebase/firestore';
 import { useSearchParams } from 'react-router-dom';
 import { db } from '../lib/firebase';
+import { getCachedLocation, setCachedLocation, clearCachedLocation } from '../lib/userCache';
 
 interface Shift {
   start_time: string;
@@ -151,11 +152,13 @@ export default function OnCall() {
           const coords = { lat: parseFloat(geoData[0].lat), lng: parseFloat(geoData[0].lon) };
           setUserCoords(coords);
           setLocationStatus('detected');
+          setCachedLocation({ city: data.localidade, state: data.uf, cep: cleanCep, lat: coords.lat, lng: coords.lng, type: 'manual' });
           fetchOnCallPharmacies(data.localidade, data.uf, coords);
         } else {
           // Fallback to just city/state if geocoding fails
           setUserCoords(null);
           setLocationStatus('idle');
+          setCachedLocation({ city: data.localidade, state: data.uf, cep: cleanCep, type: 'manual' });
           fetchOnCallPharmacies(data.localidade, data.uf);
         }
       }
@@ -195,6 +198,7 @@ export default function OnCall() {
               
               setCity(detectedCity);
               setState(detectedState);
+              setCachedLocation({ city: detectedCity, state: detectedState, lat: coords.lat, lng: coords.lng, type: 'gps' });
               fetchOnCallPharmacies(detectedCity, detectedState, coords);
             } else {
               fetchOnCallPharmacies('', '', coords);
@@ -225,6 +229,7 @@ export default function OnCall() {
         setLocationStatus('detected');
         setCity(data.city || '');
         setState(data.region_code || '');
+        setCachedLocation({ city: data.city || '', state: data.region_code || '', lat: coords.lat, lng: coords.lng, type: 'ip' });
         fetchOnCallPharmacies(data.city || '', data.region_code || '', coords);
       } else {
         setLocationStatus('failed');
@@ -250,8 +255,28 @@ export default function OnCall() {
       setUserCoords(coords);
       setLocationStatus('detected');
       fetchOnCallPharmacies(urlCity || '', urlState || '', coords);
+      return;
     } else if (urlCity && urlState) {
       fetchOnCallPharmacies(urlCity, urlState);
+      return;
+    }
+
+    const cached = getCachedLocation();
+    if (cached && cached.city && cached.state) {
+      setCity(cached.city);
+      setState(cached.state);
+      let coords: {lat: number, lng: number} | undefined = undefined;
+      
+      if (cached.lat && cached.lng) {
+        coords = { lat: cached.lat, lng: cached.lng };
+        setUserCoords(coords);
+        setLocationStatus('detected');
+      } else {
+        setLocationStatus('idle');
+      }
+      
+      if (cached.cep) setCep(cached.cep);
+      fetchOnCallPharmacies(cached.city, cached.state, coords);
     } else {
       detectLocation();
     }
@@ -261,6 +286,7 @@ export default function OnCall() {
     e.preventDefault();
     setUserCoords(null); // Clear coords to force city/state search
     setLocationStatus('idle');
+    setCachedLocation({ city, state, cep, type: 'manual' });
     fetchOnCallPharmacies(city, state);
   };
 
@@ -464,6 +490,7 @@ export default function OnCall() {
                 setCity('');
                 setState('');
                 setCep('');
+                clearCachedLocation();
                 detectLocation();
               }}
               className="mt-6 text-emerald-600 font-bold text-sm hover:underline"

@@ -3,6 +3,7 @@ import { Search, MapPin, Phone, MessageCircle, Star, Clock } from 'lucide-react'
 import { Link } from 'react-router-dom';
 import { collection, query, where, getDocs, doc, getDoc, addDoc, writeBatch, increment } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { getCachedLocation, setCachedLocation, clearCachedLocation } from '../lib/userCache';
 
 interface Pharmacy {
   id: string;
@@ -156,10 +157,12 @@ export default function Home() {
           const coords = { lat: parseFloat(geoData[0].lat), lng: parseFloat(geoData[0].lon) };
           setUserCoords(coords);
           setLocationStatus('detected');
+          setCachedLocation({ city: data.localidade, state: data.uf, cep: cleanCep, lat: coords.lat, lng: coords.lng, type: 'manual' });
           fetchPharmacies(data.localidade, data.uf, name, coords);
         } else {
           setUserCoords(null);
           setLocationStatus('idle');
+          setCachedLocation({ city: data.localidade, state: data.uf, cep: cleanCep, type: 'manual' });
           fetchPharmacies(data.localidade, data.uf, name);
         }
       }
@@ -171,6 +174,24 @@ export default function Home() {
 
   useEffect(() => {
     const init = async () => {
+      const cached = getCachedLocation();
+      if (cached && cached.city && cached.state) {
+        setCity(cached.city);
+        setState(cached.state);
+        let coords: {lat: number, lng: number} | undefined = undefined;
+        if (cached.lat && cached.lng) {
+          coords = { lat: cached.lat, lng: cached.lng };
+          setUserCoords(coords);
+          setLocationStatus('detected');
+        } else {
+          setLocationStatus('idle');
+        }
+        
+        if (cached.cep) setCep(cached.cep);
+        fetchPharmacies(cached.city, cached.state, '', coords);
+        return;
+      }
+
       setLocationStatus('detecting');
       // Try Browser Geolocation first
       if ("geolocation" in navigator) {
@@ -198,6 +219,7 @@ export default function Home() {
                 
                 setCity(detectedCity);
                 setState(detectedState);
+                setCachedLocation({ city: detectedCity, state: detectedState, lat: coords.lat, lng: coords.lng, type: 'gps' });
                 fetchPharmacies(detectedCity, detectedState, '', coords);
               } else {
                 fetchPharmacies('', '', '', coords);
@@ -226,6 +248,7 @@ export default function Home() {
           const coords = { lat: data.latitude, lng: data.longitude };
           setUserCoords(coords);
           setLocationStatus('detected');
+          setCachedLocation({ city: data.city, state: data.region_code, lat: coords.lat, lng: coords.lng, type: 'ip' });
           fetchPharmacies(data.city, data.region_code, '', coords);
         } else {
           setLocationStatus('failed');
@@ -246,6 +269,7 @@ export default function Home() {
     setHasSearched(true);
     setUserCoords(null);
     setLocationStatus('idle');
+    setCachedLocation({ city, state, cep, type: 'manual' });
     fetchPharmacies(city, state, name);
   };
 
@@ -385,6 +409,7 @@ export default function Home() {
               setCep('');
               setName('');
               setHasSearched(false);
+              clearCachedLocation();
               // Trigger reload init basically
               window.location.reload();
             }}
