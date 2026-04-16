@@ -49,9 +49,23 @@ if (!admin.apps.length) {
 const db = getFirestore(firebaseConfig.firestoreDatabaseId);
 const auth = getAuth();
 
-const MERCADOPAGO_ACCESS_TOKEN = process.env.MERCADOPAGO_ACCESS_TOKEN || 'TEST-1234567890';
-const mpClient = new MercadoPagoConfig({ accessToken: MERCADOPAGO_ACCESS_TOKEN, options: { timeout: 5000 } });
-const paymentClient = new Payment(mpClient);
+let mpClient: MercadoPagoConfig;
+let paymentClient: Payment;
+let currentAccessToken: string | null = null;
+
+async function getMPClient() {
+  const configDoc = await db.collection('config').doc('mercadopago').get();
+  const config = configDoc.data();
+  
+  const accessToken = config?.access_token || process.env.MERCADOPAGO_ACCESS_TOKEN || 'TEST-1234567890';
+  
+  if (!mpClient || currentAccessToken !== accessToken) {
+    mpClient = new MercadoPagoConfig({ accessToken, options: { timeout: 5000 } });
+    paymentClient = new Payment(mpClient);
+    currentAccessToken = accessToken;
+  }
+  return { mpClient, paymentClient };
+}
 
 async function startServer() {
   const app = express();
@@ -689,6 +703,7 @@ async function startServer() {
       const transactionAmount = 69.96;
       const idempotencyKey = uuidv4();
 
+      const { paymentClient } = await getMPClient();
       try {
         paymentResponse = await paymentClient.create({
           body: {
@@ -1386,6 +1401,34 @@ async function startServer() {
         updated_at: now
       });
       res.json({ message: 'Highlight added', id: docRef.id });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Get Config
+  app.get('/api/admin/config', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    try {
+      const configDoc = await db.collection('config').doc('mercadopago').get();
+      res.json(configDoc.data() || {});
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Update Config
+  app.post('/api/admin/config', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    try {
+      const { public_key, access_token } = req.body;
+      const now = new Date().toISOString();
+      await db.collection('config').doc('mercadopago').set({
+        public_key,
+        access_token,
+        updated_at: now
+      });
+      res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

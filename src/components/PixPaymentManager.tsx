@@ -20,38 +20,41 @@ export default function PixPaymentManager({ onPaymentSuccess }: PixPaymentManage
     setLoading(true);
     setError('');
     try {
-      const user = auth.currentUser;
-      if (!user) throw new Error('Usuário não autenticado');
+      const token = localStorage.getItem('token');
+      if (!token) throw new Error('Usuário não autenticado');
 
-      // Find pharmacy
-      const pharmQuery = query(collection(db, 'pharmacies'), where('user_id', '==', user.uid));
-      const pharmSnapshot = await getDocs(pharmQuery);
-      if (pharmSnapshot.empty) throw new Error('Farmácia não encontrada');
-      const pId = pharmSnapshot.docs[0].id;
-      setPharmacyId(pId);
+      const res = await fetch('/api/payments/pix', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      });
 
-      // Find subscription
-      const subsQuery = query(collection(db, 'subscriptions'), where('pharmacy_id', '==', pId));
-      const subsSnapshot = await getDocs(subsQuery);
-      if (!subsSnapshot.empty) {
-        setSubscriptionId(subsSnapshot.docs[0].id);
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Erro ao gerar Pix');
       }
 
-      // Create a dummy payment
-      const paymentRef = await addDoc(collection(db, 'payments'), {
-        pharmacy_id: pId,
-        user_id: user.uid,
-        amount: 97.00,
-        status: 'pending',
-        payment_method: 'pix',
-        created_at: new Date().toISOString()
-      });
-
-      setPixData({
-        payment_id: paymentRef.id,
-        qr_code: '00020126580014br.gov.bcb.pix0136123e4567-e89b-12d3-a456-426655440000520400005303986540597.005802BR5913Test Pharmacy6008BRASILIA62070503***63041D3D', // Dummy QR code string
-        qr_code_base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' // Dummy 1x1 image
-      });
+      const data = await res.json();
+      setPixData(data);
+      
+      // Find pharmacy and subscription for status tracking
+      const user = auth.currentUser;
+      if (user) {
+        const pharmQuery = query(collection(db, 'pharmacies'), where('user_id', '==', user.uid));
+        const pharmSnapshot = await getDocs(pharmQuery);
+        if (!pharmSnapshot.empty) {
+          const pId = pharmSnapshot.docs[0].id;
+          setPharmacyId(pId);
+          
+          const subsQuery = query(collection(db, 'subscriptions'), where('pharmacy_id', '==', pId));
+          const subsSnapshot = await getDocs(subsQuery);
+          if (!subsSnapshot.empty) {
+            setSubscriptionId(subsSnapshot.docs[0].id);
+          }
+        }
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -86,30 +89,18 @@ export default function PixPaymentManager({ onPaymentSuccess }: PixPaymentManage
   };
 
   const handleSimulatePayment = async () => {
-    if (!pixData || !pharmacyId || !subscriptionId) return;
+    if (!pixData) return;
     try {
-      // Update payment
-      await updateDoc(doc(db, 'payments', pixData.payment_id), {
-        status: 'approved',
-        updated_at: new Date().toISOString()
+      const token = localStorage.getItem('token');
+      const res = await fetch('/api/dev/simulate-payment', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ payment_id: pixData.payment_id })
       });
-
-      // Update subscription
-      const expiresAt = new Date();
-      expiresAt.setMonth(expiresAt.getMonth() + 1);
-
-      await updateDoc(doc(db, 'subscriptions', subscriptionId), {
-        status: 'active',
-        expires_at: expiresAt.toISOString(),
-        updated_at: new Date().toISOString()
-      });
-      
-      // Update pharmacy active status
-      await updateDoc(doc(db, 'pharmacies', pharmacyId), {
-        is_active: 1,
-        updated_at: new Date().toISOString()
-      });
-
+      if (!res.ok) throw new Error('Erro ao simular pagamento');
     } catch (err) {
       console.error('Simulation error', err);
     }

@@ -29,8 +29,13 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('pharmacies');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [config, setConfig] = useState({ public_key: '', access_token: '' });
+  const [savingConfig, setSavingConfig] = useState(false);
   const [editingPharmacy, setEditingPharmacy] = useState<Pharmacy | null>(null);
   const [formData, setFormData] = useState<any>({});
+
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const isAdminMaster = user.email === 'sys.farmaciasdeplantao@gmail.com';
 
   const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
   const [shiftForm, setShiftForm] = useState({ pharmacy_id: '', date: '', start_time: '07:00', end_time: '22:00', is_24h: false });
@@ -124,6 +129,12 @@ export default function AdminDashboard() {
         } as Pharmacy);
       }
       setPharmacies(pharmData);
+      
+      // Fetch Config
+      const configDoc = await getDoc(doc(db, 'config', 'mercadopago'));
+      if (configDoc.exists()) {
+        setConfig(configDoc.data() as any);
+      }
       
       // Fetch Shifts
       const shiftsSnapshot = await getDocs(collection(db, 'shifts'));
@@ -310,6 +321,28 @@ export default function AdminDashboard() {
     }
   };
 
+  const handleSaveConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingConfig(true);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('/api/admin/config', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(config)
+      });
+      if (!res.ok) throw new Error('Erro ao salvar configurações');
+      alert('Configurações salvas com sucesso!');
+    } catch (error: any) {
+      alert(error.message);
+    } finally {
+      setSavingConfig(false);
+    }
+  };
+
   return (
     <div className="p-8">
       <h1 className="text-2xl font-bold text-gray-900 mb-6">Painel Admin Master</h1>
@@ -317,7 +350,7 @@ export default function AdminDashboard() {
       {/* Tabs */}
       <div className="border-b border-gray-200 mb-8">
         <nav className="-mb-px flex space-x-8">
-          {['pharmacies', 'shifts', 'highlights', 'reports'].map((tab) => (
+          {['pharmacies', 'shifts', 'highlights', 'reports', 'settings'].filter(tab => tab !== 'reports' || isAdminMaster).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -331,6 +364,7 @@ export default function AdminDashboard() {
               {tab === 'shifts' && 'Plantões'}
               {tab === 'highlights' && 'Destaques'}
               {tab === 'reports' && 'Relatórios e Métricas'}
+              {tab === 'settings' && 'Configurações'}
             </button>
           ))}
         </nav>
@@ -566,7 +600,7 @@ export default function AdminDashboard() {
         </div>
       )}
 
-      {activeTab === 'reports' && reports?.totalPharmacies !== undefined && (
+      {activeTab === 'reports' && isAdminMaster && reports?.totalPharmacies !== undefined && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
@@ -632,6 +666,49 @@ export default function AdminDashboard() {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {activeTab === 'settings' && (
+        <div className="max-w-2xl bg-white p-8 rounded-xl shadow-sm border border-gray-200">
+          <h2 className="text-xl font-bold text-gray-900 mb-6">Configurações do Sistema</h2>
+          <form onSubmit={handleSaveConfig} className="space-y-6">
+            <div className="space-y-4">
+              <h3 className="text-lg font-medium text-gray-900 border-b pb-2">Mercado Pago API</h3>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Public Key (VITE_MERCADOPAGO_PUBLIC_KEY)</label>
+                <input 
+                  type="text" 
+                  value={config.public_key} 
+                  onChange={e => setConfig({...config, public_key: e.target.value})}
+                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm"
+                  placeholder="APP_USR-..."
+                />
+                <p className="mt-1 text-xs text-gray-500">Usada no frontend para inicializar o checkout.</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Access Token (MERCADOPAGO_ACCESS_TOKEN)</label>
+                <input 
+                  type="password" 
+                  value={config.access_token} 
+                  onChange={e => setConfig({...config, access_token: e.target.value})}
+                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm"
+                  placeholder="APP_USR-..."
+                />
+                <p className="mt-1 text-xs text-gray-500">Usado no backend para criar pagamentos e processar webhooks.</p>
+              </div>
+            </div>
+
+            <div className="pt-4">
+              <button
+                type="submit"
+                disabled={savingConfig}
+                className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 disabled:opacity-50"
+              >
+                {savingConfig ? 'Salvando...' : 'Salvar Configurações'}
+              </button>
+            </div>
+          </form>
         </div>
       )}
 
