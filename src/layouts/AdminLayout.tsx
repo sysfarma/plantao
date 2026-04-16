@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import { Outlet, Link, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, LogOut, Pill, Menu, X, Home, Clock, User } from 'lucide-react';
+import { LayoutDashboard, LogOut, Pill, Menu, X, Home, Clock, User, Download } from 'lucide-react';
 import MobileBottomNav from '../components/MobileBottomNav';
+import { usePWA } from '../hooks/usePWA';
 
 export default function AdminLayout() {
   const navigate = useNavigate();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const { canInstall, promptInstall } = usePWA();
 
   useEffect(() => {
     const userStr = localStorage.getItem('user');
@@ -63,6 +65,18 @@ export default function AdminLayout() {
             <User className="w-5 h-5" />
             Meu Perfil
           </Link>
+          {canInstall && (
+            <button 
+              onClick={() => {
+                setIsMenuOpen(false);
+                promptInstall();
+              }}
+              className="flex items-center gap-3 px-3 py-2 w-full text-left rounded-md text-emerald-400 font-bold hover:text-emerald-300 hover:bg-slate-800 transition-colors"
+            >
+              <Download className="w-5 h-5" />
+              Instalar App
+            </button>
+          )}
         </nav>
         <div className="p-4 border-t border-slate-800">
           <button 

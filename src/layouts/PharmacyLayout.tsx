@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import { Outlet, Link, useNavigate } from 'react-router-dom';
-import { Store, LogOut, Home, Menu, X, User, Clock, LayoutDashboard } from 'lucide-react';
+import { Store, LogOut, Home, Menu, X, User, Clock, LayoutDashboard, Download } from 'lucide-react';
 import MobileBottomNav from '../components/MobileBottomNav';
+import { usePWA } from '../hooks/usePWA';
 
 export default function PharmacyLayout() {
   const navigate = useNavigate();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const { canInstall, promptInstall } = usePWA();
 
   useEffect(() => {
     const userStr = localStorage.getItem('user');
@@ -61,6 +63,18 @@ export default function PharmacyLayout() {
             <User className="w-5 h-5" />
             Meu Perfil
           </Link>
+          {canInstall && (
+            <button 
+              onClick={() => {
+                setIsMenuOpen(false);
+                promptInstall();
+              }}
+              className="flex items-center gap-3 px-3 py-2 w-full text-left rounded-md text-white font-bold hover:bg-emerald-800 transition-colors"
+            >
+              <Download className="w-5 h-5" />
+              Instalar App
+            </button>
+          )}
         </nav>
         <div className="p-4 border-t border-emerald-800">
           <button 

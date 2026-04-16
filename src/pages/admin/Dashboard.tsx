@@ -3,7 +3,7 @@ import { CheckCircle, XCircle, Star, Trash2, Ban, Edit, Plus, X, Calendar } from
 import { calculateHighlightEnd, isShiftPast, formatToBRDate } from '../../lib/dateUtils';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import { collection, getDocs, doc, getDoc, addDoc, updateDoc, deleteDoc, query, where } from 'firebase/firestore';
-import { db } from '../../lib/firebase';
+import { db, auth } from '../../lib/firebase';
 
 interface Pharmacy {
   id: string;
@@ -57,7 +57,7 @@ export default function AdminDashboard() {
   const handleSavePharmacy = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const token = localStorage.getItem('token');
+      const token = auth.currentUser ? await auth.currentUser.getIdToken() : localStorage.getItem('token');
       if (editingPharmacy) {
         const res = await fetch(`/api/admin/pharmacies/${editingPharmacy.id}`, {
           method: 'PUT',
@@ -96,13 +96,38 @@ export default function AdminDashboard() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const token = localStorage.getItem('token');
+      let token = localStorage.getItem('token');
       
+      // Try to get the freshest token from Firebase Auth if available
+      try {
+        if (auth.currentUser) {
+          const freshToken = await auth.currentUser.getIdToken(true);
+          if (freshToken) {
+            token = freshToken;
+            localStorage.setItem('token', freshToken);
+          }
+        }
+      } catch (e) {
+        console.error('Failed to get fresh token', e);
+      }
+
+      if (!token) {
+        window.location.href = '/login';
+        return;
+      }
+
       // Fetch optimized pharmacies list
       const pharmRes = await fetch('/api/admin/pharmacies', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (pharmRes.status === 401 || pharmRes.status === 403) {
+         localStorage.removeItem('token');
+         localStorage.removeItem('user');
+         window.location.href = '/login';
+         return;
+      }
       const pharmData = await pharmRes.json();
+      if (!pharmRes.ok) throw new Error(pharmData.error || 'Failed to fetch pharmacies');
       setPharmacies(pharmData);
       
       // Fetch Config
@@ -116,6 +141,7 @@ export default function AdminDashboard() {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const shiftsData = await shiftsRes.json();
+      if (!shiftsRes.ok) throw new Error(shiftsData.error || 'Failed to fetch shifts');
       setAdminShifts(shiftsData);
       
       // Fetch Highlights (using pharmData to avoid N+1)
@@ -136,10 +162,12 @@ export default function AdminDashboard() {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const reportsData = await reportsRes.json();
+      if (!reportsRes.ok) throw new Error(reportsData.error || 'Failed to fetch reports');
       setReports(reportsData);
       
     } catch (error) {
       console.error('Error fetching data', error);
+      alert('Erro ao carregar dados do painel: ' + (error as Error).message);
     } finally {
       setLoading(false);
     }
@@ -148,7 +176,7 @@ export default function AdminDashboard() {
   const handleSyncData = async () => {
     setIsSyncing(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = auth.currentUser ? await auth.currentUser.getIdToken() : localStorage.getItem('token');
       const res = await fetch('/api/admin/sync-data', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
@@ -237,7 +265,7 @@ export default function AdminDashboard() {
 
   const handleActivate = async (id: string) => {
     try {
-      const token = localStorage.getItem('token');
+      const token = auth.currentUser ? await auth.currentUser.getIdToken() : localStorage.getItem('token');
       await fetch(`/api/admin/pharmacies/${id}/activate`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
