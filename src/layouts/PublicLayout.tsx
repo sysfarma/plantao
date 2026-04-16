@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react';
 import { Outlet, Link, useNavigate } from 'react-router-dom';
-import { Pill, Menu, X, Home, User, LogOut, Clock } from 'lucide-react';
+import { Pill, Menu, X, Home, User, LogOut, Clock, Download } from 'lucide-react';
 import MobileBottomNav from '../components/MobileBottomNav';
+import { usePWA } from '../hooks/usePWA';
 
 export default function PublicLayout() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [user, setUser] = useState<any>(null);
   const navigate = useNavigate();
+  const { canInstall, promptInstall } = usePWA();
 
   useEffect(() => {
     const userStr = localStorage.getItem('user');
@@ -97,6 +99,18 @@ export default function PublicLayout() {
                       <span className="font-medium">Dashboard</span>
                     </Link>
                   )}
+                  {canInstall && (
+                    <button 
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        promptInstall();
+                      }}
+                      className="flex items-center gap-3 px-4 py-3 text-emerald-700 font-bold hover:bg-emerald-50 transition-colors w-full text-left"
+                    >
+                      <Download className="w-5 h-5" />
+                      Instalar App
+                    </button>
+                  )}
                   <button 
                     onClick={handleLogout} 
                     className="flex items-center gap-3 px-4 py-3 text-red-600 hover:bg-red-50 transition-colors w-full text-left"
@@ -131,6 +145,18 @@ export default function PublicLayout() {
                     <User className="w-5 h-5" />
                     <span className="font-medium">Entrar</span>
                   </Link>
+                  {canInstall && (
+                    <button 
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        promptInstall();
+                      }}
+                      className="flex items-center gap-3 px-4 py-3 text-emerald-700 font-bold hover:bg-emerald-50 transition-colors w-full text-left"
+                    >
+                      <Download className="w-5 h-5" />
+                      Instalar App
+                    </button>
+                  )}
                   <div className="px-4 py-3 mt-2 border-t border-gray-100 flex flex-col gap-2">
                     <Link 
                       to="/register?role=pharmacy" 
