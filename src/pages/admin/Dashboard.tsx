@@ -237,9 +237,10 @@ export default function AdminDashboard() {
 
   const handleActivate = async (id: string) => {
     try {
-      await updateDoc(doc(db, 'pharmacies', id), {
-        is_active: 1,
-        updated_at: new Date().toISOString()
+      const token = localStorage.getItem('token');
+      await fetch(`/api/admin/pharmacies/${id}/activate`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
       });
       fetchData();
     } catch (error) {
@@ -250,9 +251,10 @@ export default function AdminDashboard() {
   const handleDeactivate = async (id: string) => {
     if (!window.confirm('Tem certeza que deseja desativar esta farmácia?')) return;
     try {
-      await updateDoc(doc(db, 'pharmacies', id), {
-        is_active: 0,
-        updated_at: new Date().toISOString()
+      const token = localStorage.getItem('token');
+      await fetch(`/api/admin/pharmacies/${id}/deactivate`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
       });
       fetchData();
     } catch (error) {
@@ -263,7 +265,11 @@ export default function AdminDashboard() {
   const handleDelete = async (id: string) => {
     if (!window.confirm('Tem certeza que deseja EXCLUIR esta farmácia permanentemente?')) return;
     try {
-      await deleteDoc(doc(db, 'pharmacies', id));
+      const token = localStorage.getItem('token');
+      await fetch(`/api/admin/pharmacies/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
       fetchData();
     } catch (error) {
       console.error('Error deleting', error);

@@ -92,9 +92,15 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isAuthenticated() &&
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
-          (request.auth.token.email == "sys.farmaciasdeplantao@gmail.com" && request.auth.token.email_verified == true));
+      return isAuthenticated() && (
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', 'none') == 'admin') ||
+        (request.auth.token.email == "sys.farmaciasdeplantao@gmail.com" && request.auth.token.email_verified == true)
+      );
+    }
+
+    match /config/{configId} {
+      allow read: if isAuthenticated() && (isAdmin() || (configId == 'mercadopago' && request.auth.uid != null));
+      allow write: if isAdmin();
     }
 
     function hasRequiredFields(fields) {
@@ -123,7 +129,7 @@ service cloud.firestore {
 
     function isValidUser(data) {
       return hasRequiredFields(['email', 'role', 'created_at']) &&
-             hasOnlyAllowedFields(['email', 'role', 'created_at', 'updated_at']) &&
+             hasOnlyAllowedFields(['email', 'role', 'created_at', 'updated_at', 'name', 'cep', 'street', 'number', 'neighborhood', 'city', 'state', 'phone', 'whatsapp']) &&
              data.email is string && data.email.size() < 100 && isValidEmail(data.email) &&
              data.role in ['admin', 'pharmacy'] &&
              isValidDateString(data.created_at) &&
@@ -132,7 +138,7 @@ service cloud.firestore {
 
     function isValidPharmacy(data) {
       return hasRequiredFields(['user_id', 'name', 'city', 'state', 'is_active', 'created_at']) &&
-             hasOnlyAllowedFields(['user_id', 'name', 'phone', 'whatsapp', 'email', 'website', 'street', 'number', 'neighborhood', 'city', 'state', 'zip', 'is_active', 'created_at', 'updated_at', 'lat', 'lng', 'cep', 'whatsapp_clicks', 'map_clicks']) &&
+             hasOnlyAllowedFields(['user_id', 'name', 'phone', 'whatsapp', 'email', 'website', 'street', 'number', 'neighborhood', 'city', 'state', 'zip', 'is_active', 'created_at', 'updated_at', 'lat', 'lng', 'cep', 'whatsapp_clicks', 'map_clicks', 'user_email', 'sub_status']) &&
              data.user_id is string && data.user_id.size() < 100 &&
              data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
              data.city is string && data.city.size() > 0 && data.city.size() < 100 &&
@@ -150,7 +156,9 @@ service cloud.firestore {
              (!('neighborhood' in data) || (data.neighborhood is string && data.neighborhood.size() < 100)) &&
              (!('zip' in data) || (data.zip is string && data.zip.size() < 20)) &&
              (!('lat' in data) || data.lat is number) &&
-             (!('lng' in data) || data.lng is number);
+             (!('lng' in data) || data.lng is number) &&
+             (!('user_email' in data) || (data.user_email is string && data.user_email.size() < 100)) &&
+             (!('sub_status' in data) || (data.sub_status is string && data.sub_status.size() < 20));
     }
 
     function isValidShift(data) {
@@ -167,11 +175,12 @@ service cloud.firestore {
 
     function isValidPayment(data) {
       return hasRequiredFields(['pharmacy_id', 'amount', 'status', 'created_at']) &&
-             hasOnlyAllowedFields(['pharmacy_id', 'amount', 'status', 'created_at', 'method', 'mp_payment_id', 'user_id']) &&
+             hasOnlyAllowedFields(['pharmacy_id', 'amount', 'status', 'created_at', 'updated_at', 'method', 'mp_payment_id', 'user_id']) &&
              data.pharmacy_id is string && data.pharmacy_id.size() < 100 &&
              data.amount is number && data.amount > 0 &&
              data.status in ['pending', 'approved', 'rejected'] &&
              isValidDateString(data.created_at) &&
+             (!('updated_at' in data) || isValidDateString(data.updated_at)) &&
              (!('method' in data) || (data.method is string && data.method.size() < 50)) &&
              (!('mp_payment_id' in data) || (data.mp_payment_id is string && data.mp_payment_id.size() < 100));
     }
@@ -192,6 +201,19 @@ service cloud.firestore {
       return pharmacyAfter[counterField] == (pharmacyBefore.get(counterField, 0)) + 1;
     }
 
+    function isValidHighlight(data) {
+      return hasRequiredFields(['pharmacy_id', 'type', 'date_start', 'date_end', 'city', 'state', 'created_at']) &&
+             hasOnlyAllowedFields(['pharmacy_id', 'type', 'date_start', 'date_end', 'city', 'state', 'created_at', 'updated_at']) &&
+             data.pharmacy_id is string && data.pharmacy_id.size() < 100 &&
+             data.type in ['day', 'week', 'month'] &&
+             isValidDateString(data.date_start) &&
+             isValidDateString(data.date_end) &&
+             data.city is string &&
+             data.state is string &&
+             isValidDateString(data.created_at) &&
+             (!('updated_at' in data) || isValidDateString(data.updated_at));
+    }
+
     // ===============================================================
     // Rules
     // ===============================================================
@@ -202,7 +224,6 @@ service cloud.firestore {
                     (isOwner(userId) && request.resource.data.role == 'pharmacy' || isAdmin());
       allow update: if isAuthenticated() && isValidUser(request.resource.data) && 
                     areImmutableFieldsUnchanged(['created_at']) &&
-                    'updated_at' in request.resource.data &&
                     (isOwner(userId) && request.resource.data.role == resource.data.role || isAdmin());
       allow delete: if isAdmin();
     }
@@ -226,7 +247,9 @@ service cloud.firestore {
 
     match /highlights/{highlightId} {
       allow read: if true;
-      allow create, update: if isAdmin();
+      allow create: if isAdmin() && isValidHighlight(request.resource.data);
+      allow update: if isAdmin() && isValidHighlight(request.resource.data) && 
+                    areImmutableFieldsUnchanged(['pharmacy_id', 'created_at']);
       allow delete: if isAdmin();
     }
 
