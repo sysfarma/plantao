@@ -43,7 +43,7 @@ export default function OnCall() {
   const [state, setState] = useState(searchParams.get('state') || '');
   const [cep, setCep] = useState('');
   const [pharmacies, setPharmacies] = useState<Pharmacy[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [noShiftsInSystem, setNoShiftsInSystem] = useState(false);
   const [userCoords, setUserCoords] = useState<{lat: number, lng: number} | null>(null);
   const [detecting, setDetecting] = useState(false);
@@ -161,7 +161,6 @@ export default function OnCall() {
       }
     } catch (err) {
       console.error('Error searching CEP', err);
-    } finally {
       setLoading(false);
     }
   };
@@ -391,10 +390,12 @@ export default function OnCall() {
           )}
         </div>
 
-        {loading ? (
+        {loading || locationStatus === 'detecting' ? (
           <div className="text-center py-20 text-gray-500 flex flex-col items-center gap-4">
             <div className="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin"></div>
-            <p className="font-medium">Buscando farmácias de plantão...</p>
+            <p className="font-medium">
+              {locationStatus === 'detecting' ? 'Detectando sua localização...' : 'Buscando farmácias de plantão...'}
+            </p>
             <p className="text-sm text-gray-400">Isso pode levar alguns segundos</p>
           </div>
         ) : pharmacies.length > 0 ? (

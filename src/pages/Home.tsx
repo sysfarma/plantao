@@ -414,7 +414,7 @@ export default function Home() {
           <div className="flex flex-col items-center gap-3 mt-8">
             <p className="text-emerald-100 text-sm font-medium">Ou use o acesso rápido:</p>
             <Link 
-              to="/plantao"
+              to={`/plantao${userCoords ? `?lat=${userCoords.lat}&lng=${userCoords.lng}&city=${encodeURIComponent(city)}&state=${encodeURIComponent(state)}` : ''}`}
               className="bg-white text-emerald-700 hover:bg-emerald-50 px-8 py-4 rounded-full font-bold flex items-center justify-center gap-3 transition-all shadow-xl hover:scale-105 active:scale-95 border-2 border-emerald-100"
             >
               <Clock className="w-6 h-6 animate-pulse" />
