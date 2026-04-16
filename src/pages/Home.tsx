@@ -41,9 +41,10 @@ export default function Home() {
   const [name, setName] = useState('');
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [pharmacies, setPharmacies] = useState<Pharmacy[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [hasSearched, setHasSearched] = useState(false);
   const [userCoords, setUserCoords] = useState<{lat: number, lng: number} | null>(null);
+  const [locationStatus, setLocationStatus] = useState<'detecting' | 'detected' | 'failed' | 'idle'>('idle');
 
   const fetchPharmacies = async (searchCity: string, searchState: string, searchName: string, coords?: {lat: number, lng: number}) => {
     setLoading(true);
@@ -133,6 +134,7 @@ export default function Home() {
     if (cleanCep.length !== 8) return;
 
     setLoading(true);
+    setLocationStatus('detecting');
     try {
       const res = await fetch(`https://viacep.com.br/ws/${cleanCep}/json/`);
       const data = await res.json();
@@ -153,26 +155,30 @@ export default function Home() {
         if (geoData && geoData.length > 0) {
           const coords = { lat: parseFloat(geoData[0].lat), lng: parseFloat(geoData[0].lon) };
           setUserCoords(coords);
+          setLocationStatus('detected');
           fetchPharmacies(data.localidade, data.uf, name, coords);
         } else {
+          setUserCoords(null);
+          setLocationStatus('idle');
           fetchPharmacies(data.localidade, data.uf, name);
         }
       }
     } catch (err) {
       console.error('Error searching CEP', err);
-    } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
     const init = async () => {
+      setLocationStatus('detecting');
       // Try Browser Geolocation first
       if ("geolocation" in navigator) {
         navigator.geolocation.getCurrentPosition(
           async (position) => {
             const coords = { lat: position.coords.latitude, lng: position.coords.longitude };
             setUserCoords(coords);
+            setLocationStatus('detected');
             
             // Try to get city/state from coords for fallback
             try {
@@ -185,7 +191,6 @@ export default function Home() {
               const data = await res.json();
               if (data.address) {
                 const detectedCity = data.address.city || data.address.town || data.address.village || data.address.suburb || '';
-                // For Brazil, state_code is often not present, but ISO3166-2-lvl4 has it like "BR-SP"
                 let detectedState = data.address.state_code || '';
                 if (!detectedState && data.address['ISO3166-2-lvl4']) {
                   detectedState = data.address['ISO3166-2-lvl4'].split('-')[1];
@@ -220,12 +225,15 @@ export default function Home() {
           setState(data.region_code);
           const coords = { lat: data.latitude, lng: data.longitude };
           setUserCoords(coords);
+          setLocationStatus('detected');
           fetchPharmacies(data.city, data.region_code, '', coords);
         } else {
+          setLocationStatus('failed');
           fetchPharmacies('', '', '');
         }
       } catch (error) {
         console.error('Error detecting location', error);
+        setLocationStatus('failed');
         fetchPharmacies('', '', '');
       }
     };
@@ -236,7 +244,9 @@ export default function Home() {
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     setHasSearched(true);
-    fetchPharmacies(city, state, name, userCoords || undefined);
+    setUserCoords(null);
+    setLocationStatus('idle');
+    fetchPharmacies(city, state, name);
   };
 
   const handleTrackClick = async (id: string, type: 'whatsapp' | 'map') => {
@@ -318,11 +328,41 @@ export default function Home() {
 
   const resultsSection = (
     <section>
-      <h2 className="text-2xl font-bold text-gray-900 mb-6">
-        {hasSearched ? 'Resultado da Pesquisa' : 'Todas as Farmácias'}
-      </h2>
-      {loading ? (
-        <div className="text-center py-12 text-gray-500">Carregando...</div>
+      <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
+        <h2 className="text-2xl font-bold text-gray-900">
+          {hasSearched ? 'Resultado da Pesquisa' : 'Todas as Farmácias'}
+        </h2>
+
+        {locationStatus === 'detecting' && (
+          <span className="text-sm text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full flex items-center gap-2 animate-pulse">
+            <MapPin className="w-3 h-3" />
+            Detectando sua localização...
+          </span>
+        )}
+        
+        {userCoords && locationStatus === 'detected' && (
+          <span className="text-sm text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full flex items-center gap-2 border border-emerald-100">
+            <MapPin className="w-3 h-3" />
+            Mostrando resultados num raio de 20km
+          </span>
+        )}
+
+        {locationStatus === 'failed' && (
+          <span className="text-sm text-amber-700 bg-amber-50 px-3 py-1 rounded-full flex items-center gap-2 border border-amber-100">
+            <MapPin className="w-3 h-3" />
+            Localização não detectada. Mostrando por cidade.
+          </span>
+        )}
+      </div>
+
+      {loading || locationStatus === 'detecting' ? (
+        <div className="text-center py-20 text-gray-500 flex flex-col items-center gap-4">
+          <div className="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin"></div>
+          <p className="font-medium">
+            {locationStatus === 'detecting' ? 'Detectando sua localização...' : 'Buscando farmácias...'}
+          </p>
+          <p className="text-sm text-gray-400">Isso pode levar alguns segundos</p>
+        </div>
       ) : pharmacies.length > 0 ? (
         <div className="flex flex-col gap-6">
           {pharmacies.map(pharmacy => (
@@ -330,8 +370,28 @@ export default function Home() {
           ))}
         </div>
       ) : (
-        <div className="text-center py-12 bg-gray-50 rounded-lg border border-dashed border-gray-300 text-gray-500">
-          Nenhuma farmácia encontrada para esta busca.
+        <div className="text-center py-20 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200 text-gray-500">
+          <div className="bg-gray-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+            <Search className="w-8 h-8 text-gray-400" />
+          </div>
+          <h3 className="text-lg font-bold text-gray-900 mb-2">Nenhuma farmácia encontrada</h3>
+          <p className="max-w-xs mx-auto text-sm mb-6">
+            Não encontramos farmácias abertas agora para esta busca.
+          </p>
+          <button 
+            onClick={() => {
+              setCity('');
+              setState('');
+              setCep('');
+              setName('');
+              setHasSearched(false);
+              // Trigger reload init basically
+              window.location.reload();
+            }}
+            className="text-emerald-600 font-bold text-sm hover:underline"
+          >
+            Tentar detectar minha localização novamente
+          </button>
         </div>
       )}
     </section>
