@@ -133,14 +133,14 @@ export default function PublicLayout() {
                   </Link>
                   <div className="px-4 py-3 mt-2 border-t border-gray-100 flex flex-col gap-2">
                     <Link 
-                      to="/register" 
+                      to="/register?role=pharmacy" 
                       onClick={() => setIsMenuOpen(false)} 
                       className="flex items-center justify-center w-full bg-emerald-600 text-white px-4 py-2 rounded-md hover:bg-emerald-700 transition-colors font-medium"
                     >
                       Cadastrar Farmácia
                     </Link>
                     <Link 
-                      to="/register" 
+                      to="/register?role=client" 
                       onClick={() => setIsMenuOpen(false)} 
                       className="flex items-center justify-center w-full bg-gray-100 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-200 transition-colors font-medium"
                     >

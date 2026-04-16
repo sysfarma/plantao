@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { Pill } from 'lucide-react';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { collection, addDoc, setDoc, doc } from 'firebase/firestore';
@@ -7,7 +7,17 @@ import { auth, db } from '../lib/firebase';
 import GoogleLoginButton from '../components/GoogleLoginButton';
 
 export default function Register() {
-  const [role, setRole] = useState<'pharmacy' | 'client'>('pharmacy');
+  const [searchParams] = useSearchParams();
+  const initialRole = searchParams.get('role') as 'pharmacy' | 'client' || 'pharmacy';
+  const [role, setRole] = useState<'pharmacy' | 'client'>(initialRole);
+
+  useEffect(() => {
+    const queryRole = searchParams.get('role');
+    if (queryRole === 'pharmacy' || queryRole === 'client') {
+      setRole(queryRole);
+    }
+  }, [searchParams]);
+
   const [formData, setFormData] = useState({
     email: '',
     password: '',

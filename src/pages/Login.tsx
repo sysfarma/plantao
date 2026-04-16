@@ -63,7 +63,7 @@ export default function Login() {
           <h2 className="mt-6 text-3xl font-extrabold text-gray-900">Acesse sua conta</h2>
           <p className="mt-2 text-sm text-gray-600">
             Ou{' '}
-            <Link to="/register" className="font-medium text-emerald-600 hover:text-emerald-500">
+            <Link to="/register?role=pharmacy" className="font-medium text-emerald-600 hover:text-emerald-500">
               cadastre sua farmácia
             </Link>
           </p>
