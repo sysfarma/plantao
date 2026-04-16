@@ -31,6 +31,7 @@ export default function AdminDashboard() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [config, setConfig] = useState({ public_key: '', access_token: '' });
   const [savingConfig, setSavingConfig] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [editingPharmacy, setEditingPharmacy] = useState<Pharmacy | null>(null);
   const [formData, setFormData] = useState<any>({});
 
@@ -95,39 +96,13 @@ export default function AdminDashboard() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      // Fetch Pharmacies
-      const pharmSnapshot = await getDocs(collection(db, 'pharmacies'));
-      const pharmData: Pharmacy[] = [];
-      let activeCount = 0;
+      const token = localStorage.getItem('token');
       
-      for (const pDoc of pharmSnapshot.docs) {
-        const p = pDoc.data();
-        let userEmail = '';
-        if (p.user_id) {
-          const userDoc = await getDoc(doc(db, 'users', p.user_id));
-          if (userDoc.exists()) {
-            userEmail = userDoc.data().email;
-          }
-        }
-        
-        let subStatus = 'N/A';
-        const subsQuery = query(collection(db, 'subscriptions'), where('pharmacy_id', '==', pDoc.id));
-        const subsSnapshot = await getDocs(subsQuery);
-        const subs = subsSnapshot.docs.map(d => d.data());
-        if (subs.length > 0) {
-          subs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-          subStatus = subs[0].status;
-        }
-        
-        if (p.is_active === 1) activeCount++;
-        
-        pharmData.push({
-          id: pDoc.id,
-          ...p,
-          user_email: userEmail,
-          sub_status: subStatus
-        } as Pharmacy);
-      }
+      // Fetch optimized pharmacies list
+      const pharmRes = await fetch('/api/admin/pharmacies', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const pharmData = await pharmRes.json();
       setPharmacies(pharmData);
       
       // Fetch Config
@@ -136,58 +111,55 @@ export default function AdminDashboard() {
         setConfig(configDoc.data() as any);
       }
       
-      // Fetch Shifts
-      const shiftsSnapshot = await getDocs(collection(db, 'shifts'));
-      const shiftsData = [];
-      for (const sDoc of shiftsSnapshot.docs) {
-        const s = sDoc.data();
-        const pDoc = await getDoc(doc(db, 'pharmacies', s.pharmacy_id));
-        shiftsData.push({
-          id: sDoc.id,
-          ...s,
-          pharmacy_name: pDoc.exists() ? pDoc.data().name : 'Desconhecida'
-        });
-      }
+      // Fetch Shifts optimized from backend
+      const shiftsRes = await fetch('/api/admin/shifts', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const shiftsData = await shiftsRes.json();
       setAdminShifts(shiftsData);
       
-      // Fetch Highlights
+      // Fetch Highlights (using pharmData to avoid N+1)
       const highSnapshot = await getDocs(collection(db, 'highlights'));
-      const highData = [];
-      for (const hDoc of highSnapshot.docs) {
+      const highData = highSnapshot.docs.map(hDoc => {
         const h = hDoc.data();
-        const pDoc = await getDoc(doc(db, 'pharmacies', h.pharmacy_id));
-        highData.push({
+        const pharm = pharmData.find((p: any) => p.id === h.pharmacy_id);
+        return {
           id: hDoc.id,
           ...h,
-          pharmacy_name: pDoc.exists() ? pDoc.data().name : 'Desconhecida'
-        });
-      }
+          pharmacy_name: pharm ? pharm.name : 'Desconhecida'
+        };
+      });
       setAdminHighlights(highData);
       
-      // Calculate Reports
-      const paymentsSnapshot = await getDocs(collection(db, 'payments'));
-      let totalRevenue = 0;
-      paymentsSnapshot.forEach(doc => {
-        if (doc.data().status === 'approved') {
-          totalRevenue += doc.data().amount || 0;
-        }
+      // Fetch Reports optimized from backend
+      const reportsRes = await fetch('/api/admin/reports', {
+        headers: { 'Authorization': `Bearer ${token}` }
       });
-      
-      setReports({
-        totalPharmacies: pharmData.length,
-        activePharmacies: activeCount,
-        totalRevenue,
-        revenueByMonth: [], // Simplified for now
-        pharmacyStatus: [
-          { name: 'Ativas', value: activeCount },
-          { name: 'Inativas', value: pharmData.length - activeCount }
-        ]
-      });
+      const reportsData = await reportsRes.json();
+      setReports(reportsData);
       
     } catch (error) {
       console.error('Error fetching data', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSyncData = async () => {
+    setIsSyncing(true);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('/api/admin/sync-data', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error('Erro ao sincronizar dados');
+      alert('Sistema sincronizado e otimizado com sucesso!');
+      fetchData();
+    } catch (error: any) {
+      alert(error.message);
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -670,8 +642,25 @@ export default function AdminDashboard() {
       )}
 
       {activeTab === 'settings' && (
-        <div className="max-w-2xl bg-white p-8 rounded-xl shadow-sm border border-gray-200">
-          <h2 className="text-xl font-bold text-gray-900 mb-6">Configurações do Sistema</h2>
+        <div className="max-w-2xl space-y-8">
+          <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-200">
+            <h2 className="text-xl font-bold text-gray-900 mb-6">Manutenção do Sistema</h2>
+            <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-lg mb-6">
+              <p className="text-sm text-emerald-800">
+                Sincronize denormalizações e pré-calcule estatísticas para melhorar o desempenho do dashboard.
+              </p>
+            </div>
+            <button
+              onClick={handleSyncData}
+              disabled={isSyncing}
+              className="px-6 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 disabled:opacity-50 font-medium"
+            >
+              {isSyncing ? 'Sincronizando...' : 'Sincronizar e Otimizar Banco de Dados'}
+            </button>
+          </div>
+
+          <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-200">
+            <h2 className="text-xl font-bold text-gray-900 mb-6">Configurações do Sistema</h2>
           <form onSubmit={handleSaveConfig} className="space-y-6">
             <div className="space-y-4">
               <h3 className="text-lg font-medium text-gray-900 border-b pb-2">Mercado Pago API</h3>
@@ -710,6 +699,7 @@ export default function AdminDashboard() {
             </div>
           </form>
         </div>
+      </div>
       )}
 
       {/* Modal Nova/Editar Farmácia */}

@@ -67,6 +67,40 @@ async function getMPClient() {
   return { mpClient, paymentClient };
 }
 
+// Optimization: Global stats updater
+async function updateDashboardStats() {
+  const pharmaciesSnapshot = await db.collection('pharmacies').get();
+  const activeCount = pharmaciesSnapshot.docs.filter(d => d.data().is_active === 1).length;
+  
+  const paymentsSnapshot = await db.collection('payments').where('status', '==', 'approved').get();
+  const totalRevenue = paymentsSnapshot.docs.reduce((acc, doc) => acc + (doc.data().amount || 0), 0);
+
+  // Stats by month
+  const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+  const revenueByMonth = months.map((month, index) => {
+    const monthPayments = paymentsSnapshot.docs.filter(doc => {
+      const d = new Date(doc.data().created_at);
+      return d.getMonth() === index && d.getFullYear() === new Date().getFullYear();
+    });
+    return {
+      name: month,
+      total: monthPayments.reduce((acc, doc) => acc + (doc.data().amount || 0), 0)
+    };
+  });
+
+  await db.collection('config').doc('stats').set({
+    totalPharmacies: pharmaciesSnapshot.size,
+    activePharmacies: activeCount,
+    totalRevenue,
+    revenueByMonth,
+    pharmacyStatus: [
+      { name: 'Ativas', value: activeCount },
+      { name: 'Inativas', value: pharmaciesSnapshot.size - activeCount }
+    ],
+    lastUpdate: new Date().toISOString()
+  });
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -807,11 +841,13 @@ async function startServer() {
             if (pharmDoc.exists) {
               await db.collection('pharmacies').doc(pharmacyId).update({ 
                 is_active: 1,
+                sub_status: 'active',
                 updated_at: new Date().toISOString()
               });
               emailService.sendPaymentApprovedEmail(pharmDoc.data()?.email, pharmDoc.data()?.name);
             }
 
+            await updateDashboardStats();
             console.log(`Payment ${paymentId} approved. Pharmacy ${pharmacyId} activated.`);
           }
         }
@@ -872,9 +908,11 @@ async function startServer() {
       if (pharmDoc.exists) {
         await db.collection('pharmacies').doc(pharmacyId).update({ 
           is_active: 1,
+          sub_status: 'active',
           updated_at: new Date().toISOString()
         });
         emailService.sendPaymentApprovedEmail(pharmDoc.data()?.email, pharmDoc.data()?.name);
+        await updateDashboardStats();
       }
 
       res.json({ success: true });
@@ -945,6 +983,8 @@ async function startServer() {
           if (whatsapp) pharmacyUpdate.whatsapp = whatsapp;
           if (lat !== undefined) pharmacyUpdate.lat = lat;
           if (lng !== undefined) pharmacyUpdate.lng = lng;
+          // Sync denormalized name
+          if (name) pharmacyUpdate.name = name;
           
           await db.collection('pharmacies').doc(pharmacyId).update(pharmacyUpdate);
         }
@@ -968,25 +1008,10 @@ async function startServer() {
     
     try {
       const pharmaciesSnapshot = await db.collection('pharmacies').get();
-      const result = [];
-      
-      for (const pDoc of pharmaciesSnapshot.docs) {
-        const p = pDoc.data();
-        const userDoc = await db.collection('users').doc(p.user_id).get();
-        const user = userDoc.data();
-        
-        const subsSnapshot = await db.collection('subscriptions').where('pharmacy_id', '==', pDoc.id).get();
-        const subs = subsSnapshot.docs.map(doc => doc.data());
-        subs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-        const sub = subs[0];
-        
-        result.push({
-          id: pDoc.id,
-          ...p,
-          user_email: user?.email,
-          sub_status: sub?.status
-        });
-      }
+      const result = pharmaciesSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
       res.json(result);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1005,6 +1030,7 @@ async function startServer() {
       const now = new Date().toISOString();
       await db.collection('pharmacies').doc(id).update({ 
         is_active: 1,
+        sub_status: 'active',
         updated_at: now
       });
 
@@ -1045,6 +1071,7 @@ async function startServer() {
         emailService.sendPaymentApprovedEmail(pharmacy.email, pharmacy.name);
       }
 
+      await updateDashboardStats();
       res.json({ message: 'Pharmacy activated successfully' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1063,6 +1090,7 @@ async function startServer() {
       const now = new Date().toISOString();
       await db.collection('pharmacies').doc(id).update({ 
         is_active: 0,
+        sub_status: 'expired',
         updated_at: now
       });
 
@@ -1078,6 +1106,7 @@ async function startServer() {
         });
       }
 
+      await updateDashboardStats();
       res.json({ message: 'Pharmacy deactivated successfully' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1114,6 +1143,7 @@ async function startServer() {
       const paymentsSnapshot = await db.collection('payments').where('pharmacy_id', '==', id).get();
       for (const doc of paymentsSnapshot.docs) await doc.ref.delete();
 
+      await updateDashboardStats();
       res.json({ message: 'Pharmacy deleted successfully' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1235,6 +1265,8 @@ async function startServer() {
         phone,
         whatsapp,
         email,
+        user_email: email,
+        sub_status: 'active',
         website: '',
         street,
         number,
@@ -1257,6 +1289,7 @@ async function startServer() {
         updated_at: now
       });
 
+      await updateDashboardStats();
       res.status(201).json({ message: 'Pharmacy created successfully' });
     } catch (error: any) {
       console.error('Admin Create Pharmacy Error:', error);
@@ -1342,42 +1375,58 @@ async function startServer() {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
     
     try {
+      const statsDoc = await db.collection('config').doc('stats').get();
+      const stats = statsDoc.data();
+      
+      if (!stats) {
+        // Fallback if stats not yet generated
+        await updateDashboardStats();
+        const newStatsDoc = await db.collection('config').doc('stats').get();
+        return res.json(newStatsDoc.data());
+      }
+      
+      res.json(stats);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Sync System Data (Optimization Tool)
+  app.post('/api/admin/sync-data', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    
+    try {
       const pharmaciesSnapshot = await db.collection('pharmacies').get();
-      const pharmacies = pharmaciesSnapshot.docs.map(doc => doc.data());
       
-      const totalPharmacies = pharmacies.length;
-      const activePharmacies = pharmacies.filter((p: any) => p.is_active === 1).length;
-      const inactivePharmacies = totalPharmacies - activePharmacies;
-      
-      const paymentsSnapshot = await db.collection('payments').get();
-      const payments = paymentsSnapshot.docs.map(doc => doc.data());
-      const totalRevenue = payments.reduce((acc: number, p: any) => acc + p.amount, 0);
-
-      // Aggregate revenue by month
-      const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
-      const revenueByMonth = months.map((month, index) => {
-        const monthPayments = payments.filter((p: any) => {
-          const d = new Date(p.created_at);
-          return d.getMonth() === index && d.getFullYear() === new Date().getFullYear();
+      for (const pDoc of pharmaciesSnapshot.docs) {
+        const p = pDoc.data();
+        
+        // Fetch user email if missing
+        let email = p.user_email;
+        if (!email) {
+          const userDoc = await db.collection('users').doc(p.user_id).get();
+          email = userDoc.data()?.email || '';
+        }
+        
+        // Fetch last subscription if missing
+        let status = p.sub_status;
+        if (!status) {
+          const subsSnapshot = await db.collection('subscriptions')
+            .where('pharmacy_id', '==', pDoc.id)
+            .get();
+          const subs = subsSnapshot.docs.map(doc => doc.data());
+          subs.sort((a, b) => new Date(b.updated_at || b.created_at).getTime() - new Date(a.updated_at || a.created_at).getTime());
+          status = subs[0]?.status || 'pending';
+        }
+        
+        await pDoc.ref.update({
+          user_email: email,
+          sub_status: status
         });
-        return {
-          name: month,
-          total: monthPayments.reduce((acc: number, p: any) => acc + p.amount, 0)
-        };
-      });
-
-      const pharmacyStatus = [
-        { name: 'Ativas', value: activePharmacies },
-        { name: 'Inativas', value: inactivePharmacies }
-      ];
-
-      res.json({
-        totalPharmacies,
-        activePharmacies,
-        totalRevenue,
-        revenueByMonth,
-        pharmacyStatus
-      });
+      }
+      
+      await updateDashboardStats();
+      res.json({ success: true, message: 'Dados sincronizados e otimizados' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
