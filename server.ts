@@ -233,14 +233,14 @@ async function startServer() {
       token = req.body.token;
     }
 
-    if (!token) {
-      console.log('Auth Middleware: No token provided');
-      return res.status(401).json({ error: 'Token não fornecido' });
+    if (!token || token === 'null' || token === 'undefined') {
+      console.log('Auth Middleware: No valid token provided');
+      return res.status(401).json({ error: 'Token não fornecido ou inválido' });
     }
 
     try {
       // Basic JWT format check
-      if (token.split('.').length !== 3) {
+      if (token === 'mock' || token === 'TEST' || token.split('.').length !== 3) {
         throw new Error('Token is not in JWT format');
       }
 

@@ -17,5 +17,9 @@ export async function getAuthToken(): Promise<string | null> {
       console.error('Error getting fresh token:', e);
     }
   }
-  return localStorage.getItem('token');
+  const localToken = localStorage.getItem('token');
+  if (!localToken || localToken === 'null' || localToken === 'undefined' || localToken.split('.').length !== 3) {
+    return null;
+  }
+  return localToken;
 }
