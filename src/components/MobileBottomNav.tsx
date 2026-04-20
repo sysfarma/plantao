@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Home, Clock, User } from 'lucide-react';
+import { Home, Clock, User, Calendar } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 export default function MobileBottomNav() {
@@ -22,7 +22,11 @@ export default function MobileBottomNav() {
       </Link>
       <Link to="/plantao" className="flex flex-col items-center justify-center w-full h-full text-gray-500 hover:text-emerald-600 transition-colors">
         <Clock className="w-6 h-6 mb-1" />
-        <span className="text-[10px] font-medium">Plantão Hoje</span>
+        <span className="text-[10px] font-medium">Hoje</span>
+      </Link>
+      <Link to="/proximos-plantoes" className="flex flex-col items-center justify-center w-full h-full text-gray-500 hover:text-emerald-600 transition-colors">
+        <Calendar className="w-6 h-6 mb-1" />
+        <span className="text-[10px] font-medium">Próximos</span>
       </Link>
       <Link 
         to={user ? '/perfil' : '/login'} 

@@ -7,3 +7,15 @@ const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const googleProvider = new GoogleAuthProvider();
+
+export async function getAuthToken(): Promise<string | null> {
+  const user = auth.currentUser;
+  if (user) {
+    try {
+      return await user.getIdToken();
+    } catch (e) {
+      console.error('Error getting fresh token:', e);
+    }
+  }
+  return localStorage.getItem('token');
+}

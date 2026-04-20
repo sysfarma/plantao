@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Outlet, Link, useNavigate } from 'react-router-dom';
-import { Store, LogOut, Home, Menu, X, User, Clock, LayoutDashboard, Download } from 'lucide-react';
+import { Store, LogOut, Home, Menu, X, User, Clock, LayoutDashboard, Download, CreditCard, Calendar, Share2 } from 'lucide-react';
 import MobileBottomNav from '../components/MobileBottomNav';
 import { usePWA } from '../hooks/usePWA';
 
@@ -25,6 +25,27 @@ export default function PharmacyLayout() {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     navigate('/login');
+  };
+
+  const handleShare = async () => {
+    const shareData = {
+      title: 'Farmácias de Plantão',
+      text: 'Confira as farmácias de plantão hoje e nos próximos dias!',
+      url: 'https://farmaciasdeplantao.app.br',
+    };
+
+    try {
+      if (navigator.share) {
+        await navigator.share(shareData);
+      } else {
+        await navigator.clipboard.writeText(shareData.url);
+        alert('Link do aplicativo copiado!');
+      }
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') {
+        console.error('Error sharing:', err);
+      }
+    }
   };
 
   return (
@@ -55,6 +76,10 @@ export default function PharmacyLayout() {
             <Clock className="w-5 h-5" />
             Plantão Hoje
           </Link>
+          <Link to="/proximos-plantoes" onClick={() => setIsMenuOpen(false)} className="flex items-center gap-3 px-3 py-2 rounded-md text-emerald-100 hover:text-white hover:bg-emerald-800 transition-colors">
+            <Calendar className="w-5 h-5" />
+            Próximos Plantões
+          </Link>
           <Link to="/pharmacy" onClick={() => setIsMenuOpen(false)} className="flex items-center gap-3 px-3 py-2 rounded-md text-emerald-100 hover:text-white hover:bg-emerald-800 transition-colors">
             <LayoutDashboard className="w-5 h-5" />
             Dashboard
@@ -63,6 +88,17 @@ export default function PharmacyLayout() {
             <User className="w-5 h-5" />
             Meu Perfil
           </Link>
+          <Link to="/pharmacy/pricing" onClick={() => setIsMenuOpen(false)} className="flex items-center gap-3 px-3 py-2 rounded-md text-emerald-100 hover:text-white hover:bg-emerald-800 transition-colors bg-emerald-800/20 mt-2">
+            <CreditCard className="w-5 h-5 font-bold" />
+            Premium
+          </Link>
+          <button 
+            onClick={handleShare}
+            className="flex items-center gap-3 px-3 py-2 rounded-md text-emerald-100 hover:text-white hover:bg-emerald-800 transition-colors w-full text-left"
+          >
+            <Share2 className="w-5 h-5" />
+            Compartilhar App
+          </button>
           {canInstall && (
             <button 
               onClick={() => {

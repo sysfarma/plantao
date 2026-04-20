@@ -9,7 +9,9 @@ const auth = getAuth(app);
 
 async function test() {
   try {
-    const userCredential = await signInWithEmailAndPassword(auth, 'sys.farmaciasdeplantao@gmail.com', 'admin123');
+    const adminEmail = process.env.ADMIN_EMAIL || 'sys.farmaciasdeplantao@gmail.com';
+    const adminPassword = process.env.ADMIN_PASSWORD || 'admin123';
+    const userCredential = await signInWithEmailAndPassword(auth, adminEmail, adminPassword);
     const token = await userCredential.user.getIdToken();
     
     const res = await fetch('http://localhost:3000/api/admin/pharmacies', {

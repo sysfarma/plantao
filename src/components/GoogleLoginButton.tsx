@@ -3,6 +3,7 @@ import { signInWithPopup, getIdToken } from 'firebase/auth';
 import { doc, getDoc, setDoc, collection, addDoc } from 'firebase/firestore';
 import { auth, googleProvider, db } from '../lib/firebase';
 import { useNavigate } from 'react-router-dom';
+import { handleFirestoreError, OperationType } from '../lib/firebaseError';
 import { v4 as uuidv4 } from 'uuid';
 
 interface GoogleLoginButtonProps {
@@ -27,7 +28,8 @@ export default function GoogleLoginButton({ text = "continue_with" }: GoogleLogi
 
       let userData;
       if (!userSnap.exists()) {
-        const role = (result.user.email === 'sys.farmaciasdeplantao@gmail.com' ? 'admin' : 'client') as 'admin' | 'pharmacy' | 'client';
+        const adminEmail = import.meta.env.VITE_ADMIN_EMAIL;
+        const role = (adminEmail && result.user.email === adminEmail ? 'admin' : 'client') as 'admin' | 'pharmacy' | 'client';
         userData = {
           email: result.user.email,
           role: role,
@@ -64,7 +66,8 @@ export default function GoogleLoginButton({ text = "continue_with" }: GoogleLogi
       } else {
         userData = userSnap.data();
         // Upgrade to admin if email matches
-        if (result.user.email === 'sys.farmaciasdeplantao@gmail.com' && userData.role !== 'admin') {
+        const adminEmail = import.meta.env.VITE_ADMIN_EMAIL;
+        if (adminEmail && result.user.email === adminEmail && userData.role !== 'admin') {
           userData.role = 'admin';
           await setDoc(userRef, { role: 'admin' }, { merge: true });
         }
@@ -81,7 +84,12 @@ export default function GoogleLoginButton({ text = "continue_with" }: GoogleLogi
         navigate('/');
       }
     } catch (err: any) {
-      console.error('Google Login Error:', err);
+      if (err.code?.startsWith('auth/')) {
+        console.error('Google Auth Error:', err);
+      } else {
+        handleFirestoreError(err, OperationType.WRITE, 'users/pharmacies/subscriptions');
+      }
+      
       if (err.code === 'auth/popup-closed-by-user') {
         setError('Login cancelado.');
       } else {

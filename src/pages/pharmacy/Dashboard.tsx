@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { CheckCircle, AlertCircle, QrCode, CreditCard, Star, Edit, Calendar, Plus, Trash2, TrendingUp } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { CheckCircle, AlertCircle, QrCode, CreditCard, Star, Edit, Calendar, Plus, Trash2, TrendingUp, Zap, RefreshCw } from 'lucide-react';
 import PixPaymentManager from '../../components/PixPaymentManager';
 import { isShiftPast, formatToBRDate } from '../../lib/dateUtils';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { collection, doc, addDoc, updateDoc, deleteDoc, query, where, onSnapshot } from 'firebase/firestore';
 import { db, auth } from '../../lib/firebase';
+import { handleFirestoreError, OperationType } from '../../lib/firebaseError';
 
 export default function PharmacyDashboard() {
   const [profile, setProfile] = useState<any>(null);
@@ -13,10 +15,16 @@ export default function PharmacyDashboard() {
   const [shifts, setShifts] = useState<any[]>([]);
   const [reports, setReports] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('overview');
+  const [searchParams] = useSearchParams();
+  const initialTab = searchParams.get('tab') || 'overview';
+  const [activeTab, setActiveTab] = useState(initialTab);
 
   const [editForm, setEditForm] = useState<any>({});
   const [saving, setSaving] = useState(false);
+
+  const adminEmail = import.meta.env.VITE_ADMIN_EMAIL;
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const isAdminMaster = adminEmail && user.email === adminEmail;
 
   const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
   const [shiftForm, setShiftForm] = useState({ date: '', start_time: '07:00', end_time: '22:00', is_24h: false });
@@ -52,7 +60,10 @@ export default function PharmacyDashboard() {
     if (!profile?.id) return;
 
     const pharmacyId = profile.id;
+    const userId = auth.currentUser?.uid;
 
+    // We filter by pharmacy_id AND user_id (where possible) to be rule-safe and performant
+    // Sensitive data listeners
     const unsubSubs = onSnapshot(query(collection(db, 'subscriptions'), where('pharmacy_id', '==', pharmacyId)), (snapshot) => {
       const subs = snapshot.docs.map(d => d.data());
       if (subs.length > 0) {
@@ -73,7 +84,10 @@ export default function PharmacyDashboard() {
       setShifts(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
     });
 
-    const unsubClicks = onSnapshot(query(collection(db, 'clicks'), where('pharmacy_id', '==', pharmacyId)), (snapshot) => {
+    const unsubClicks = onSnapshot(query(
+      collection(db, 'clicks'), 
+      where('pharmacy_id', '==', pharmacyId)
+    ), (snapshot) => {
       const dailyClicks: Record<string, { date: string, whatsapp: number, map: number }> = {};
       snapshot.forEach(doc => {
         const click = doc.data();
@@ -85,6 +99,13 @@ export default function PharmacyDashboard() {
         if (click.type === 'map') dailyClicks[date].map++;
       });
       setReports({ dailyClicks: Object.values(dailyClicks) });
+      setLoading(false);
+    }, (error) => {
+      console.error('Error in clicks listener', error);
+      // Fallback for permissions if not master
+      if (!isAdminMaster) {
+        setReports({ dailyClicks: [] });
+      }
       setLoading(false);
     });
 
@@ -108,7 +129,7 @@ export default function PharmacyDashboard() {
       });
       alert('Perfil atualizado com sucesso!');
     } catch (error) {
-      console.error('Error saving profile', error);
+      handleFirestoreError(error, OperationType.UPDATE, `pharmacies/${profile.id}`);
       alert('Erro ao salvar perfil.');
     } finally {
       setSaving(false);
@@ -118,8 +139,10 @@ export default function PharmacyDashboard() {
   const handleSaveShift = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const user = auth.currentUser;
       const shiftData = {
         pharmacy_id: profile.id,
+        user_id: user?.uid, // Include owner_id for optimized security rules
         date: shiftForm.date,
         start_time: shiftForm.is_24h ? '00:00' : shiftForm.start_time,
         end_time: shiftForm.is_24h ? '23:59' : shiftForm.end_time,
@@ -141,7 +164,7 @@ export default function PharmacyDashboard() {
       
       setIsShiftModalOpen(false);
     } catch (error) {
-      console.error('Error saving shift', error);
+      handleFirestoreError(error, editingShiftId ? OperationType.UPDATE : OperationType.CREATE, `shifts/${editingShiftId || ''}`);
       alert('Erro ao salvar plantão.');
     }
   };
@@ -151,7 +174,7 @@ export default function PharmacyDashboard() {
     try {
       await deleteDoc(doc(db, 'shifts', id));
     } catch (error) {
-      console.error('Error deleting shift', error);
+      handleFirestoreError(error, OperationType.DELETE, `shifts/${id}`);
     }
   };
 
@@ -185,7 +208,9 @@ export default function PharmacyDashboard() {
       {/* Tabs */}
       <div className="border-b border-gray-200 mb-8">
         <nav className="-mb-px flex space-x-8 overflow-x-auto">
-          {['overview', 'metrics', 'edit', 'shifts', 'highlights', 'history'].map((tab) => (
+          {['overview', 'metrics', 'edit', 'shifts', 'highlights', 'history']
+            .filter(tab => tab !== 'metrics' || isAdminMaster)
+            .map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -198,7 +223,7 @@ export default function PharmacyDashboard() {
               {tab === 'overview' && 'Visão Geral'}
               {tab === 'metrics' && 'Métricas'}
               {tab === 'edit' && 'Editar Perfil'}
-              {tab === 'shifts' && 'Plantões'}
+              {tab === 'shifts' && 'Cadastro de Plantões'}
               {tab === 'highlights' && 'Meus Destaques'}
               {tab === 'history' && 'Histórico de Pagamentos'}
             </button>
@@ -219,6 +244,13 @@ export default function PharmacyDashboard() {
                   <p className="font-medium">Assinatura Ativa</p>
                   <p className="text-sm">Sua farmácia está visível nas buscas. Expira em: {new Date(profile.subscription?.expires_at).toLocaleDateString('pt-BR')}</p>
                 </div>
+                <Link 
+                  to="/pharmacy/pricing" 
+                  className="ml-auto inline-flex items-center gap-2 px-4 py-2 border border-emerald-200 text-emerald-700 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition-colors text-sm font-bold"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  Mudar Plano
+                </Link>
               </div>
             ) : isPending ? (
               <div className="flex flex-col gap-4">
@@ -226,16 +258,17 @@ export default function PharmacyDashboard() {
                   <AlertCircle className="w-6 h-6" />
                   <div>
                     <p className="font-medium">Pagamento Pendente</p>
-                    <p className="text-sm">Realize o pagamento para ativar sua conta.</p>
+                    <p className="text-sm">Realize o pagamento para ativar sua conta e aparecer nas buscas.</p>
                   </div>
                 </div>
                 
-                <div className="border border-gray-200 rounded-lg p-6 bg-gray-50">
-                  <h3 className="font-bold text-xl mb-2 text-center">Plano Anual: R$ 69,96</h3>
-                  <p className="text-gray-600 mb-6 text-center">Pague via Pix para liberação imediata.</p>
-                  
-                  <PixPaymentManager onPaymentSuccess={() => {}} />
-                </div>
+                <Link 
+                  to="/pharmacy/pricing" 
+                  className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-emerald-600 text-white font-bold rounded-lg hover:bg-emerald-700 transition-colors shadow-sm"
+                >
+                  <CreditCard className="w-5 h-5" />
+                  Assinar Plano Premium
+                </Link>
               </div>
             ) : (
               <div className="flex flex-col gap-4">
@@ -243,15 +276,17 @@ export default function PharmacyDashboard() {
                   <AlertCircle className="w-6 h-6" />
                   <div>
                     <p className="font-medium">Assinatura Expirada</p>
-                    <p className="text-sm">Renove sua assinatura para voltar a aparecer nas buscas.</p>
+                    <p className="text-sm">Sua farmácia não está mais visível para os clientes.</p>
                   </div>
                 </div>
                 
-                <div className="border border-gray-200 rounded-lg p-6 bg-gray-50 mt-4">
-                  <h3 className="font-bold text-xl mb-2 text-center">Renovação Anual: R$ 69,96</h3>
-                  <p className="text-gray-600 mb-6 text-center">Gere um novo Pix para renovar sua assinatura.</p>
-                  <PixPaymentManager onPaymentSuccess={() => {}} />
-                </div>
+                <Link 
+                  to="/pharmacy/pricing" 
+                  className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-emerald-600 text-white font-bold rounded-lg hover:bg-emerald-700 transition-colors shadow-sm"
+                >
+                  <Zap className="w-5 h-5" />
+                  Renovar Assinatura Agora
+                </Link>
               </div>
             )}
           </div>
@@ -282,7 +317,7 @@ export default function PharmacyDashboard() {
         </div>
       )}
 
-      {activeTab === 'metrics' && reports?.dailyClicks && (
+      {activeTab === 'metrics' && isAdminMaster && reports?.dailyClicks && (
         <div className="space-y-6">
           <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
             <div className="flex items-center gap-2 mb-6">
@@ -359,7 +394,7 @@ export default function PharmacyDashboard() {
         <div className="space-y-4">
           <div className="flex justify-between items-center bg-white p-6 rounded-xl shadow-sm border border-gray-200">
             <div>
-              <h2 className="text-lg font-semibold text-gray-900">Meus Plantões</h2>
+              <h2 className="text-lg font-semibold text-gray-900">Cadastro de Plantões</h2>
               <p className="text-sm text-gray-500">Gerencie os dias em que sua farmácia estará de plantão.</p>
             </div>
             <button onClick={openNewShiftModal} className="bg-emerald-600 text-white px-4 py-2 rounded-md font-medium hover:bg-emerald-700 flex items-center gap-2">
@@ -438,7 +473,7 @@ export default function PharmacyDashboard() {
                 <input 
                   type="date" 
                   required 
-                  value={shiftForm.date} 
+                  value={shiftForm.date || ''} 
                   onChange={e => setShiftForm({...shiftForm, date: e.target.value})} 
                   className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" 
                 />
@@ -448,7 +483,7 @@ export default function PharmacyDashboard() {
                 <input 
                   type="checkbox" 
                   id="is_24h" 
-                  checked={shiftForm.is_24h} 
+                  checked={shiftForm.is_24h || false} 
                   onChange={e => setShiftForm({...shiftForm, is_24h: e.target.checked})} 
                   className="w-4 h-4 text-emerald-600 border-gray-300 rounded focus:ring-emerald-500"
                 />
@@ -462,7 +497,7 @@ export default function PharmacyDashboard() {
                     <input 
                       type="time" 
                       required={!shiftForm.is_24h} 
-                      value={shiftForm.start_time} 
+                      value={shiftForm.start_time || ''} 
                       onChange={e => setShiftForm({...shiftForm, start_time: e.target.value})} 
                       className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" 
                     />
@@ -472,7 +507,7 @@ export default function PharmacyDashboard() {
                     <input 
                       type="time" 
                       required={!shiftForm.is_24h} 
-                      value={shiftForm.end_time} 
+                      value={shiftForm.end_time || ''} 
                       onChange={e => setShiftForm({...shiftForm, end_time: e.target.value})} 
                       className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" 
                     />

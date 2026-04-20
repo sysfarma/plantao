@@ -40,6 +40,7 @@
         "lat": { "type": "number" },
         "lng": { "type": "number" },
         "is_active": { "type": "number" },
+        "subscription_active": { "type": "boolean" },
         "whatsapp_clicks": { "type": "number" },
         "map_clicks": { "type": "number" },
         "created_at": { "type": "string", "format": "date-time" },
@@ -53,7 +54,13 @@
       "type": "object",
       "properties": {
         "pharmacy_id": { "type": "string" },
-        "status": { "type": "string", "enum": ["pending", "active", "expired"] },
+        "payer_email": { "type": "string", "format": "email" },
+        "status": { "type": "string", "enum": ["pending", "authorized", "active", "cancelled", "expired"] },
+        "plan_type": { "type": "string", "enum": ["monthly", "annual"] },
+        "amount": { "type": "number" },
+        "payment_method": { "type": "string" },
+        "external_reference": { "type": "string" },
+        "next_billing_date": { "type": "string", "format": "date-time" },
         "expires_at": { "type": "string", "format": "date-time" },
         "created_at": { "type": "string", "format": "date-time" },
         "updated_at": { "type": "string", "format": "date-time" }
@@ -117,9 +124,41 @@
         "updated_at": { "type": "string", "format": "date-time" }
       },
       "required": ["pharmacy_id", "type", "created_at"]
+    },
+    "Config": {
+      "title": "Config",
+      "description": "System configuration documents",
+      "type": "object",
+      "properties": {
+        "public_key": { "type": "string" },
+        "access_token": { "type": "string" },
+        "monthly": { "type": "object" },
+        "annual": { "type": "object" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "PricingBlock": {
+      "title": "PricingBlock",
+      "description": "Benefits/Feature blocks on the pricing page",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "icon": { "type": "string" },
+        "color": { "type": "string" },
+        "is_active": { "type": "boolean" },
+        "order": { "type": "number" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "description", "is_active", "order"]
     }
   },
   "firestore": {
+    "/config/{configId}": {
+      "schema": "Config",
+      "description": "System configuration flags and API keys"
+    },
     "/users/{userId}": {
       "schema": "User",
       "description": "User profile documents"
@@ -147,6 +186,10 @@
     "/clicks/{clickId}": {
       "schema": "Click",
       "description": "Interaction metrics"
+    },
+    "/pricing_blocks/{blockId}": {
+      "schema": "PricingBlock",
+      "description": "Individual feature blocks on the pricing page"
     }
   }
 }

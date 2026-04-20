@@ -20,6 +20,11 @@ import Profile from './pages/Profile';
 
 import AdminDashboard from './pages/admin/Dashboard';
 import PharmacyDashboard from './pages/pharmacy/Dashboard';
+import Pricing from './pages/pharmacy/Pricing';
+import FutureShifts from './pages/FutureShifts';
+import Terms from './pages/Terms';
+import Privacy from './pages/Privacy';
+import Contact from './pages/Contact';
 
 export default function App() {
   return (
@@ -36,6 +41,11 @@ export default function App() {
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/perfil" element={<Profile />} />
+          <Route path="/pricing" element={<Pricing />} />
+          <Route path="/proximos-plantoes" element={<FutureShifts />} />
+          <Route path="/termos" element={<Terms />} />
+          <Route path="/privacidade" element={<Privacy />} />
+          <Route path="/contato" element={<Contact />} />
         </Route>
 
         {/* Admin Routes */}
@@ -46,6 +56,7 @@ export default function App() {
         {/* Pharmacy Routes */}
         <Route path="/pharmacy" element={<PharmacyLayout />}>
           <Route index element={<PharmacyDashboard />} />
+          <Route path="pricing" element={<Pricing />} />
         </Route>
       </Routes>
     </Router>

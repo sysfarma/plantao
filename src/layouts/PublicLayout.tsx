@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Outlet, Link, useNavigate } from 'react-router-dom';
-import { Pill, Menu, X, Home, User, LogOut, Clock, Download } from 'lucide-react';
+import { Pill, Menu, X, Home, User, LogOut, Clock, Download, CreditCard, Calendar, Share2 } from 'lucide-react';
 import MobileBottomNav from '../components/MobileBottomNav';
 import { usePWA } from '../hooks/usePWA';
 
@@ -25,6 +25,27 @@ export default function PublicLayout() {
     setUser(null);
     setIsMenuOpen(false);
     navigate('/login');
+  };
+
+  const handleShare = async () => {
+    const shareData = {
+      title: 'Farmácias de Plantão',
+      text: 'Confira as farmácias de plantão hoje e nos próximos dias!',
+      url: 'https://farmaciasdeplantao.app.br',
+    };
+
+    try {
+      if (navigator.share) {
+        await navigator.share(shareData);
+      } else {
+        await navigator.clipboard.writeText(shareData.url);
+        alert('Link do aplicativo copiado!');
+      }
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') {
+        console.error('Error sharing:', err);
+      }
+    }
   };
 
   return (
@@ -82,6 +103,22 @@ export default function PublicLayout() {
                     <span className="font-medium">Plantão</span>
                   </Link>
                   <Link 
+                    to="/proximos-plantoes" 
+                    onClick={() => setIsMenuOpen(false)} 
+                    className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-emerald-50 hover:text-emerald-600 transition-colors"
+                  >
+                    <Calendar className="w-5 h-5" />
+                    <span className="font-medium">Próximos Plantões</span>
+                  </Link>
+                  <Link 
+                    to="/pricing" 
+                    onClick={() => setIsMenuOpen(false)} 
+                    className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-emerald-50 hover:text-emerald-600 transition-colors"
+                  >
+                    <CreditCard className="w-5 h-5" />
+                    <span className="font-medium">Premium</span>
+                  </Link>
+                  <Link 
                     to="/perfil" 
                     onClick={() => setIsMenuOpen(false)} 
                     className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-emerald-50 hover:text-emerald-600 transition-colors"
@@ -99,6 +136,13 @@ export default function PublicLayout() {
                       <span className="font-medium">Dashboard</span>
                     </Link>
                   )}
+                  <button 
+                    onClick={handleShare}
+                    className="flex items-center gap-3 px-4 py-3 text-emerald-600 font-bold hover:bg-emerald-50 transition-colors w-full text-left"
+                  >
+                    <Share2 className="w-5 h-5" />
+                    Compartilhar App
+                  </button>
                   {canInstall && (
                     <button 
                       onClick={() => {
@@ -138,6 +182,22 @@ export default function PublicLayout() {
                     <span className="font-medium">Plantão</span>
                   </Link>
                   <Link 
+                    to="/proximos-plantoes" 
+                    onClick={() => setIsMenuOpen(false)} 
+                    className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-emerald-50 hover:text-emerald-600 transition-colors"
+                  >
+                    <Calendar className="w-5 h-5" />
+                    <span className="font-medium">Próximos Plantões</span>
+                  </Link>
+                  <Link 
+                    to="/pricing" 
+                    onClick={() => setIsMenuOpen(false)} 
+                    className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-emerald-50 hover:text-emerald-600 transition-colors"
+                  >
+                    <CreditCard className="w-5 h-5" />
+                    <span className="font-medium">Premium</span>
+                  </Link>
+                  <Link 
                     to="/login" 
                     onClick={() => setIsMenuOpen(false)} 
                     className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-emerald-50 hover:text-emerald-600 transition-colors"
@@ -145,6 +205,13 @@ export default function PublicLayout() {
                     <User className="w-5 h-5" />
                     <span className="font-medium">Entrar</span>
                   </Link>
+                  <button 
+                    onClick={handleShare}
+                    className="flex items-center gap-3 px-4 py-3 text-emerald-600 font-bold hover:bg-emerald-50 transition-colors w-full text-left"
+                  >
+                    <Share2 className="w-5 h-5" />
+                    Compartilhar App
+                  </button>
                   {canInstall && (
                     <button 
                       onClick={() => {
@@ -182,9 +249,18 @@ export default function PublicLayout() {
       <main className="flex-1 max-w-[100%] mx-auto w-full">
         <Outlet />
       </main>
-      <footer className="bg-white border-t border-gray-200 py-8 mt-auto hidden md:block">
-        <div className="max-w-[100%] mx-auto px-4 sm:px-6 lg:px-8 text-center text-gray-500 text-sm">
-          &copy; {new Date().getFullYear()} Farmácias de Plantão Brasil. Todos os direitos reservados.
+      <footer className="bg-white border-t border-gray-200 py-12 mt-auto">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex flex-col md:flex-row justify-between items-center gap-6">
+            <div className="text-gray-500 text-sm">
+              &copy; {new Date().getFullYear()} Farmácias de Plantão Brasil. Todos os direitos reservados.
+            </div>
+            <div className="flex flex-wrap justify-center gap-6 text-sm font-medium">
+              <Link to="/termos" className="text-gray-600 hover:text-emerald-600 transition-colors">Termos de Uso</Link>
+              <Link to="/privacidade" className="text-gray-600 hover:text-emerald-600 transition-colors">Privacidade</Link>
+              <Link to="/contato" className="text-gray-600 hover:text-emerald-600 transition-colors">Fale Conosco</Link>
+            </div>
+          </div>
         </div>
       </footer>
       <MobileBottomNav />

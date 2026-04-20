@@ -1,36 +1,55 @@
-# Especificação de Funcionalidades Pendentes - Conexão Firebase (Spec.md)
+# Especificação Técnica: Implementações Pendentes
 
-Este documento detalha **exclusivamente** as implementações técnicas pendentes para finalizar a conexão com o banco de dados Firebase, com base no relatório de análise (`analytics/report.md`).
+Esta especificação detalha os componentes, comportamentos e atualizações de página necessários para atingir 100% de conclusão nos módulos de Assinaturas e Planos, conforme identificado no relatório de analytics.
 
----
+## 1. Componentes (Components)
 
-## 1. Tratamento de Erros Padronizado e Teste de Conexão
-* **Page:** Global (Boot da Aplicação)
-* **Component:** `FirebaseProvider` (a criar), `ErrorBoundary` (a criar), `App.tsx`
-* **Behavior:** 
-  - Implementar a função `handleFirestoreError` para capturar falhas de operação no Firebase e lançar erros estruturados em JSON (contendo detalhes da operação e do estado de autenticação).
-  - Executar um teste de conexão via `getFromServer` no carregamento inicial dentro do `FirebaseProvider`.
-  - Envolver a aplicação em um `ErrorBoundary` para capturar e exibir mensagens amigáveis ao usuário caso o cliente esteja offline ou ocorram erros de permissão.
+### `SubscriberFilters`
+- **Descrição:** Barra de ferramentas para filtrar a lista de assinantes.
+- **Props/Estado:** 
+  - `onFilterChange`: Callback para enviar os critérios ao backend ou filtrar localmente.
+- **Elementos:** Campo de busca (Search input) e Select Dropdown (Status: Ativo, Expirado, Pendente, Cancelado).
 
-## 2. Migração para Atualizações em Tempo Real (Real-time)
-* **Page:** `/plantao` (Plantões de Hoje) e `/pharmacy` (Dashboard da Farmácia)
-* **Component:** `OnCall.tsx`, `Dashboard.tsx` (Pharmacy)
-* **Behavior:** 
-  - Substituir as requisições HTTP estáticas (`fetch` para a API Express) por ouvintes nativos do Firebase (`onSnapshot`).
-  - Garantir que a interface reflita instantaneamente quaisquer alterações no banco de dados, como a adição de novos plantões ou atualizações de status da assinatura/farmácia.
+### `PaymentHistoryTable`
+- **Descrição:** Modal ou seção expansível dentro da aba de Assinantes.
+- **Funcionalidade:** Listar todos os documentos da coleção `payments` filtrados por `pharmacy_id`. Deve exibir ID MP, Valor, Método, Status e Data.
 
-## 3. Hardening das Regras de Segurança (Firestore Rules)
-* **Page:** Backend / Configuração (`firestore.rules`)
-* **Component:** N/A
-* **Behavior:** 
-  - Adicionar limites de tamanho (`.size()`) em todos os campos de texto (ex: `name`, `street`, `neighborhood`) para prevenir ataques de exaustão de recursos (DoS).
-  - Refinar as validações de tipo para usar verificações estritas (`is int`, `is timestamp`).
-  - Bloquear vulnerabilidades de "Update Bypass", garantindo que documentos válidos não possam ser atualizados para estados inválidos.
+### `PlanEditorForm`
+- **Descrição:** Formulário dinâmico para edição de planos.
+- **Campos:** 
+  - Nome Amigável (Título do card).
+  - Descrição Curta.
+  - Lista de Benefícios (CRUD de itens simples).
+  - Configurações MP: Parcelas permitidas, Desconto no anual (%).
 
-## 4. Consistência de Contadores e Campos de Auditoria
-* **Page:** Backend / Configuração (`firestore.rules`, `firebase-blueprint.json`)
-* **Component:** N/A
-* **Behavior:** 
-  - Implementar validação atômica com `getAfter()` nas regras de segurança para qualquer lógica de incremento de contadores (ex: métricas de cliques em WhatsApp/Mapa).
-  - Atualizar o `firebase-blueprint.json` para incluir o campo `updated_at` em todas as entidades relevantes.
-  - Exigir nas regras do Firestore que o campo `updated_at` seja modificado corretamente e de forma imutável em relação ao criador em todas as operações de `update`.
+### `MercadoPagoTester`
+- **Descrição:** Botão acoplado à configuração de credenciais.
+- **Comportamento:** Chama uma rota de debug que tenta instanciar o `MercadoPagoConfig` e buscar as informações da conta (endpoint `/v1/account`) para validar a chave.
+
+## 2. Comportamentos (Behaviors)
+
+### `PlanUpgradeFlow` (Upgrade/Downgrade)
+- **Lógica:** Implementar no `/server.ts` a rota `PUT /api/subscriptions/update`.
+- **Regra:** Se o usuário já tem uma assinatura ativa, deve cancelar a anterior (ou fazer o update do valor no MP) e gerar o novo ciclo. Preferencialmente, redirecionar para o checkout para confirmar o novo método/valor.
+
+### `DataExportAction` (CSV Export)
+- **Lógica:** Função auxiliar no frontend que recebe o array `adminSubscribers`, converte para formato CSV (utilizando os cabeçalhos da tabela) e dispara o download via Blob.
+
+### `EnhancedWebhookHandler`
+- **Lógica:** Atualizar a rota `/api/webhooks/payment` no `server.ts` para capturar os estados de `refunded` (estorno) e `cancelled` (cancelamento pelo portal MP).
+- **Ação:** Deve disparar o e-mail de notificação de cancelamento e setar `is_active: 0` na farmácia imediatamente.
+
+### `AuditLogger`
+- **Lógica:** Toda alteração manual feita pelo Admin via `PUT /api/admin/subscriptions/:id` deve criar um documento na coleção `audit_logs` registrando: `admin_id`, `target_id`, `previous_state`, `new_state`, `timestamp`.
+
+## 3. Páginas (Pages)
+
+### `AdminDashboard` (Atualizações)
+- **Aba Assinantes:** Integrar `SubscriberFilters` e `PaymentHistoryTable`.
+- **Aba Planos:** Migrar de campos estáticos para o `PlanEditorForm` e adicionar funcionalidade de "Novo Plano" que cria documentos dinâmicos em `config/subscription_plans`.
+- **Aba Configurações:** Inserir o componente `MercadoPagoTester`.
+
+### `PharmacyDashboard` / `Checkout` (Atualizações)
+- **Visual:** Implementar estados de *Skeleton Loading* enquanto o checkout do Mercado Pago carrega.
+- **Feedback:** Modal de sucesso/erro mais descritivo baseado na resposta do `init_point` ou processamento do Pix.
+- **Gerenciamento:** Se já houver assinatura, substituir os botões de "Comprar" por "Alterar Plano" (acionando o `PlanUpgradeFlow`).

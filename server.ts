@@ -8,11 +8,20 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
-import { MercadoPagoConfig, Payment } from 'mercadopago';
-import { addYears } from 'date-fns';
+import { MercadoPagoConfig, Payment, Customer, PreApproval, PreApprovalPlan } from 'mercadopago';
+import { addYears, addMonths, addDays } from 'date-fns';
 import crypto from 'crypto';
 import cron from 'node-cron';
 import { emailService } from './emailService.ts';
+
+// Helper for next billing date calculation
+function calculateNextBillingDate(frequency: number, frequencyType: string): string {
+  const now = new Date();
+  if (frequencyType === 'days') return addDays(now, frequency).toISOString();
+  if (frequencyType === 'months') return addMonths(now, frequency).toISOString();
+  if (frequencyType === 'years') return addYears(now, frequency).toISOString();
+  return addMonths(now, frequency).toISOString(); // fallback
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -51,20 +60,100 @@ const auth = getAuth();
 
 let mpClient: MercadoPagoConfig;
 let paymentClient: Payment;
+let customerClient: Customer;
+let preApprovalClient: PreApproval;
+let preApprovalPlanClient: PreApprovalPlan;
 let currentAccessToken: string | null = null;
 
 async function getMPClient() {
   const configDoc = await db.collection('config').doc('mercadopago').get();
   const config = configDoc.data();
   
-  const accessToken = config?.access_token || process.env.MERCADOPAGO_ACCESS_TOKEN || 'TEST-1234567890';
+  // Explicitly allow a "Simulated Mode" toggle from Admin Config
+  const forceSimulated = config?.test_mode === true;
   
+  const accessToken = config?.access_token || process.env.MERCADOPAGO_ACCESS_TOKEN;
+  
+  // If no token at all, or it's a known placeholder, or forceSimulated is true -> isMock = true
+  const isMock = forceSimulated || !accessToken || 
+                 accessToken === 'TEST-1234567890' || 
+                 accessToken === 'YOUR_MERCADOPAGO_ACCESS_TOKEN' ||
+                 (!accessToken.startsWith('APP_USR-') && !accessToken.startsWith('TEST-'));
+
+  if (!accessToken && !forceSimulated) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('Mercado Pago Access Token not configured.');
+    }
+  }
+
   if (!mpClient || currentAccessToken !== accessToken) {
-    mpClient = new MercadoPagoConfig({ accessToken, options: { timeout: 5000 } });
+    // If we have no token and we're not in production, we can use a dummy token to at least instantiate
+    const tokenToUse = accessToken || 'TEST-1234567890';
+    mpClient = new MercadoPagoConfig({ accessToken: tokenToUse, options: { timeout: 5000 } });
     paymentClient = new Payment(mpClient);
+    customerClient = new Customer(mpClient);
+    preApprovalClient = new PreApproval(mpClient);
+    preApprovalPlanClient = new PreApprovalPlan(mpClient);
     currentAccessToken = accessToken;
   }
-  return { mpClient, paymentClient };
+  return { mpClient, paymentClient, customerClient, preApprovalClient, preApprovalPlanClient, isMock };
+}
+
+// Helper to format MP errors for the user
+function formatMPError(err: any): { message: string, details: string } {
+  const msg = err.message || '';
+  const status = err.status;
+  
+  if (msg.includes('Unauthorized use of live credentials') || status === 401) {
+    return {
+      message: 'Credenciais de Produção não autorizadas.',
+      details: 'Seu Access Token (APP_USR) exige que sua conta Mercado Pago esteja aprovada para produção. Ative as "Credenciais de Produção" no painel do Mercado Pago ou use um Token de Teste (TEST-).'
+    };
+  }
+  
+  return {
+    message: 'Erro na API do Mercado Pago',
+    details: msg || 'Falha na comunicação com o provedor de pagamentos.'
+  };
+}
+
+async function cancelExistingSubscriptions(pharmacyId: string, exceptSubId?: string) {
+  const oldSubsSnapshot = await db.collection('subscriptions')
+    .where('pharmacy_id', '==', pharmacyId)
+    .get();
+
+  const { preApprovalClient, isMock } = await getMPClient();
+  if (isMock) {
+    // Silently mark as cancelled in Firestore without calling MP
+    for (const doc of oldSubsSnapshot.docs) {
+      if (exceptSubId && doc.id === exceptSubId) continue;
+      const sub = doc.data();
+      if (sub.status !== 'active' && sub.status !== 'pending') continue;
+      await doc.ref.update({ status: 'cancelled', updated_at: new Date().toISOString() });
+    }
+    return;
+  }
+
+  for (const doc of oldSubsSnapshot.docs) {
+    if (exceptSubId && doc.id === exceptSubId) continue;
+    
+    const sub = doc.data();
+    if (sub.status !== 'active' && sub.status !== 'pending') continue;
+
+    // Cancel in Mercado Pago if it has a preapproval ID
+    if (sub.mp_preapproval_id && !sub.mp_preapproval_id.startsWith('sub_mock') && sub.mp_preapproval_id !== 'mock') {
+      try {
+        await preApprovalClient.update({
+          id: sub.mp_preapproval_id,
+          body: { status: 'cancelled' }
+        });
+      } catch (cancelError) {
+        console.warn('Could not cancel old MP sub:', sub.mp_preapproval_id, cancelError);
+      }
+    }
+    // Mark as cancelled in Firestore
+    await doc.ref.update({ status: 'cancelled', updated_at: new Date().toISOString() });
+  }
 }
 
 // Optimization: Global stats updater
@@ -113,7 +202,8 @@ async function startServer() {
   // Debug: Check Admin Status
   app.get('/api/debug/admin-check', async (req, res) => {
     try {
-      const adminEmail = 'sys.farmaciasdeplantao@gmail.com';
+      const adminEmail = process.env.ADMIN_EMAIL;
+      if (!adminEmail) return res.status(500).json({ error: 'ADMIN_EMAIL not configured' });
       let userRecord = null;
       try {
         userRecord = await auth.getUserByEmail(adminEmail);
@@ -159,7 +249,7 @@ async function startServer() {
       req.user = {
         id: decodedToken.uid,
         email: decodedToken.email,
-        role: decodedToken.email === 'sys.farmaciasdeplantao@gmail.com' ? 'admin' : 'pharmacy'
+        role: (process.env.ADMIN_EMAIL && decodedToken.email === process.env.ADMIN_EMAIL) ? 'admin' : 'pharmacy'
       };
       next();
     } catch (error: any) {
@@ -180,12 +270,13 @@ async function startServer() {
       
       if (!userSnapshot.empty) {
         const token = crypto.randomBytes(32).toString('hex');
+        const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
         const expiresAt = new Date(Date.now() + 3600000).toISOString(); // 1 hour
         
         const now = new Date().toISOString();
         await db.collection('password_resets').add({
           email,
-          token,
+          token: hashedToken,
           expires_at: expiresAt,
           created_at: now,
           updated_at: now
@@ -207,7 +298,8 @@ async function startServer() {
   app.post('/api/auth/reset-password', async (req, res) => {
     const { token, password } = req.body;
     try {
-      const resetSnapshot = await db.collection('password_resets').where('token', '==', token).get();
+      const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+      const resetSnapshot = await db.collection('password_resets').where('token', '==', hashedToken).get();
       
       if (resetSnapshot.empty) return res.status(400).json({ error: 'Token inválido ou expirado' });
       
@@ -247,7 +339,8 @@ async function startServer() {
       
       if (!userDoc.exists) {
         // Create new user profile
-        const role = (req.user.email === 'sys.farmaciasdeplantao@gmail.com' ? 'admin' : 'client') as 'admin' | 'pharmacy' | 'client';
+        const adminEmail = process.env.ADMIN_EMAIL;
+        const role = (req.user.email === adminEmail ? 'admin' : 'client') as 'admin' | 'pharmacy' | 'client';
         const now = new Date().toISOString();
         
         await db.collection('users').doc(req.user.id).set({
@@ -294,7 +387,8 @@ async function startServer() {
       } else {
         // Check if existing user needs admin upgrade
         const userData = userDoc.data();
-        if (req.user.email === 'sys.farmaciasdeplantao@gmail.com' && userData?.role !== 'admin') {
+        const adminEmail = process.env.ADMIN_EMAIL;
+        if (adminEmail && req.user.email === adminEmail && userData?.role !== 'admin') {
           await db.collection('users').doc(req.user.id).update({
             role: 'admin',
             updated_at: new Date().toISOString()
@@ -324,7 +418,8 @@ async function startServer() {
     
     try {
       const userId = req.user.uid;
-      const role = email === 'sys.farmaciasdeplantao@gmail.com' ? 'admin' : 'pharmacy';
+      const adminEmail = process.env.ADMIN_EMAIL;
+      const role = (adminEmail && email === adminEmail) ? 'admin' : 'pharmacy';
       const now = new Date().toISOString();
       
       await db.collection('users').doc(userId).set({
@@ -358,10 +453,18 @@ async function startServer() {
         
         await db.collection('subscriptions').add({
           pharmacy_id: pharmacyId,
-          status: 'pending',
+          status: 'active',
+          plan_type: 'extra_1776642077763', // Plano Gratuito
           expires_at: null,
           created_at: now,
           updated_at: now
+        });
+
+        // Set pharmacy as active by default for free plan
+        await db.collection('pharmacies').doc(pharmacyId).update({ 
+          is_active: 1, 
+          subscription_active: true,
+          sub_status: 'active'
         });
 
         // Send welcome email
@@ -377,21 +480,29 @@ async function startServer() {
 
   // Public: Get Pharmacies by City/State
   app.get('/api/public/pharmacies', async (req, res) => {
-    const { city, state, name } = req.query;
+    const { city, state, name, cep } = req.query;
     try {
-      let query: any = db.collection('pharmacies').where('is_active', '==', 1);
+      let pharmaciesQuery = db.collection('pharmacies').where('is_active', '==', 1);
 
       if (city && state) {
-        query = query.where('city', '==', city).where('state', '==', state);
+        pharmaciesQuery = pharmaciesQuery.where('city', '==', city).where('state', '==', state);
       }
       
-      const snapshot = await query.get();
+      const snapshot = await pharmaciesQuery.get();
       let pharmacies = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
       
       if (name) {
         pharmacies = pharmacies.filter((p: any) => 
           p.name.toLowerCase().includes((name as string).toLowerCase())
         );
+      }
+
+      if (cep) {
+        const cleanSearchCep = (cep as string).replace(/\D/g, '').substring(0, 5);
+        pharmacies = pharmacies.filter((p: any) => {
+          const pharmCep = (p.cep || p.zip || '').replace(/\D/g, '').substring(0, 5);
+          return pharmCep === cleanSearchCep;
+        });
       }
 
       res.json(pharmacies);
@@ -402,31 +513,64 @@ async function startServer() {
 
   // Public: Get On-Call Pharmacies (Plantões de Hoje)
   app.get('/api/public/on-call', async (req, res) => {
-    const { city, state } = req.query;
+    const { city, state, cep } = req.query;
     try {
-      // Get today's date in YYYY-MM-DD format for America/Sao_Paulo
-      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+      // Robust date generation for Brazil (YYYY-MM-DD)
+      const today = new Intl.DateTimeFormat('sv-SE', {
+        timeZone: 'America/Sao_Paulo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      }).format(new Date());
       
-      let shiftsQuery: any = db.collection('shifts').where('date', '==', today);
-      const shiftsSnapshot = await shiftsQuery.get();
+      console.log(`[API] On-call request: today=${today}, city=${city}, state=${state}, cep=${cep}`);
+
+      // Optimized strategy
+      let pharmaciesSnapshot;
+      try {
+        let pharmaciesQuery = db.collection('pharmacies').where('is_active', '==', 1);
+        if (city && state && !cep) {
+          // Note: This may require a composite index (is_active, city, state)
+          // If it fails, the catch block will fallback to a safer query
+          pharmaciesQuery = pharmaciesQuery.where('city', '==', city as string).where('state', '==', state as string);
+        }
+        pharmaciesSnapshot = await pharmaciesQuery.get();
+      } catch (idxError: any) {
+        console.warn('[API Warning] Optimized pharmacy query failed (likely missing index), falling back to broad query:', idxError.message);
+        pharmaciesSnapshot = await db.collection('pharmacies').where('is_active', '==', 1).get();
+      }
+
+      const [shiftsSnapshot] = await Promise.all([
+        db.collection('shifts').where('date', '==', today).get()
+      ]);
       
+      const pharmaciesMap = new Map(pharmaciesSnapshot.docs.map(doc => [doc.id, doc.data()]));
       const onCallPharmacies = [];
+      const cleanSearchCep = cep ? (cep as string).replace(/\D/g, '').substring(0, 5) : null;
+
       for (const shiftDoc of shiftsSnapshot.docs) {
         const shift = shiftDoc.data();
-        const pharmacyDoc = await db.collection('pharmacies').doc(shift.pharmacy_id).get();
-        const pharmacy = pharmacyDoc.data();
+        const pharmacy = pharmaciesMap.get(shift.pharmacy_id) as any;
         
-        if (pharmacy && pharmacy.is_active === 1) {
-          if (city && state) {
-            if (pharmacy.city.toLowerCase() !== (city as string).toLowerCase() || 
-                pharmacy.state.toLowerCase() !== (state as string).toLowerCase()) {
-              continue;
-            }
+        if (pharmacy) {
+          // If we didn't filter by city/state in query (e.g. searching by name or CEP), filter here
+          if (city && state && !cep) { 
+             const pCity = pharmacy.city || '';
+             const pState = pharmacy.state || '';
+             if (pCity.toLowerCase() !== (city as string).toLowerCase() || 
+                 pState.toLowerCase() !== (state as string).toLowerCase()) {
+               continue;
+             }
+          }
+
+          if (cleanSearchCep) {
+            const pharmCep = (pharmacy.cep || pharmacy.zip || '').replace(/\D/g, '').substring(0, 5);
+            if (pharmCep !== cleanSearchCep) continue;
           }
           
           onCallPharmacies.push({
-            id: pharmacyDoc.id,
-            ...pharmacy,
+            id: shift.pharmacy_id,
+            ...(pharmacy as any),
             shift: {
               start_time: shift.start_time,
               end_time: shift.end_time,
@@ -436,38 +580,48 @@ async function startServer() {
         }
       }
 
+      res.setHeader('Cache-Control', 'public, max-age=60'); // Cache for 1 minute
       res.json(onCallPharmacies);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API Error] On-call fetch failure:', err);
+      res.status(500).json({ error: err.message || 'Internal Server Error' });
     }
   });
 
   // Public: Get Highlights
   app.get('/api/public/highlights', async (req, res) => {
-    const { city, state } = req.query;
+    const { city, state, cep } = req.query;
     const now = new Date().toISOString();
     
     try {
-      let query: any = db.collection('highlights')
-        .where('date_start', '<=', now);
-      
-      const snapshot = await query.get();
-      const highlights = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }))
+      const [highlightsSnapshot, pharmaciesSnapshot] = await Promise.all([
+        db.collection('highlights').where('date_start', '<=', now).get(),
+        db.collection('pharmacies').where('is_active', '==', 1).get()
+      ]);
+
+      const pharmaciesMap = new Map(pharmaciesSnapshot.docs.map(doc => [doc.id, doc.data()]));
+      const highlights = highlightsSnapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }))
         .filter((h: any) => h.date_end >= now);
       
+      const cleanSearchCep = cep ? (cep as string).replace(/\D/g, '').substring(0, 5) : null;
+
       const result = [];
       for (const h of highlights) {
-        if (city && state) {
+        if (city && state && !cep) {
           if (h.city.toLowerCase() !== (city as string).toLowerCase() || 
               h.state.toLowerCase() !== (state as string).toLowerCase()) {
             continue;
           }
         }
 
-        const pDoc = await db.collection('pharmacies').doc(h.pharmacy_id).get();
-        const p = pDoc.data();
+        const p = pharmaciesMap.get(h.pharmacy_id);
         
-        if (p && p.is_active === 1) {
+        if (p) {
+          if (cleanSearchCep) {
+             const pharmCep = (p.cep || (p as any).zip || '').replace(/\D/g, '').substring(0, 5);
+             if (pharmCep !== cleanSearchCep) continue;
+          }
+
           result.push({ 
             ...h, 
             name: p.name, 
@@ -495,14 +649,56 @@ async function startServer() {
     
     try {
       const now = new Date().toISOString();
-      await db.collection('clicks').add({
+      const clickData = {
         pharmacy_id: id,
         type,
         created_at: now,
         updated_at: now
+      };
+
+      // Perform updatesatomically
+      const batch = db.batch();
+      const clickRef = db.collection('clicks').doc();
+      batch.set(clickRef, clickData);
+
+      const pharmacyRef = db.collection('pharmacies').doc(id);
+      batch.update(pharmacyRef, {
+        [`${type}_clicks`]: admin.firestore.FieldValue.increment(1),
+        updated_at: now
       });
+
+      await batch.commit();
       
       res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Public: Get Mercado Pago Config (Public Key)
+  app.get('/api/public/mercadopago-config', async (req, res) => {
+    try {
+      const configDoc = await db.collection('config').doc('mercadopago').get();
+      const config = configDoc.data();
+      res.json({
+        public_key: config?.public_key || process.env.VITE_MERCADOPAGO_PUBLIC_KEY || ''
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Public: Get Subscription Plans
+  app.get('/api/public/subscription-plans', async (req, res) => {
+    try {
+      const plansDoc = await db.collection('config').doc('subscription_plans').get();
+      if (!plansDoc.exists) {
+        return res.json({
+          monthly: { active: true, price: 6.90, title: 'Plano Mensal', frequency: 1, frequency_type: 'months' },
+          annual: { active: true, price: 69.96, title: 'Plano Anual', frequency: 1, frequency_type: 'years' }
+        });
+      }
+      res.json(plansDoc.data());
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -722,27 +918,312 @@ async function startServer() {
     }
   });
 
+  // Subscriptions: Create Subscription (Recurrent)
+  app.post('/api/subscriptions/create', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: 'Acesso negado' });
+
+    try {
+      const { card_token, email, payment_method_id, installments = 1, identificationType, identificationNumber, planType = 'annual' } = req.body;
+      const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
+      if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
+      
+      const pharmacyDoc = pharmacySnapshot.docs[0];
+      const pharmacyData = pharmacyDoc.data();
+      const pharmacyId = pharmacyDoc.id;
+
+      // Fetch dynamic plan config
+      const plansDoc = await db.collection('config').doc('subscription_plans').get();
+      const plansData = plansDoc.exists ? plansDoc.data() : {
+        monthly: { active: true, price: 6.90, title: 'Plano Mensal', frequency: 1, frequency_type: 'months' },
+        annual: { active: true, price: 69.96, title: 'Plano Anual', frequency: 1, frequency_type: 'years' }
+      };
+      const planConfig = (plansData as any)[planType];
+      if (!planConfig || !planConfig.active) {
+         return res.status(400).json({ error: 'Plano selecionado não está disponível.' });
+      }
+
+      // Handle Free Plan bypass
+      if (planConfig.price === 0) {
+        const now = new Date().toISOString();
+        const nextBilling = calculateNextBillingDate(planConfig.frequency || 1, planConfig.frequency_type || 'years');
+        
+        await db.collection('subscriptions').add({
+          pharmacy_id: pharmacyId,
+          status: 'active',
+          plan_type: planType,
+          amount: 0,
+          created_at: now,
+          updated_at: now,
+          expires_at: nextBilling,
+          next_billing_date: nextBilling
+        });
+
+        await db.collection('pharmacies').doc(pharmacyId).update({
+          is_active: 1,
+          subscription_active: true,
+          sub_status: 'active',
+          updated_at: now
+        });
+
+        await updateDashboardStats();
+        return res.json({ success: true, message: 'Plano gratuito ativado!' });
+      }
+
+      const { customerClient, preApprovalClient, isMock } = await getMPClient();
+
+      // 1. Ensure Customer exists (Optionally stored in MP)
+      let customerId = pharmacyData.mp_customer_id;
+      if (!customerId && !isMock) {
+        try {
+          const customer = await customerClient.create({
+            body: {
+              email: email || pharmacyData.email,
+              first_name: pharmacyData.name.split(' ')[0],
+              last_name: pharmacyData.name.split(' ').slice(1).join(' ') || 'Farmácia',
+              identification: {
+                type: identificationType || 'CPF',
+                number: identificationNumber
+              }
+            }
+          });
+          customerId = customer?.id;
+          if (customerId) {
+            await db.collection('pharmacies').doc(pharmacyId).update({ mp_customer_id: customerId });
+          }
+        } catch (e) {
+          console.warn('Note: MP Customer creation skipped or failed.');
+        }
+      }
+
+      // 2. Create PreApproval (Subscription)
+      const now = new Date();
+      const endYear = addYears(now, 1);
+      
+      const preApprovalBody: any = {
+        back_url: `${process.env.APP_URL || 'https://example.com'}/pharmacy`,
+        reason: `${planConfig.title} - Farmácia de Plantão Brasil`,
+        auto_recurring: {
+          frequency: planConfig.frequency,
+          frequency_type: planConfig.frequency_type, // 'months' | 'years'
+          transaction_amount: planConfig.price,
+          currency_id: 'BRL',
+          // Free trial or initial payment logic can go here
+        },
+        payer_email: email || pharmacyData.email,
+        status: 'pending'
+      };
+
+      // If we have a card token, we can try to finalize it
+      if (card_token) {
+        preApprovalBody.card_token_id = card_token;
+        preApprovalBody.status = 'authorized'; 
+      }
+
+      let subscriptionResponse: any;
+      try {
+        if (isMock) throw new Error('mock_mode');
+        subscriptionResponse = await preApprovalClient.create({ body: preApprovalBody });
+      } catch (subError: any) {
+        if (isMock || subError.message === 'mock_mode') {
+          subscriptionResponse = {
+            id: 'sub_' + uuidv4().substring(0, 8),
+            status: 'pending', // Do not automatically authorize in mock mode
+            reason: preApprovalBody.reason,
+            init_point: 'https://www.mercadopago.com.br/subscriptions/checkout?preapproval_id=mock'
+          };
+        } else {
+          console.error('Mercado Pago API Subscription Error:', subError.message || subError);
+          const formatted = formatMPError(subError);
+          return res.status(subError.status || 500).json({ 
+            error: formatted.message, 
+            details: formatted.details 
+          });
+        }
+      }
+
+      // 3. Save to Firestore
+      const subData = {
+        pharmacy_id: pharmacyId,
+        mp_preapproval_id: subscriptionResponse.id,
+        status: subscriptionResponse.status === 'authorized' ? 'active' : 'pending',
+        amount: planConfig.price,
+        plan_type: planType,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        next_billing_date: calculateNextBillingDate(planConfig.frequency || 1, planConfig.frequency_type || 'months'),
+        init_point: subscriptionResponse.init_point
+      };
+
+      await db.collection('subscriptions').add(subData);
+
+      // If authorized, activate pharmacy
+      if (subData.status === 'active') {
+        await db.collection('pharmacies').doc(pharmacyId).update({
+          is_active: 1,
+          subscription_active: true
+        });
+      }
+
+      res.json({
+        success: true,
+        subscription_id: subscriptionResponse.id,
+        status: subData.status,
+        init_point: subscriptionResponse.init_point
+      });
+
+    } catch (err: any) {
+      console.error('Error creating subscription:', err);
+      res.status(500).json({ error: 'Erro ao processar assinatura: ' + err.message });
+    }
+  });
+
+  // Pharmacy: Upgrade/Downgrade Subscription
+  app.put('/api/subscriptions/update', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: 'Acesso negado' });
+    
+    try {
+      const { planType, card_token, email, identificationType, identificationNumber } = req.body;
+      const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
+      if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
+      const pharmacyId = pharmacySnapshot.docs[0].id;
+
+      // 1. Cancel OLD
+      await cancelExistingSubscriptions(pharmacyId);
+
+      // 2. Create NEW
+      const plansDoc = await db.collection('config').doc('subscription_plans').get();
+      const plansData = plansDoc.exists ? plansDoc.data() : {
+        monthly: { active: true, price: 6.90, title: 'Plano Mensal', frequency: 1, frequency_type: 'months' },
+        annual: { active: true, price: 69.96, title: 'Plano Anual', frequency: 1, frequency_type: 'years' }
+      };
+      const planConfig = (plansData as any)[planType];
+      if (!planConfig || !planConfig.active) return res.status(400).json({ error: 'Plano selecionado não disponível' });
+
+      // Handle Free Plan bypass for updates
+      if (planConfig.price === 0) {
+        const now = new Date().toISOString();
+        const nextBilling = calculateNextBillingDate(planConfig.frequency || 1, planConfig.frequency_type || 'months');
+        
+        await db.collection('subscriptions').add({
+          pharmacy_id: pharmacyId,
+          status: 'active',
+          plan_type: planType,
+          amount: 0,
+          created_at: now,
+          updated_at: now,
+          expires_at: nextBilling,
+          next_billing_date: nextBilling
+        });
+
+        await db.collection('pharmacies').doc(pharmacyId).update({
+          is_active: 1,
+          subscription_active: true,
+          sub_status: 'active',
+          updated_at: now
+        });
+
+        await updateDashboardStats();
+        return res.json({ success: true, message: 'Plano gratuito ativado!' });
+      }
+
+      const { preApprovalClient, isMock } = await getMPClient();
+      const preApprovalBody: any = {
+        back_url: `${process.env.APP_URL || 'https://example.com'}/pharmacy`,
+        reason: `${planConfig.title} (Troca) - Farmácia de Plantão Brasil`,
+        auto_recurring: {
+          frequency: planConfig.frequency,
+          frequency_type: planConfig.frequency_type,
+          transaction_amount: planConfig.price,
+          currency_id: 'BRL',
+        },
+        payer_email: email || pharmacySnapshot.docs[0].data().email,
+        status: card_token ? 'authorized' : 'pending'
+      };
+      if (card_token) preApprovalBody.card_token_id = card_token;
+
+      let subscriptionResponse: any;
+      try {
+        if (isMock) throw new Error('mock_mode');
+        subscriptionResponse = await preApprovalClient.create({ body: preApprovalBody });
+      } catch (e: any) {
+        if (isMock || e.message === 'mock_mode') {
+          subscriptionResponse = {
+            id: 'sub_' + uuidv4().substring(0, 8),
+            status: card_token ? 'authorized' : 'pending',
+            reason: preApprovalBody.reason,
+            init_point: 'https://www.mercadopago.com.br/subscriptions/checkout?preapproval_id=mock'
+          };
+        } else {
+          console.error('Mercado Pago API Upgrade Error:', e.message || e);
+          return res.status(e.status || 500).json({ 
+            error: 'Erro na API do Mercado Pago ao atualizar', 
+            details: e.message || 'Falha ao processar troca de plano real.' 
+          });
+        }
+      }
+
+      const subData = {
+        pharmacy_id: pharmacyId,
+        mp_preapproval_id: subscriptionResponse.id,
+        status: subscriptionResponse.status === 'authorized' ? 'active' : 'pending',
+        amount: planConfig.price,
+        plan_type: planType,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        next_billing_date: calculateNextBillingDate(planConfig.frequency || 1, planConfig.frequency_type || 'months'),
+        init_point: subscriptionResponse.init_point
+      };
+
+      await db.collection('subscriptions').add(subData);
+
+      if (subData.status === 'active') {
+        await db.collection('pharmacies').doc(pharmacyId).update({ is_active: 1, subscription_active: true });
+      }
+
+      res.json({
+        success: true,
+        message: 'Plano atualizado. Por favor, conclua o pagamento se necessário.',
+        subscription_id: subscriptionResponse.id,
+        init_point: subscriptionResponse.init_point
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Payments: Generate Pix
   app.post('/api/payments/pix', authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'pharmacy') return res.status(403).json({ error: 'Acesso negado' });
     
     try {
+      const { planType = 'annual' } = req.body;
       const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
       if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
       const pharmacy = pharmacySnapshot.docs[0].data();
       const pharmacyId = pharmacySnapshot.docs[0].id;
 
-      // In a real app, we would use the actual Mercado Pago API.
+      // Fetch dynamic plan config
+      const plansDoc = await db.collection('config').doc('subscription_plans').get();
+      const plansData = plansDoc.exists ? plansDoc.data() : {
+        monthly: { active: true, price: 6.90, title: 'Plano Mensal' },
+        annual: { active: true, price: 69.96, title: 'Plano Anual' }
+      };
+      const planConfig = (plansData as any)[planType];
+      if (!planConfig || !planConfig.active) {
+         return res.status(400).json({ error: 'Plano selecionado não está disponível.' });
+      }
+
       let paymentResponse: any = null;
-      const transactionAmount = 69.96;
+      const transactionAmount = planConfig.price;
       const idempotencyKey = uuidv4();
 
-      const { paymentClient } = await getMPClient();
+      const { paymentClient, isMock } = await getMPClient();
       try {
+        if (isMock) throw new Error('mock_mode');
         paymentResponse = await paymentClient.create({
           body: {
             transaction_amount: transactionAmount,
-            description: 'Assinatura Anual - Farmácia de Plantão Brasil',
+            description: `${planConfig.title} - Farmácia de Plantão Brasil`,
             payment_method_id: 'pix',
             payer: {
               email: pharmacy.email,
@@ -752,18 +1233,26 @@ async function startServer() {
           },
           requestOptions: { idempotencyKey }
         });
-      } catch (mpError) {
-        console.warn('Mercado Pago API failed, using mock data for development.', mpError);
-        paymentResponse = {
-          id: Math.floor(Math.random() * 1000000000),
-          status: 'pending',
-          point_of_interaction: {
-            transaction_data: {
-              qr_code: '00020101021126580014br.gov.bcb.pix0136123e4567-e89b-12d3-a456-426655440000520400005303986540569.965802BR5913FARMACIA TESTE6008BRASILIA62070503***63041D3D',
-              qr_code_base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+      } catch (mpError: any) {
+        if (isMock || mpError.message === 'mock_mode') {
+          paymentResponse = {
+            id: Math.floor(Math.random() * 1000000000),
+            status: 'pending',
+            point_of_interaction: {
+              transaction_data: {
+                qr_code: '00020101021126580014br.gov.bcb.pix0136123e4567-e89b-12d3-a456-426655440000520400005303986540569.965802BR5913FARMACIA TESTE6008BRASILIA62070503***63041D3D',
+                qr_code_base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+              }
             }
-          }
-        };
+          };
+        } else {
+          console.error('Mercado Pago API PIX Error:', mpError.message || mpError);
+          const formatted = formatMPError(mpError);
+          return res.status(mpError.status || 500).json({ 
+            error: formatted.message, 
+            details: formatted.details 
+          });
+        }
       }
 
       const mpPaymentId = paymentResponse.id.toString();
@@ -774,6 +1263,7 @@ async function startServer() {
         pharmacy_id: pharmacyId,
         amount: transactionAmount,
         method: 'pix',
+        plan_type: planType, // Added plan_type
         status: 'pending',
         mp_payment_id: mpPaymentId,
         created_at: now,
@@ -793,70 +1283,187 @@ async function startServer() {
   });
 
   // Webhook: Receive Mercado Pago Notifications
-  app.post('/api/webhooks/payment', async (req, res) => {
-    const { type, data } = req.body;
+  app.post('/api/webhooks/payment', express.json(), async (req, res) => {
+    // 1. Signature Validation (Security)
+    const xSignature = req.headers['x-signature'] as string;
+    const xRequestId = req.headers['x-request-id'] as string;
+    const secret = process.env.MERCADOPAGO_WEBHOOK_SECRET;
+
+    if (xSignature && xRequestId && secret) {
+      try {
+        const parts = xSignature.split(',');
+        let ts = '';
+        let hash = '';
+        parts.forEach(part => {
+          const [key, value] = part.split('=');
+          if (key.trim() === 'ts') ts = value;
+          if (key.trim() === 'v1') hash = value;
+        });
+
+        // For Mercado Pago signature v1: 
+        // id : event_id or data.id from url parameters
+        const urlParams = new URLSearchParams(req.query as any);
+        const dataId = urlParams.get('data.id') || req.body.data?.id || req.query.id;
+        
+        if (ts && hash && dataId) {
+          const manifest = `id:${dataId};request-id:${xRequestId};ts:${ts};`;
+          const hmac = crypto.createHmac('sha256', secret).update(manifest).digest('hex');
+          
+          if (hmac !== hash) {
+            console.error('Invalid Webhook Signature. Expected:', hash, 'Got:', hmac);
+            return res.status(403).json({ error: 'Invalid Signature' });
+          }
+        }
+      } catch (e) {
+        console.error('Error validating webhook signature', e);
+        // Continue processing in development if validation errors out 
+      }
+    } else {
+      console.warn('Webhook received without X-Signature headers or Webhook Secret missing in .env. Processing as unverified.');
+    }
+
+    const { type, action, data } = req.body;
+    const eventId = req.query.id || req.body.id; // Mercado Pago sends ID in query or body depending on event
     
+    // 2. Handle standard payment events (Pix, single cards)
     if (type === 'payment' && data && data.id) {
       try {
         const paymentId = data.id.toString();
-        const paymentsSnapshot = await db.collection('payments').where('mp_payment_id', '==', paymentId).get();
+        // Use the API client to physically verify the payment status to further prevent spoofing
+        const { paymentClient } = await getMPClient();
+        const verifiedPayment = await paymentClient.get({ id: paymentId });
         
+        const paymentsSnapshot = await db.collection('payments').where('mp_payment_id', '==', paymentId).get();
         if (!paymentsSnapshot.empty) {
           const paymentDoc = paymentsSnapshot.docs[0];
-          const payment = paymentDoc.data();
+          const localPayment = paymentDoc.data();
           
-          if (payment.status !== 'approved') {
+          if (localPayment.status !== verifiedPayment.status) {
             await db.collection('payments').doc(paymentDoc.id).update({
-              status: 'approved',
+              status: verifiedPayment.status,
               updated_at: new Date().toISOString()
             });
 
-            const pharmacyId = payment.pharmacy_id;
-            const expiresAt = addYears(new Date(), 1);
+            if (verifiedPayment.status === 'approved') {
+              const pharmacyId = localPayment.pharmacy_id;
+              const planType = localPayment.plan_type || 'annual';
 
-            const subsSnapshot = await db.collection('subscriptions')
-              .where('pharmacy_id', '==', pharmacyId)
-              .get();
-            
-            const pendingSub = subsSnapshot.docs.find(doc => doc.data().status === 'pending' || doc.data().status === 'expired');
-            
-            if (pendingSub) {
-              await db.collection('subscriptions').doc(pendingSub.id).update({
-                status: 'active',
-                expires_at: expiresAt.toISOString(),
-                updated_at: new Date().toISOString()
-              });
-            } else {
+              // Fetch dynamic plan config to know duration
+              const plansDoc = await db.collection('config').doc('subscription_plans').get();
+              const plansData = plansDoc.exists ? plansDoc.data() : {
+                monthly: { frequency: 1, frequency_type: 'months' },
+                annual: { frequency: 1, frequency_type: 'years' }
+              };
+              const planConfig = (plansData as any)[planType] || { frequency: 1, frequency_type: 'years' };
+
+              let expiresAt = new Date();
+              if (planConfig.frequency_type === 'years') {
+                expiresAt = addYears(expiresAt, planConfig.frequency || 1);
+              } else if (planConfig.frequency_type === 'months') {
+                expiresAt = addMonths(expiresAt, planConfig.frequency || 1);
+              } else {
+                expiresAt = addDays(expiresAt, planConfig.frequency || 30);
+              }
+              
+              // 1. Cancel ANY other existing active/pending subscription to ensure only the new one is active
+              await cancelExistingSubscriptions(pharmacyId);
+
+              const subsSnapshot = await db.collection('subscriptions')
+                .where('pharmacy_id', '==', pharmacyId)
+                .get();
+              
+              // We create a NEW one for fixed durations like PIX
               await db.collection('subscriptions').add({
                 pharmacy_id: pharmacyId,
                 status: 'active',
+                plan_type: planType,
                 expires_at: expiresAt.toISOString(),
                 created_at: new Date().toISOString(),
                 updated_at: new Date().toISOString()
               });
-            }
 
-            // Ensure pharmacy is active
-            const pharmDoc = await db.collection('pharmacies').doc(pharmacyId).get();
-            if (pharmDoc.exists) {
-              await db.collection('pharmacies').doc(pharmacyId).update({ 
-                is_active: 1,
-                sub_status: 'active',
-                updated_at: new Date().toISOString()
-              });
-              emailService.sendPaymentApprovedEmail(pharmDoc.data()?.email, pharmDoc.data()?.name);
-            }
+              // Ensure pharmacy is active
+              const pharmDoc = await db.collection('pharmacies').doc(pharmacyId).get();
+              if (pharmDoc.exists) {
+                await db.collection('pharmacies').doc(pharmacyId).update({ 
+                  is_active: 1,
+                  sub_status: 'active',
+                  updated_at: new Date().toISOString()
+                });
+                emailService.sendPaymentApprovedEmail(pharmDoc.data()?.email, pharmDoc.data()?.name);
+              }
 
-            await updateDashboardStats();
-            console.log(`Payment ${paymentId} approved. Pharmacy ${pharmacyId} activated.`);
+              await updateDashboardStats();
+              console.log(`Payment ${paymentId} verified and approved. Pharmacy ${pharmacyId} activated.`);
+            }
           }
         }
       } catch (err) {
-        console.error('Webhook processing error:', err);
+        console.error('Webhook processing error (Payment):', err);
+      }
+    }
+
+    // 3. Handle Subscription PreApproval events
+    if (type === 'subscription_preapproval' || action === 'created' || action === 'updated') {
+      const preApprovalId = data?.id || eventId;
+      if (preApprovalId) {
+        try {
+          const { preApprovalClient } = await getMPClient();
+          const verifiedSub = await preApprovalClient.get({ id: preApprovalId });
+          
+          if (verifiedSub && verifiedSub.id) {
+            const subsSnapshot = await db.collection('subscriptions').where('mp_preapproval_id', '==', verifiedSub.id).get();
+            if (!subsSnapshot.empty) {
+               const subDoc = subsSnapshot.docs[0];
+               const currentStatus = subDoc.data().status;
+               const newStatus = verifiedSub.status === 'authorized' ? 'active' : 'pending';
+
+               if (currentStatus !== newStatus) {
+                 await db.collection('subscriptions').doc(subDoc.id).update({
+                   status: newStatus,
+                   next_billing_date: verifiedSub.next_payment_date || null,
+                   updated_at: new Date().toISOString()
+                 });
+
+                 const pharmDocRef = db.collection('pharmacies').doc(subDoc.data().pharmacy_id);
+                 const pharmDoc = await pharmDocRef.get();
+                 
+                 if (pharmDoc.exists) {
+                   const email = pharmDoc.data()?.email;
+                   const name = pharmDoc.data()?.name;
+
+                   if (newStatus === 'active') {
+                      await pharmDocRef.update({ 
+                        is_active: 1, 
+                        subscription_active: true,
+                        updated_at: new Date().toISOString()
+                      });
+                      emailService.sendSubscriptionActiveEmail(email, name);
+                      console.log(`Subscription ${verifiedSub.id} activated pharmacy ${subDoc.data().pharmacy_id}`);
+                   } else if (newStatus === 'pending') {
+                      emailService.sendSubscriptionFailedEmail(email, name);
+                   } else if (verifiedSub.status === 'cancelled') {
+                      await pharmDocRef.update({ 
+                        is_active: 0, 
+                        subscription_active: false,
+                        updated_at: new Date().toISOString()
+                      });
+                      emailService.sendSubscriptionCancelledEmail(email, name);
+                   }
+                   
+                   await updateDashboardStats();
+                 }
+               }
+            }
+          }
+        } catch (err) {
+          console.error('Webhook processing error (PreApproval):', err);
+        }
       }
     }
     
-    res.status(200).json({ success: true });
+    // Always return 200 OK so MP doesn't retry infinitely 
+    res.status(200).json({ success: true, message: 'Webhook received' });
   });
 
   // Dev: Simulate Payment Approval
@@ -874,35 +1481,52 @@ async function startServer() {
       const paymentDoc = paymentsSnapshot.docs[0];
       const payment = paymentDoc.data();
       
+      const pharmacyId = payment.pharmacy_id;
+      const planType = payment.plan_type || 'annual';
+
+      // Fetch dynamic plan config to know duration
+      const plansDoc = await db.collection('config').doc('subscription_plans').get();
+      const plansData = plansDoc.exists ? plansDoc.data() : {
+        monthly: { frequency: 1, frequency_type: 'months' },
+        annual: { frequency: 1, frequency_type: 'years' }
+      };
+      const planConfig = (plansData as any)[planType] || { frequency: 1, frequency_type: 'years' };
+
+      const nextBillingDate = calculateNextBillingDate(planConfig.frequency || 1, planConfig.frequency_type || 'months');
+      
       await db.collection('payments').doc(paymentDoc.id).update({
         status: 'approved',
         updated_at: new Date().toISOString()
       });
 
-      const pharmacyId = payment.pharmacy_id;
-      const expiresAt = addYears(new Date(), 1);
-
-      const subsSnapshot = await db.collection('subscriptions')
-        .where('pharmacy_id', '==', pharmacyId)
-        .get();
-      
-      const pendingSub = subsSnapshot.docs.find(doc => doc.data().status === 'pending' || doc.data().status === 'expired');
-      
-      if (pendingSub) {
-        await db.collection('subscriptions').doc(pendingSub.id).update({
+      // Update/Create Subscription
+      const subSnapshot = await db.collection('subscriptions').where('pharmacy_id', '==', pharmacyId).get();
+      if (!subSnapshot.empty) {
+        await subSnapshot.docs[0].ref.update({
           status: 'active',
-          expires_at: expiresAt.toISOString(),
-          updated_at: new Date().toISOString()
+          updated_at: new Date().toISOString(),
+          expires_at: nextBillingDate,
+          next_billing_date: nextBillingDate
         });
       } else {
         await db.collection('subscriptions').add({
           pharmacy_id: pharmacyId,
           status: 'active',
-          expires_at: expiresAt.toISOString(),
+          plan_type: planType,
+          amount: planConfig.price || 0,
           created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
+          updated_at: new Date().toISOString(),
+          expires_at: nextBillingDate,
+          next_billing_date: nextBillingDate
         });
       }
+
+      // Update pharmacy
+      await db.collection('pharmacies').doc(pharmacyId).update({
+        is_active: 1,
+        subscription_active: true,
+        updated_at: new Date().toISOString()
+      });
 
       const pharmDoc = await db.collection('pharmacies').doc(pharmacyId).get();
       if (pharmDoc.exists) {
@@ -1013,6 +1637,25 @@ async function startServer() {
         ...doc.data()
       }));
       res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Get pharmacy payments
+  app.get('/api/admin/pharmacies/:id/payments', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    try {
+      const snapshot = await db.collection('payments')
+        .where('pharmacy_id', '==', req.params.id)
+        .orderBy('created_at', 'desc')
+        .get();
+      
+      const payments = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      res.json(payments);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1301,14 +1944,22 @@ async function startServer() {
   app.get('/api/admin/shifts', authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
     try {
-      const shiftsSnapshot = await db.collection('shifts').get();
-      const shifts = [];
-      
-      for (const sDoc of shiftsSnapshot.docs) {
+      const [shiftsSnapshot, pharmaciesSnapshot] = await Promise.all([
+        db.collection('shifts').get(),
+        db.collection('pharmacies').get()
+      ]);
+
+      const pharmaciesMap = new Map(pharmaciesSnapshot.docs.map(doc => [doc.id, doc.data()]));
+      const shifts = shiftsSnapshot.docs.map(sDoc => {
         const s = sDoc.data();
-        const pharmacyDoc = await db.collection('pharmacies').doc(s.pharmacy_id).get();
-        shifts.push({ id: sDoc.id, ...s, pharmacy_name: pharmacyDoc.data()?.name || 'Desconhecida' });
-      }
+        const pharmacy = pharmaciesMap.get(s.pharmacy_id);
+        return { 
+          id: sDoc.id, 
+          ...s, 
+          pharmacy_name: pharmacy?.name || 'Desconhecida' 
+        };
+      });
+
       res.json(shifts);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1478,6 +2129,159 @@ async function startServer() {
         updated_at: now
       });
       res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Get Subscription Plans
+  app.get('/api/admin/subscription-plans', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    try {
+      const plansDoc = await db.collection('config').doc('subscription_plans').get();
+      if (!plansDoc.exists) {
+        return res.json({
+          monthly: { active: true, price: 6.90, title: 'Plano Mensal', frequency: 1, frequency_type: 'months' },
+          annual: { active: true, price: 69.96, title: 'Plano Anual', frequency: 1, frequency_type: 'years' }
+        });
+      }
+      res.json(plansDoc.data());
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Get Subscriptions (Subscribers)
+  app.get('/api/admin/subscriptions', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    try {
+      const subsSnapshot = await db.collection('subscriptions').get();
+      const pharmaciesSnapshot = await db.collection('pharmacies').get();
+      
+      const pharmMap = new Map();
+      pharmaciesSnapshot.forEach(doc => pharmMap.set(doc.id, doc.data()));
+
+      const subs = subsSnapshot.docs.map(doc => {
+        const data = doc.data();
+        const pharm = pharmMap.get(data.pharmacy_id);
+        return {
+          id: doc.id,
+          ...data,
+          pharmacy_name: pharm?.name || 'Desconhecida',
+          pharmacy_email: pharm?.email || data.payer_email || ''
+        };
+      });
+      res.json(subs);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Update Subscription
+  app.put('/api/admin/subscriptions/:id', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    try {
+      const { status, plan_type, next_billing_date, expires_at } = req.body;
+      const subRef = db.collection('subscriptions').doc(req.params.id);
+      const subDoc = await subRef.get();
+      if (!subDoc.exists) return res.status(404).json({ error: 'Assinatura não encontrada' });
+
+      const updateData: any = {
+        status,
+        next_billing_date: next_billing_date || null,
+        expires_at: expires_at || null,
+        updated_at: new Date().toISOString()
+      };
+
+      if (plan_type) updateData.plan_type = plan_type;
+
+      await subRef.update(updateData);
+
+      // Sync with pharmacy
+      const pharmacyId = subDoc.data()?.pharmacy_id;
+      if (pharmacyId) {
+         const isActive = status === 'active' || status === 'authorized';
+         await db.collection('pharmacies').doc(pharmacyId).update({
+           subscription_active: isActive,
+           is_active: isActive ? 1 : 0
+         });
+      }
+
+      res.json({ message: 'Assinatura atualizada' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Delete Subscription
+  app.delete('/api/admin/subscriptions/:id', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    try {
+      const subRef = db.collection('subscriptions').doc(req.params.id);
+      const subDoc = await subRef.get();
+      if (!subDoc.exists) return res.status(404).json({ error: 'Assinatura não encontrada' });
+
+      const pharmacyId = subDoc.data()?.pharmacy_id;
+      await subRef.delete();
+
+      if (pharmacyId) {
+        await db.collection('pharmacies').doc(pharmacyId).update({
+          subscription_active: false,
+          is_active: 0
+        });
+      }
+      res.json({ message: 'Assinatura excluída' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Test Mercado Pago Credentials
+  app.post('/api/admin/config/test-mercadopago', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    const { access_token } = req.body;
+    
+    if (!access_token) return res.status(400).json({ error: 'Token de acesso é obrigatório' });
+
+    try {
+      if (access_token === 'TEST-1234567890' || access_token === 'YOUR_MERCADOPAGO_ACCESS_TOKEN') {
+        return res.status(400).json({ 
+          success: false, 
+          error: 'Token de teste/placeholder detectado.',
+          details: 'Por favor, insira um Access Token real do seu painel do Mercado Pago.' 
+        });
+      }
+
+      const tempClient = new MercadoPagoConfig({ accessToken: access_token, options: { timeout: 7000 } });
+      const tempCustomer = new Customer(tempClient);
+      
+      // Perform a search that actually hits the API and verifies the token identity
+      console.log('Testing MP Connection with token:', access_token.substring(0, 10) + '...');
+      const result = await tempCustomer.search({ options: { limit: 1 } });
+      console.log('MP Test Result received.');
+      
+      res.json({ success: true, message: 'Credenciais válidas! Conexão com Mercado Pago estabelecida com sucesso.' });
+    } catch (err: any) {
+      console.error('MP Test API Error Payload:', err.message, err.status, JSON.stringify(err.cause || {}));
+      // MP errors often contain detailed messages in cause or message
+      const errorMsg = err.message || 'Erro de autenticação com Mercado Pago';
+      res.status(401).json({ 
+        success: false, 
+        error: errorMsg,
+        details: err.cause?.[0]?.description || 'Verifique se o Access Token está correto.'
+      });
+    }
+  });
+
+  // Admin: Save Subscription Plans
+  app.put('/api/admin/subscription-plans', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    try {
+      await db.collection('config').doc('subscription_plans').set({
+        ...req.body,
+        updated_at: new Date().toISOString()
+      });
+      res.json({ message: 'Planos atualizados com sucesso' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

@@ -5,6 +5,8 @@ import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { collection, addDoc, setDoc, doc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import GoogleLoginButton from '../components/GoogleLoginButton';
+import { geocodeAddress } from '../lib/geocoding';
+import { handleFirestoreError, OperationType } from '../lib/firebaseError';
 
 export default function Register() {
   const [searchParams] = useSearchParams();
@@ -108,6 +110,7 @@ export default function Register() {
       } else if (err.code === 'auth/weak-password') {
         setError('A senha deve ter pelo menos 6 caracteres.');
       } else {
+        handleFirestoreError(err, OperationType.WRITE, 'users/pharmacies/subscriptions');
         setError(err.message || 'Erro ao cadastrar');
       }
     } finally {
@@ -131,13 +134,12 @@ export default function Register() {
           }));
 
           // Simple Geocoding (Nominatim)
-          const geoRes = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(`${data.logradouro}, ${data.localidade}, ${data.uf}, Brazil`)}`);
-          const geoData = await geoRes.json();
-          if (geoData && geoData.length > 0) {
+          const geoData = await geocodeAddress(data.logradouro, data.localidade, data.uf);
+          if (geoData) {
             setFormData(prev => ({
               ...prev,
-              lat: parseFloat(geoData[0].lat),
-              lng: parseFloat(geoData[0].lon)
+              lat: geoData.lat,
+              lng: geoData.lng
             }));
           }
         }
@@ -211,11 +213,11 @@ export default function Register() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700">E-mail</label>
-                  <input type="email" name="email" required onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
+                  <input type="email" name="email" value={formData.email || ''} required onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Senha</label>
-                  <input type="password" name="password" required onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
+                  <input type="password" name="password" value={formData.password || ''} required onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
                 </div>
               </div>
             </div>
@@ -227,19 +229,19 @@ export default function Register() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="md:col-span-2">
                     <label className="block text-sm font-medium text-gray-700">Nome da Farmácia</label>
-                    <input type="text" name="name" required onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
+                    <input type="text" name="name" value={formData.name || ''} required onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Telefone</label>
-                    <input type="text" name="phone" required onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
+                    <input type="text" name="phone" value={formData.phone || ''} required onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700">WhatsApp</label>
-                    <input type="text" name="whatsapp" required onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
+                    <input type="text" name="whatsapp" value={formData.whatsapp || ''} required onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
                   </div>
                   <div className="md:col-span-2">
                     <label className="block text-sm font-medium text-gray-700">Site (Opcional)</label>
-                    <input type="url" name="website" onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
+                    <input type="url" name="website" value={formData.website || ''} onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
                   </div>
                 </div>
               </div>
@@ -248,7 +250,7 @@ export default function Register() {
                 <h3 className="text-lg font-medium text-gray-900 border-b pb-2 mb-4">Dados Pessoais</h3>
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Nome Completo</label>
-                  <input type="text" name="name" required onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
+                  <input type="text" name="name" value={formData.name || ''} required onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
                 </div>
               </div>
             )}
@@ -259,27 +261,27 @@ export default function Register() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700">CEP</label>
-                  <input type="text" name="cep" required placeholder="00000-000" onBlur={handleCepBlur} onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
+                  <input type="text" name="cep" value={formData.cep || ''} required placeholder="00000-000" onBlur={handleCepBlur} onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
                 </div>
                 <div className="md:col-span-2">
                   <label className="block text-sm font-medium text-gray-700">Rua</label>
-                  <input type="text" name="street" value={formData.street} required onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
+                  <input type="text" name="street" value={formData.street || ''} required onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Número</label>
-                  <input type="text" name="number" required onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
+                  <input type="text" name="number" value={formData.number || ''} required onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Bairro</label>
-                  <input type="text" name="neighborhood" value={formData.neighborhood} required onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
+                  <input type="text" name="neighborhood" value={formData.neighborhood || ''} required onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Cidade</label>
-                  <input type="text" name="city" value={formData.city} required onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
+                  <input type="text" name="city" value={formData.city || ''} required onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Estado (UF)</label>
-                  <input type="text" name="state" value={formData.state} required maxLength={2} onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm uppercase" />
+                  <input type="text" name="state" value={formData.state || ''} required maxLength={2} onChange={handleChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm uppercase" />
                 </div>
               </div>
             </div>

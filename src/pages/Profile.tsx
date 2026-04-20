@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { User, MapPin, Lock, Save, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { geocodeAddress } from '../lib/geocoding';
+import { getAuthToken } from '../lib/firebase';
 
 export default function Profile() {
   const [formData, setFormData] = useState<any>({
@@ -26,7 +28,7 @@ export default function Profile() {
 
   useEffect(() => {
     const fetchProfile = async () => {
-      const token = localStorage.getItem('token');
+      const token = await getAuthToken();
       if (!token) {
         navigate('/login');
         return;
@@ -38,12 +40,16 @@ export default function Profile() {
         });
         const data = await res.json();
         if (res.ok) {
-          setFormData({
-            ...formData,
-            ...data,
+          const cleanedData: any = {};
+          Object.keys(data).forEach(key => {
+            cleanedData[key] = data[key] === null ? '' : data[key];
+          });
+          setFormData((prev: any) => ({
+            ...prev,
+            ...cleanedData,
             password: '',
             confirmPassword: ''
-          });
+          }));
         } else {
           console.error('Error fetching profile:', data.error);
         }
@@ -77,13 +83,12 @@ export default function Profile() {
           }));
 
           // Fetch coordinates
-          const geoRes = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(`${data.logradouro}, ${data.localidade}, ${data.uf}, Brazil`)}`);
-          const geoData = await geoRes.json();
-          if (geoData && geoData.length > 0) {
+          const geoData = await geocodeAddress(data.logradouro, data.localidade, data.uf);
+          if (geoData) {
             setFormData((prev: any) => ({
               ...prev,
-              lat: parseFloat(geoData[0].lat),
-              lng: parseFloat(geoData[0].lon)
+              lat: geoData.lat,
+              lng: geoData.lng
             }));
           }
         }
@@ -103,7 +108,7 @@ export default function Profile() {
     }
 
     setSaving(true);
-    const token = localStorage.getItem('token');
+    const token = await getAuthToken();
 
     try {
       const res = await fetch('/api/user/profile', {
@@ -181,7 +186,7 @@ export default function Profile() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">E-mail</label>
                 <input 
                   type="email" 
-                  value={formData.email} 
+                  value={formData.email || ''} 
                   disabled 
                   className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-gray-500 cursor-not-allowed"
                 />
@@ -322,7 +327,7 @@ export default function Profile() {
                 <input 
                   type="password" 
                   name="password"
-                  value={formData.password} 
+                  value={formData.password || ''} 
                   onChange={handleChange}
                   placeholder="Deixe em branco para manter"
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"
@@ -333,7 +338,7 @@ export default function Profile() {
                 <input 
                   type="password" 
                   name="confirmPassword"
-                  value={formData.confirmPassword} 
+                  value={formData.confirmPassword || ''} 
                   onChange={handleChange}
                   placeholder="Repita a nova senha"
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"

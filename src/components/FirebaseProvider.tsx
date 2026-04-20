@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import { onAuthStateChanged, User } from 'firebase/auth';
+import { onAuthStateChanged, onIdTokenChanged, User } from 'firebase/auth';
 import { doc, getDocFromServer } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { handleFirestoreError, OperationType } from '../lib/firebaseError';
@@ -64,8 +64,20 @@ export function FirebaseProvider({ children }: Props) {
 
     testConnection();
 
-    // 2. Listen to Auth State
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    // 2. Listen to Auth State and ID Token changes
+    const unsubscribe = onIdTokenChanged(auth, async (currentUser) => {
+      if (currentUser) {
+        try {
+          const token = await currentUser.getIdToken();
+          localStorage.setItem('token', token);
+        } catch (err) {
+          console.error('Error refreshing token in provider:', err);
+        }
+      } else {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+      }
+      
       setUser(currentUser);
       setIsAuthReady(true);
     });

@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Search, MapPin, Phone, MessageCircle, Clock, Navigation } from 'lucide-react';
+import { safeJsonFetch } from '../lib/api';
+import { handleFirestoreError, OperationType } from '../lib/firebaseError';
 import { collection, query, where, getDocs, doc, getDoc, addDoc, onSnapshot, writeBatch, increment } from 'firebase/firestore';
 import { useSearchParams } from 'react-router-dom';
 import { db } from '../lib/firebase';
 import { getCachedLocation, setCachedLocation, clearCachedLocation } from '../lib/userCache';
+import { geocodeAddress, reverseGeocode } from '../lib/geocoding';
 
 interface Shift {
   start_time: string;
@@ -13,6 +16,7 @@ interface Shift {
 
 interface Pharmacy {
   id: string;
+  user_id?: string;
   name: string;
   phone: string;
   whatsapp: string;
@@ -23,6 +27,7 @@ interface Pharmacy {
   state: string;
   lat?: number;
   lng?: number;
+  distance?: number;
   shift: Shift;
 }
 
@@ -57,18 +62,24 @@ export default function OnCall() {
     };
   }, []);
 
-  const fetchOnCallPharmacies = (searchCity: string, searchState: string, coords?: {lat: number, lng: number}) => {
+  const fetchOnCallPharmacies = async (searchCity: string, searchState: string, coords?: {lat: number, lng: number}, searchCep?: string) => {
     if (unsubscribeRef.current) {
       unsubscribeRef.current();
     }
 
     setLoading(true);
-    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
-    const shiftsRef = collection(db, 'shifts');
-    const q = query(shiftsRef, where('date', '==', today));
+    try {
+      // Use optimized API endpoint instead of N+1 Firestore queries
+      const queryParams = new URLSearchParams();
+      if (searchCity) queryParams.append('city', searchCity);
+      if (searchState) queryParams.append('state', searchState);
+      if (searchCep) queryParams.append('cep', searchCep);
 
-    unsubscribeRef.current = onSnapshot(q, async (shiftsSnapshot) => {
-      if (shiftsSnapshot.empty) {
+      // Ensure base URL for internal API to avoid "Failed to fetch" in some environments
+      const baseUrl = window.location.origin;
+      const data = await safeJsonFetch(`${baseUrl}/api/public/on-call?${queryParams.toString()}`);
+      
+      if (!data || data.length === 0) {
         setNoShiftsInSystem(true);
         setPharmacies([]);
         setLoading(false);
@@ -76,53 +87,26 @@ export default function OnCall() {
       }
 
       setNoShiftsInSystem(false);
-      const onCallPharmacies: Pharmacy[] = [];
-      
-      for (const shiftDoc of shiftsSnapshot.docs) {
-        const shift = shiftDoc.data();
-        const pharmacyRef = doc(db, 'pharmacies', shift.pharmacy_id);
-        const pharmacySnap = await getDoc(pharmacyRef);
-        
-        if (pharmacySnap.exists()) {
-          const pharmacy = pharmacySnap.data();
-          if (pharmacy.is_active === 1) {
-            const pharmacyData = {
-              id: pharmacySnap.id,
-              ...pharmacy,
-              shift: {
-                start_time: shift.start_time,
-                end_time: shift.end_time,
-                is_24h: shift.is_24h
-              }
-            } as Pharmacy;
+      let onCallPharmacies = data as Pharmacy[];
 
-            let isNear = false;
-            if (coords && pharmacyData.lat && pharmacyData.lng) {
-              const dist = getDistance(coords.lat, coords.lng, Number(pharmacyData.lat), Number(pharmacyData.lng));
-              if (dist <= 20) {
-                isNear = true;
-                onCallPharmacies.push(pharmacyData);
-              }
-            }
-
-            if (!isNear && searchCity) {
-              const cityMatch = pharmacyData.city.trim().toLowerCase() === searchCity.trim().toLowerCase();
-              const stateMatch = !searchState || pharmacyData.state.trim().toLowerCase() === searchState.trim().toLowerCase();
-              
-              if (cityMatch && stateMatch) {
-                onCallPharmacies.push(pharmacyData);
-              }
-            }
+      if (coords) {
+        onCallPharmacies = onCallPharmacies.map(p => {
+          if (p.lat && p.lng) {
+            const dist = getDistance(coords.lat, coords.lng, Number(p.lat), Number(p.lng));
+            return { ...p, distance: dist };
           }
-        }
+          return p;
+        }).sort((a, b) => (a.distance || 0) - (b.distance || 0));
       }
-      
+
       setPharmacies(onCallPharmacies);
+    } catch (error) {
+      console.error('Error fetching on-call data:', error);
+      handleFirestoreError(error, OperationType.GET, 'public/on-call');
+      setPharmacies([]);
+    } finally {
       setLoading(false);
-    }, (error) => {
-      console.error('Error in shifts listener', error);
-      setLoading(false);
-    });
+    }
   };
 
   const handleCepSearch = async (e?: React.FormEvent) => {
@@ -140,26 +124,20 @@ export default function OnCall() {
         setState(data.uf);
         
         // Geocode CEP to get coords for distance filtering
-        const geoRes = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(`${data.logradouro}, ${data.localidade}, ${data.uf}, Brazil`)}`, {
-          headers: {
-            'User-Agent': 'FarmaciasDePlantao/1.0',
-            'Accept-Language': 'pt-BR'
-          }
-        });
-        const geoData = await geoRes.json();
+        const geoData = await geocodeAddress(data.logradouro, data.localidade, data.uf);
         
-        if (geoData && geoData.length > 0) {
-          const coords = { lat: parseFloat(geoData[0].lat), lng: parseFloat(geoData[0].lon) };
+        if (geoData) {
+          const coords = { lat: geoData.lat, lng: geoData.lng };
           setUserCoords(coords);
           setLocationStatus('detected');
           setCachedLocation({ city: data.localidade, state: data.uf, cep: cleanCep, lat: coords.lat, lng: coords.lng, type: 'manual' });
-          fetchOnCallPharmacies(data.localidade, data.uf, coords);
+          fetchOnCallPharmacies(data.localidade, data.uf, coords, cleanCep);
         } else {
           // Fallback to just city/state if geocoding fails
           setUserCoords(null);
           setLocationStatus('idle');
           setCachedLocation({ city: data.localidade, state: data.uf, cep: cleanCep, type: 'manual' });
-          fetchOnCallPharmacies(data.localidade, data.uf);
+          fetchOnCallPharmacies(data.localidade, data.uf, undefined, cleanCep);
         }
       }
     } catch (err) {
@@ -179,27 +157,54 @@ export default function OnCall() {
           setUserCoords(coords);
           setLocationStatus('detected');
           
-          // Try to get city/state from coords for fallback
+          // Try to get city/state/cep from coords
           try {
-            const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${coords.lat}&lon=${coords.lng}`, {
-              headers: {
-                'User-Agent': 'FarmaciasDePlantao/1.0',
-                'Accept-Language': 'pt-BR'
-              }
-            });
-            const data = await res.json();
-            if (data.address) {
-              const detectedCity = data.address.city || data.address.town || data.address.village || data.address.suburb || '';
-              // For Brazil, state_code is often not present, but ISO3166-2-lvl4 has it like "BR-SP"
+            const data = await reverseGeocode(coords.lat, coords.lng);
+            if (data && data.address) {
+              const detectedCity = data.address.city || data.address.town || data.address.village || data.address.suburb || data.address.municipality || '';
               let detectedState = data.address.state_code || '';
+              const detectedCep = data.address.postcode || '';
+              
+              // Robust state/UF detection
               if (!detectedState && data.address['ISO3166-2-lvl4']) {
-                detectedState = data.address['ISO3166-2-lvl4'].split('-')[1];
+                const parts = data.address['ISO3166-2-lvl4'].split('-');
+                detectedState = parts.length > 1 ? parts[1] : parts[0];
+              }
+              
+              if (!detectedState) {
+                const stateCandidate = data.address.state || data.address.region || data.address.province;
+                if (stateCandidate) {
+                  const stateMap: Record<string, string> = {
+                    'acre': 'AC', 'alagoas': 'AL', 'amapa': 'AP', 'amazonas': 'AM',
+                    'bahia': 'BA', 'ceara': 'CE', 'distrito federal': 'DF', 'espirito santo': 'ES',
+                    'goias': 'GO', 'maranhao': 'MA', 'mato grosso': 'MT', 'mato grosso do sul': 'MS',
+                    'minas gerais': 'MG', 'para': 'PA', 'paraiba': 'PB', 'parana': 'PR',
+                    'pernambuco': 'PE', 'piaui': 'PI', 'rio de janeiro': 'RJ', 'rio grande do norte': 'RN',
+                    'rio grande do sul': 'RS', 'rondonia': 'RO', 'roraima': 'RR', 'santa catarina': 'SC',
+                    'sao paulo': 'SP', 'sergipe': 'SE', 'tocantins': 'TO'
+                  };
+                  const normalized = stateCandidate.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+                  detectedState = stateMap[normalized] || stateCandidate.substring(0, 2).toUpperCase();
+                }
+              }
+              
+              // Final sanitize
+              if (detectedState && detectedState.length > 2) {
+                detectedState = detectedState.substring(0, 2).toUpperCase();
               }
               
               setCity(detectedCity);
-              setState(detectedState);
-              setCachedLocation({ city: detectedCity, state: detectedState, lat: coords.lat, lng: coords.lng, type: 'gps' });
-              fetchOnCallPharmacies(detectedCity, detectedState, coords);
+              setState(detectedState || '');
+              if (detectedCep) setCep(detectedCep);
+              setCachedLocation({ 
+                city: detectedCity, 
+                state: detectedState || '', 
+                cep: detectedCep,
+                lat: coords.lat, 
+                lng: coords.lng, 
+                type: 'gps' 
+              });
+              fetchOnCallPharmacies(detectedCity, detectedState || '', coords, detectedCep);
             } else {
               fetchOnCallPharmacies('', '', coords);
             }
@@ -224,13 +229,22 @@ export default function OnCall() {
       const res = await fetch('https://ipwho.is/');
       const data = await res.json();
       if (data.success && data.latitude && data.longitude) {
+        const detectedCep = data.postal || '';
         const coords = { lat: data.latitude, lng: data.longitude };
         setUserCoords(coords);
         setLocationStatus('detected');
         setCity(data.city || '');
         setState(data.region_code || '');
-        setCachedLocation({ city: data.city || '', state: data.region_code || '', lat: coords.lat, lng: coords.lng, type: 'ip' });
-        fetchOnCallPharmacies(data.city || '', data.region_code || '', coords);
+        if (detectedCep) setCep(detectedCep);
+        setCachedLocation({ 
+          city: data.city || '', 
+          state: data.region_code || '', 
+          cep: detectedCep,
+          lat: coords.lat, 
+          lng: coords.lng, 
+          type: 'ip' 
+        });
+        fetchOnCallPharmacies(data.city || '', data.region_code || '', coords, detectedCep);
       } else {
         setLocationStatus('failed');
         fetchOnCallPharmacies(city, state);
@@ -276,7 +290,7 @@ export default function OnCall() {
       }
       
       if (cached.cep) setCep(cached.cep);
-      fetchOnCallPharmacies(cached.city, cached.state, coords);
+      fetchOnCallPharmacies(cached.city, cached.state, coords, cached.cep);
     } else {
       detectLocation();
     }
@@ -286,12 +300,13 @@ export default function OnCall() {
     e.preventDefault();
     setUserCoords(null); // Clear coords to force city/state search
     setLocationStatus('idle');
-    setCachedLocation({ city, state, cep, type: 'manual' });
-    fetchOnCallPharmacies(city, state);
+    setCachedLocation({ city, state, cep: '', type: 'manual' });
+    fetchOnCallPharmacies(city, state, undefined, '');
   };
 
   const handleTrackClick = async (id: string, type: 'whatsapp' | 'map') => {
     try {
+      const pharm = pharmacies.find(p => p.id === id);
       const batch = writeBatch(db);
       const clickRef = doc(collection(db, 'clicks'));
       const pharmacyRef = doc(db, 'pharmacies', id);
@@ -299,6 +314,7 @@ export default function OnCall() {
 
       batch.set(clickRef, {
         pharmacy_id: id,
+        user_id: pharm?.user_id || '', // Include owner_id for optimized security rules
         type,
         created_at: now,
         updated_at: now
@@ -401,7 +417,14 @@ export default function OnCall() {
             </span>
           )}
           
-          {userCoords && locationStatus === 'detected' && (
+          {cep && (
+            <span className="text-sm text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full flex items-center gap-2 border border-emerald-100">
+              <MapPin className="w-3 h-3" />
+              Restringindo à região do CEP: {cep.substring(0, 5)}
+            </span>
+          )}
+
+          {!cep && userCoords && locationStatus === 'detected' && (
             <span className="text-sm text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full flex items-center gap-2 border border-emerald-100">
               <MapPin className="w-3 h-3" />
               Mostrando resultados num raio de 20km
