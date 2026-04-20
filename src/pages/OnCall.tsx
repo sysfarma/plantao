@@ -69,17 +69,18 @@ export default function OnCall() {
 
     setLoading(true);
     try {
-      // Use optimized API endpoint instead of N+1 Firestore queries
-      const queryParams = new URLSearchParams();
-      if (searchCity) queryParams.append('city', searchCity);
-      if (searchState) queryParams.append('state', searchState);
-      if (searchCep) queryParams.append('cep', searchCep);
+      const today = new Intl.DateTimeFormat('sv-SE', {
+        timeZone: 'America/Sao_Paulo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      }).format(new Date());
 
-      // Ensure base URL for internal API to avoid "Failed to fetch" in some environments
-      const baseUrl = window.location.origin;
-      const data = await safeJsonFetch(`${baseUrl}/api/public/on-call?${queryParams.toString()}`);
-      
-      if (!data || data.length === 0) {
+      // Fetch today's shifts
+      const shiftsQ = query(collection(db, 'shifts'), where('date', '==', today));
+      const shiftsSnap = await getDocs(shiftsQ);
+
+      if (shiftsSnap.empty) {
         setNoShiftsInSystem(true);
         setPharmacies([]);
         setLoading(false);
@@ -87,7 +88,48 @@ export default function OnCall() {
       }
 
       setNoShiftsInSystem(false);
-      let onCallPharmacies = data as Pharmacy[];
+
+      // Fetch active pharmacies
+      let pQuery: any = query(collection(db, 'pharmacies'), where('is_active', '==', 1));
+      if (searchCity && searchState && !searchCep) {
+        pQuery = query(pQuery, where('city', '==', searchCity), where('state', '==', searchState));
+      }
+
+      const pSnap = await getDocs(pQuery);
+      const pharmaciesMap = new Map();
+      pSnap.docs.forEach(doc => pharmaciesMap.set(doc.id, { id: doc.id, ...(doc.data() as any) }));
+
+      // Map shifts directly to pharmacies
+      let onCallPharmacies: Pharmacy[] = [];
+      const cleanSearchCep = searchCep ? searchCep.replace(/\D/g, '').substring(0, 5) : null;
+
+      shiftsSnap.docs.forEach(doc => {
+        const shift = doc.data() as any;
+        const pharmacy = pharmaciesMap.get(shift.pharmacy_id);
+        
+        if (pharmacy) {
+          if (cleanSearchCep) {
+            const pharmCep = (pharmacy.cep || pharmacy.zip || '').replace(/\D/g, '').substring(0, 5);
+            if (pharmCep !== cleanSearchCep) return;
+          }
+          
+          if (searchCity && searchState && !searchCep) {
+            if ((pharmacy.city || '').toLowerCase() !== searchCity.toLowerCase() || 
+                (pharmacy.state || '').toLowerCase() !== searchState.toLowerCase()) {
+              return;
+            }
+          }
+
+          onCallPharmacies.push({
+            ...pharmacy,
+            shift: {
+              start_time: shift.start_time,
+              end_time: shift.end_time,
+              is_24h: shift.is_24h
+            }
+          });
+        }
+      });
 
       if (coords) {
         onCallPharmacies = onCallPharmacies.map(p => {

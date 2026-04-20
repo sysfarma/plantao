@@ -37,6 +37,8 @@ function getDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
 
 interface Highlight extends Pharmacy {
   type: 'day' | 'week' | 'month';
+  date_start?: string;
+  date_end?: string;
 }
 
 export default function Home() {
@@ -54,19 +56,43 @@ export default function Home() {
   const fetchPharmacies = async (searchCity: string, searchState: string, searchName: string, coords?: {lat: number, lng: number}, searchCep?: string) => {
     setLoading(true);
     try {
-      // Use optimized API endpoints instead of N+1 Firestore queries
-      const queryParams = new URLSearchParams();
-      if (searchCity) queryParams.append('city', searchCity);
-      if (searchState) queryParams.append('state', searchState);
-      if (searchName) queryParams.append('name', searchName);
-      if (searchCep) queryParams.append('cep', searchCep);
+      let pQuery: any = query(collection(db, 'pharmacies'), where('is_active', '==', 1));
+      if (searchCity && searchState && !searchCep) {
+        pQuery = query(pQuery, where('city', '==', searchCity), where('state', '==', searchState));
+      }
+      
+      const pSnap = await getDocs(pQuery);
+      let pharmData = pSnap.docs.map(doc => ({ id: doc.id, ...(doc.data() as any) }) as Pharmacy);
+      
+      if (searchName) {
+        pharmData = pharmData.filter(p => p.name.toLowerCase().includes(searchName.toLowerCase()));
+      }
+      if (searchCep) {
+        const cleanCep = searchCep.replace(/\D/g, '').substring(0, 5);
+        pharmData = pharmData.filter((p: any) => {
+          const pharmCep = (p.cep || p.zip || '').replace(/\D/g, '').substring(0, 5);
+          return pharmCep === cleanCep;
+        });
+      }
 
-      const [pharmDataRaw, highDataRaw] = await Promise.all([
-        safeJsonFetch(`${window.location.origin}/api/public/pharmacies?${queryParams.toString()}`),
-        safeJsonFetch(`${window.location.origin}/api/public/highlights?${queryParams.toString()}`)
-      ]);
-
-      let pharmData = pharmDataRaw;
+      const now = new Date().toISOString();
+      const hQuery = query(collection(db, 'highlights'), where('date_start', '<=', now));
+      const hSnap = await getDocs(hQuery);
+      
+      let highDataRaw = hSnap.docs.map(doc => ({ id: doc.id, ...(doc.data() as any) } as Highlight))
+        .filter(h => h.date_end && h.date_end >= now);
+        
+      if (searchCity && searchState && !searchCep) {
+        highDataRaw = highDataRaw.filter(h => h.city.toLowerCase() === searchCity.toLowerCase() && h.state.toLowerCase() === searchState.toLowerCase());
+      }
+      
+      highDataRaw = highDataRaw.map(h => {
+        const p = pharmData.find(p => p.id === (h as any).pharmacy_id);
+        if (p) {
+          return { ...h, name: p.name, phone: p.phone, whatsapp: p.whatsapp, street: p.street, number: p.number, neighborhood: p.neighborhood, city: p.city, state: p.state };
+        }
+        return null;
+      }).filter(Boolean) as Highlight[];
       
       // Filter by distance if coords are available and no city or CEP search is active
       if (coords && !searchCity && !searchCep) {
