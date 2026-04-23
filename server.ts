@@ -226,7 +226,7 @@ async function startServer() {
   // Debug: Check Admin Status
   app.get('/api/debug/admin-check', async (req, res) => {
     try {
-      const adminEmail = process.env.ADMIN_EMAIL;
+      const adminEmail = process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL.replace(/['"]/g, '') : null;
       if (!adminEmail) return res.status(500).json({ error: 'ADMIN_EMAIL not configured' });
       let userRecord = null;
       try {
@@ -270,10 +270,11 @@ async function startServer() {
 
       const decodedToken = await auth.verifyIdToken(token);
       
+      const adminEnv = process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL.replace(/['"]/g, '') : null;
       req.user = {
         id: decodedToken.uid,
         email: decodedToken.email,
-        role: (process.env.ADMIN_EMAIL && decodedToken.email === process.env.ADMIN_EMAIL) ? 'admin' : 'pharmacy'
+        role: (adminEnv && decodedToken.email === adminEnv) ? 'admin' : 'pharmacy'
       };
       next();
     } catch (error: any) {
@@ -363,7 +364,7 @@ async function startServer() {
       
       if (!userDoc.exists) {
         // Create new user profile
-        const adminEmail = process.env.ADMIN_EMAIL;
+        const adminEmail = process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL.replace(/['"]/g, '') : null;
         const role = (req.user.email === adminEmail ? 'admin' : 'client') as 'admin' | 'pharmacy' | 'client';
         const now = new Date().toISOString();
         
@@ -411,7 +412,7 @@ async function startServer() {
       } else {
         // Check if existing user needs admin upgrade
         const userData = userDoc.data();
-        const adminEmail = process.env.ADMIN_EMAIL;
+        const adminEmail = process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL.replace(/['"]/g, '') : null;
         if (adminEmail && req.user.email === adminEmail && userData?.role !== 'admin') {
           await db.collection('users').doc(req.user.id).update({
             role: 'admin',
@@ -442,7 +443,7 @@ async function startServer() {
     
     try {
       const userId = req.user.uid;
-      const adminEmail = process.env.ADMIN_EMAIL;
+      const adminEmail = process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL.replace(/['"]/g, '') : null;
       const role = (adminEmail && email === adminEmail) ? 'admin' : 'pharmacy';
       const now = new Date().toISOString();
       
