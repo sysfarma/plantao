@@ -1600,14 +1600,15 @@ async function startServer() {
       }
       
       // 2. Handle standard payment events (Pix, single cards)
-      if (type === 'payment' && data && data.id) {
+      const paymentId = (data && data.id) || req.query['data.id'];
+      if (type === 'payment' && paymentId) {
         try {
-          const paymentId = data.id.toString();
+          const paymentIdStr = paymentId.toString();
           // Use the API client to physically verify the payment status to further prevent spoofing
           const { paymentClient } = await getMPClient();
-          const verifiedPayment = await paymentClient.get({ id: paymentId });
+          const verifiedPayment = await paymentClient.get({ id: paymentIdStr });
           
-          const paymentsSnapshot = await db.collection('payments').where('mp_payment_id', '==', paymentId).get();
+          const paymentsSnapshot = await db.collection('payments').where('mp_payment_id', '==', paymentIdStr).get();
           if (!paymentsSnapshot.empty) {
             const paymentDoc = paymentsSnapshot.docs[0];
             const localPayment = paymentDoc.data();
