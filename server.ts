@@ -41,6 +41,13 @@ if (!admin.apps.length) {
       console.error('Error parsing FIREBASE_SERVICE_ACCOUNT_KEY. Please ensure it is a valid JSON string.');
       console.error('Falling back to default credentials.');
     }
+  } else {
+    console.error('===============================================================');
+    console.error('CRITICAL ERROR: FIREBASE_SERVICE_ACCOUNT_KEY is missing!');
+    console.error('The backend cannot access Firestore on external hosting (like Render) without it.');
+    console.error('Please add the FIREBASE_SERVICE_ACCOUNT_KEY environment variable.');
+    console.error('It should contain the full JSON string of your Firebase Service Account.');
+    console.error('===============================================================');
   }
 
   const appOptions: admin.AppOptions = {
@@ -57,6 +64,23 @@ if (!admin.apps.length) {
 
 const db = getFirestore(firebaseConfig.firestoreDatabaseId);
 const auth = getAuth();
+
+// --- Admin Audit Logger Helper ---
+async function logAdminAction(adminId: string, resourceType: string, resourceId: string, action: string, details?: any) {
+  try {
+    await db.collection('audit_logs').add({
+      admin_id: adminId,
+      resource_type: resourceType,
+      resource_id: resourceId,
+      action: action,
+      details: details || {},
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Failed to log admin action:', err);
+  }
+}
+// ---------------------------------
 
 let mpClient: MercadoPagoConfig;
 let paymentClient: Payment;
@@ -990,8 +1014,24 @@ async function startServer() {
           if (customerId) {
             await db.collection('pharmacies').doc(pharmacyId).update({ mp_customer_id: customerId });
           }
-        } catch (e) {
-          console.warn('Note: MP Customer creation skipped or failed.');
+        } catch (e: any) {
+          console.warn(`Note: MP Customer creation failed (${e.message}). Attempting fallback search...`);
+          try {
+            const customerEmail = email || pharmacyData.email;
+            const searchResult = await customerClient.search({ options: { email: customerEmail } });
+            
+            if (searchResult && searchResult.results && searchResult.results.length > 0) {
+              customerId = searchResult.results[0].id;
+              if (customerId) {
+                await db.collection('pharmacies').doc(pharmacyId).update({ mp_customer_id: customerId });
+                console.log(`Fallback successful: Linked existing MP Customer ${customerId} to Pharmacy ${pharmacyId}`);
+              }
+            } else {
+              console.warn('Fallback search yielded no results for email:', customerEmail);
+            }
+          } catch (searchError: any) {
+             console.error('Fallback customer search also failed:', searchError.message);
+          }
         }
       }
 
@@ -999,9 +1039,12 @@ async function startServer() {
       const now = new Date();
       const endYear = addYears(now, 1);
       
+      const appUrl = process.env.APP_URL || `https://${req.get('host')}`;
+      
       const preApprovalBody: any = {
-        back_url: `${process.env.APP_URL || 'https://example.com'}/pharmacy`,
+        back_url: `${appUrl}/pharmacy`,
         reason: `${planConfig.title} - Farmácia de Plantão Brasil`,
+        notification_url: `${appUrl}/webhooks`,
         auto_recurring: {
           frequency: planConfig.frequency,
           frequency_type: planConfig.frequency_type, // 'months' | 'years'
@@ -1077,6 +1120,145 @@ async function startServer() {
     }
   });
 
+  // Pharmacy: Cancel Subscription voluntarily
+  app.delete('/api/subscriptions/cancel', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: 'Acesso negado' });
+
+    try {
+      const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
+      if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
+      
+      const pharmacyDoc = pharmacySnapshot.docs[0];
+      const pharmacyId = pharmacyDoc.id;
+
+      // Find active subscription
+      const subSnapshot = await db.collection('subscriptions')
+        .where('pharmacy_id', '==', pharmacyId)
+        .where('status', 'in', ['active', 'pending', 'authorized'])
+        .get();
+
+      if (subSnapshot.empty) {
+        return res.status(400).json({ error: 'Nenhuma assinatura ativa encontrada para cancelar.' });
+      }
+
+      const activeSubDoc = subSnapshot.docs[0];
+      const activeSub = activeSubDoc.data();
+
+      // Cancel in Mercado Pago if managed by them
+      if (activeSub.mp_preapproval_id && !activeSub.mp_preapproval_id.startsWith('sub_mock') && activeSub.mp_preapproval_id !== 'mock') {
+        const { preApprovalClient, isMock } = await getMPClient();
+        if (!isMock) {
+          try {
+            await preApprovalClient.update({
+              id: activeSub.mp_preapproval_id,
+              body: { status: 'cancelled' }
+            });
+          } catch (mpError: any) {
+            console.error('Error cancelling sub in MP:', mpError.message);
+            // We ignore if it's already cancelled in MP to unblock the user locally
+            if (mpError.status !== 400 && mpError.status !== 404) {
+              const formatted = formatMPError(mpError);
+              return res.status(mpError.status || 500).json({ 
+                error: 'Erro no MercadoPago ao cancelar: ' + formatted.message,
+                details: formatted.details
+              });
+            }
+          }
+        }
+      }
+
+      const now = new Date().toISOString();
+
+      // Deactivate Sub
+      await db.collection('subscriptions').doc(activeSubDoc.id).update({
+        status: 'cancelled',
+        updated_at: now
+      });
+
+      // Deactivate Pharmacy
+      await db.collection('pharmacies').doc(pharmacyId).update({
+        is_active: 0,
+        subscription_active: false,
+        sub_status: 'cancelled',
+        updated_at: now
+      });
+
+      res.json({ success: true, message: 'Assinatura cancelada com sucesso.' });
+    } catch (err: any) {
+      console.error('Error in /api/subscriptions/cancel:', err);
+      res.status(500).json({ error: 'Erro ao cancelar assinatura: ' + err.message });
+    }
+  });
+
+  // Pharmacy: Update Subscription Card Token
+  app.put('/api/subscriptions/update-card', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: 'Acesso negado' });
+
+    try {
+      const { card_token } = req.body;
+      if (!card_token) return res.status(400).json({ error: 'Token do cartão não fornecido.' });
+
+      const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
+      if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
+      const pharmacyId = pharmacySnapshot.docs[0].id;
+
+      // Find active subscription
+      const subSnapshot = await db.collection('subscriptions')
+        .where('pharmacy_id', '==', pharmacyId)
+        .where('status', 'in', ['active', 'pending'])
+        .get();
+
+      if (subSnapshot.empty) {
+        return res.status(404).json({ error: 'Nenhuma assinatura ativa encontrada para atualizar o cartão.' });
+      }
+
+      // Filter sub with MP preapproval
+      let activeSub = null;
+      let activeSubDocId = null;
+      for (const doc of subSnapshot.docs) {
+        const data = doc.data();
+        if (data.mp_preapproval_id && !data.mp_preapproval_id.startsWith('sub_mock') && data.mp_preapproval_id !== 'mock') {
+          activeSub = data;
+          activeSubDocId = doc.id;
+          break;
+        }
+      }
+
+      if (!activeSub) {
+         return res.status(400).json({ error: 'Assinatura atual não é gerenciada pelo Mercado Pago.' });
+      }
+
+      const { preApprovalClient, isMock } = await getMPClient();
+      if (isMock) {
+        return res.json({ success: true, message: 'Cartão atualizado (modo mock).' });
+      }
+
+      try {
+        await preApprovalClient.update({
+          id: activeSub.mp_preapproval_id,
+          body: { card_token_id: card_token }
+        });
+      } catch (mpError: any) {
+        console.error('Error updating card in Mercado Pago:', mpError.message);
+        const formatted = formatMPError(mpError);
+        return res.status(mpError.status || 500).json({ 
+          error: formatted.message,
+          details: formatted.details
+        });
+      }
+
+      // Update timestamp
+      await db.collection('subscriptions').doc(activeSubDocId).update({
+        updated_at: new Date().toISOString()
+      });
+
+      res.json({ success: true, message: 'Cartão atualizado com sucesso.' });
+    } catch (err: any) {
+      console.error('Error in /api/subscriptions/update-card:', err);
+      res.status(500).json({ error: 'Erro ao analisar atualização de cartão: ' + err.message });
+    }
+  });
+
   // Pharmacy: Upgrade/Downgrade Subscription
   app.put('/api/subscriptions/update', authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'pharmacy') return res.status(403).json({ error: 'Acesso negado' });
@@ -1086,9 +1268,6 @@ async function startServer() {
       const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
       if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
       const pharmacyId = pharmacySnapshot.docs[0].id;
-
-      // 1. Cancel OLD
-      await cancelExistingSubscriptions(pharmacyId);
 
       // 2. Create NEW
       const plansDoc = await db.collection('config').doc('subscription_plans').get();
@@ -1104,7 +1283,7 @@ async function startServer() {
         const now = new Date().toISOString();
         const nextBilling = calculateNextBillingDate(planConfig.frequency || 1, planConfig.frequency_type || 'months');
         
-        await db.collection('subscriptions').add({
+        const newSubRef = await db.collection('subscriptions').add({
           pharmacy_id: pharmacyId,
           status: 'active',
           plan_type: planType,
@@ -1122,14 +1301,19 @@ async function startServer() {
           updated_at: now
         });
 
+        await cancelExistingSubscriptions(pharmacyId, newSubRef.id);
+
         await updateDashboardStats();
         return res.json({ success: true, message: 'Plano gratuito ativado!' });
       }
 
       const { preApprovalClient, isMock } = await getMPClient();
+      const appUrl = process.env.APP_URL || `https://${req.get('host')}`;
+
       const preApprovalBody: any = {
-        back_url: `${process.env.APP_URL || 'https://example.com'}/pharmacy`,
+        back_url: `${appUrl}/pharmacy`,
         reason: `${planConfig.title} (Troca) - Farmácia de Plantão Brasil`,
+        notification_url: `${appUrl}/webhooks`,
         auto_recurring: {
           frequency: planConfig.frequency,
           frequency_type: planConfig.frequency_type,
@@ -1174,11 +1358,14 @@ async function startServer() {
         init_point: subscriptionResponse.init_point
       };
 
-      await db.collection('subscriptions').add(subData);
+      const newSubRef = await db.collection('subscriptions').add(subData);
 
       if (subData.status === 'active') {
         await db.collection('pharmacies').doc(pharmacyId).update({ is_active: 1, subscription_active: true });
       }
+
+      // 3. Cancel OLD only if NEW was created pointing correctly to the new database entry ID
+      await cancelExistingSubscriptions(pharmacyId, newSubRef.id);
 
       res.json({
         success: true,
@@ -1217,7 +1404,13 @@ async function startServer() {
       const transactionAmount = planConfig.price;
       const idempotencyKey = uuidv4();
 
+      const expirationDate = new Date();
+      expirationDate.setMinutes(expirationDate.getMinutes() + 30);
+      const isoExpiration = expirationDate.toISOString();
+
       const { paymentClient, isMock } = await getMPClient();
+      const appUrl = process.env.APP_URL || `https://${req.get('host')}`;
+
       try {
         if (isMock) throw new Error('mock_mode');
         paymentResponse = await paymentClient.create({
@@ -1225,6 +1418,8 @@ async function startServer() {
             transaction_amount: transactionAmount,
             description: `${planConfig.title} - Farmácia de Plantão Brasil`,
             payment_method_id: 'pix',
+            date_of_expiration: isoExpiration,
+            notification_url: `${appUrl}/webhooks`,
             payer: {
               email: pharmacy.email,
               first_name: pharmacy.name.split(' ')[0],
@@ -1283,7 +1478,7 @@ async function startServer() {
   });
 
   // Webhook: Receive Mercado Pago Notifications
-  app.post('/api/webhooks/payment', express.json(), async (req, res) => {
+  app.post('/webhooks', express.json(), async (req, res) => {
     // 1. Signature Validation (Security)
     const xSignature = req.headers['x-signature'] as string;
     const xRequestId = req.headers['x-request-id'] as string;
@@ -1322,148 +1517,182 @@ async function startServer() {
       console.warn('Webhook received without X-Signature headers or Webhook Secret missing in .env. Processing as unverified.');
     }
 
-    const { type, action, data } = req.body;
-    const eventId = req.query.id || req.body.id; // Mercado Pago sends ID in query or body depending on event
-    
-    // 2. Handle standard payment events (Pix, single cards)
-    if (type === 'payment' && data && data.id) {
-      try {
-        const paymentId = data.id.toString();
-        // Use the API client to physically verify the payment status to further prevent spoofing
-        const { paymentClient } = await getMPClient();
-        const verifiedPayment = await paymentClient.get({ id: paymentId });
-        
-        const paymentsSnapshot = await db.collection('payments').where('mp_payment_id', '==', paymentId).get();
-        if (!paymentsSnapshot.empty) {
-          const paymentDoc = paymentsSnapshot.docs[0];
-          const localPayment = paymentDoc.data();
+    // Send immediate 200 OK to Mercado Pago to prevent Timeout/Retries
+    res.status(200).json({ success: true, message: 'Webhook received and queued for processing' });
+
+    // Run processing asynchronously
+    (async () => {
+      const { type, action, data } = req.body;
+      const eventId = req.query.id || req.body.id; // Mercado Pago sends ID in query or body depending on event
+      
+      // 2. Handle standard payment events (Pix, single cards)
+      if (type === 'payment' && data && data.id) {
+        try {
+          const paymentId = data.id.toString();
+          // Use the API client to physically verify the payment status to further prevent spoofing
+          const { paymentClient } = await getMPClient();
+          const verifiedPayment = await paymentClient.get({ id: paymentId });
           
-          if (localPayment.status !== verifiedPayment.status) {
-            await db.collection('payments').doc(paymentDoc.id).update({
-              status: verifiedPayment.status,
-              updated_at: new Date().toISOString()
-            });
-
-            if (verifiedPayment.status === 'approved') {
-              const pharmacyId = localPayment.pharmacy_id;
-              const planType = localPayment.plan_type || 'annual';
-
-              // Fetch dynamic plan config to know duration
-              const plansDoc = await db.collection('config').doc('subscription_plans').get();
-              const plansData = plansDoc.exists ? plansDoc.data() : {
-                monthly: { frequency: 1, frequency_type: 'months' },
-                annual: { frequency: 1, frequency_type: 'years' }
-              };
-              const planConfig = (plansData as any)[planType] || { frequency: 1, frequency_type: 'years' };
-
-              let expiresAt = new Date();
-              if (planConfig.frequency_type === 'years') {
-                expiresAt = addYears(expiresAt, planConfig.frequency || 1);
-              } else if (planConfig.frequency_type === 'months') {
-                expiresAt = addMonths(expiresAt, planConfig.frequency || 1);
-              } else {
-                expiresAt = addDays(expiresAt, planConfig.frequency || 30);
-              }
-              
-              // 1. Cancel ANY other existing active/pending subscription to ensure only the new one is active
-              await cancelExistingSubscriptions(pharmacyId);
-
-              const subsSnapshot = await db.collection('subscriptions')
-                .where('pharmacy_id', '==', pharmacyId)
-                .get();
-              
-              // We create a NEW one for fixed durations like PIX
-              await db.collection('subscriptions').add({
-                pharmacy_id: pharmacyId,
-                status: 'active',
-                plan_type: planType,
-                expires_at: expiresAt.toISOString(),
-                created_at: new Date().toISOString(),
+          const paymentsSnapshot = await db.collection('payments').where('mp_payment_id', '==', paymentId).get();
+          if (!paymentsSnapshot.empty) {
+            const paymentDoc = paymentsSnapshot.docs[0];
+            const localPayment = paymentDoc.data();
+            
+            if (localPayment.status !== verifiedPayment.status) {
+              await db.collection('payments').doc(paymentDoc.id).update({
+                status: verifiedPayment.status,
                 updated_at: new Date().toISOString()
               });
 
-              // Ensure pharmacy is active
-              const pharmDoc = await db.collection('pharmacies').doc(pharmacyId).get();
-              if (pharmDoc.exists) {
-                await db.collection('pharmacies').doc(pharmacyId).update({ 
-                  is_active: 1,
-                  sub_status: 'active',
+              if (verifiedPayment.status === 'approved') {
+                const pharmacyId = localPayment.pharmacy_id;
+                const planType = localPayment.plan_type || 'annual';
+
+                // Fetch dynamic plan config to know duration
+                const plansDoc = await db.collection('config').doc('subscription_plans').get();
+                const plansData = plansDoc.exists ? plansDoc.data() : {
+                  monthly: { frequency: 1, frequency_type: 'months' },
+                  annual: { frequency: 1, frequency_type: 'years' }
+                };
+                const planConfig = (plansData as any)[planType] || { frequency: 1, frequency_type: 'years' };
+
+                let expiresAt = new Date();
+                if (planConfig.frequency_type === 'years') {
+                  expiresAt = addYears(expiresAt, planConfig.frequency || 1);
+                } else if (planConfig.frequency_type === 'months') {
+                  expiresAt = addMonths(expiresAt, planConfig.frequency || 1);
+                } else {
+                  expiresAt = addDays(expiresAt, planConfig.frequency || 30);
+                }
+                
+                // 1. Cancel ANY other existing active/pending subscription to ensure only the new one is active
+                await cancelExistingSubscriptions(pharmacyId);
+
+                // We create a NEW one for fixed durations like PIX
+                await db.collection('subscriptions').add({
+                  pharmacy_id: pharmacyId,
+                  status: 'active',
+                  plan_type: planType,
+                  expires_at: expiresAt.toISOString(),
+                  created_at: new Date().toISOString(),
                   updated_at: new Date().toISOString()
                 });
-                emailService.sendPaymentApprovedEmail(pharmDoc.data()?.email, pharmDoc.data()?.name);
+
+                // Ensure pharmacy is active
+                const pharmDoc = await db.collection('pharmacies').doc(pharmacyId).get();
+                if (pharmDoc.exists) {
+                  await db.collection('pharmacies').doc(pharmacyId).update({ 
+                    is_active: 1,
+                    sub_status: 'active',
+                    subscription_active: true,
+                    updated_at: new Date().toISOString()
+                  });
+                  emailService.sendPaymentApprovedEmail(pharmDoc.data()?.email, pharmDoc.data()?.name);
+                }
+
+                await updateDashboardStats();
+                console.log(`Payment ${paymentId} verified and approved. Pharmacy ${pharmacyId} activated.`);
+              } else if (verifiedPayment.status === 'refunded' || verifiedPayment.status === 'charged_back' || verifiedPayment.status === 'rejected') {
+                const pharmacyId = localPayment.pharmacy_id;
+                
+                // Handle refund/chargeback/reject: cancel subscriptions and deactivate profile.
+                // Note: 'cancelled' (e.g., abandoned Pix) is intentionally ignored to prevent 'Morte Súbita' of active subs.
+                await cancelExistingSubscriptions(pharmacyId);
+                
+                const pharmDoc = await db.collection('pharmacies').doc(pharmacyId).get();
+                if (pharmDoc.exists) {
+                  await db.collection('pharmacies').doc(pharmacyId).update({ 
+                    is_active: 0,
+                    sub_status: 'cancelled',
+                    subscription_active: false,
+                    updated_at: new Date().toISOString()
+                  });
+                  emailService.sendSubscriptionCancelledEmail(pharmDoc.data()?.email, pharmDoc.data()?.name);
+                }
+                await updateDashboardStats();
+                console.log(`Payment ${paymentId} ${verifiedPayment.status}. Pharmacy ${pharmacyId} deactivated.`);
               }
-
-              await updateDashboardStats();
-              console.log(`Payment ${paymentId} verified and approved. Pharmacy ${pharmacyId} activated.`);
-            }
-          }
-        }
-      } catch (err) {
-        console.error('Webhook processing error (Payment):', err);
-      }
-    }
-
-    // 3. Handle Subscription PreApproval events
-    if (type === 'subscription_preapproval' || action === 'created' || action === 'updated') {
-      const preApprovalId = data?.id || eventId;
-      if (preApprovalId) {
-        try {
-          const { preApprovalClient } = await getMPClient();
-          const verifiedSub = await preApprovalClient.get({ id: preApprovalId });
-          
-          if (verifiedSub && verifiedSub.id) {
-            const subsSnapshot = await db.collection('subscriptions').where('mp_preapproval_id', '==', verifiedSub.id).get();
-            if (!subsSnapshot.empty) {
-               const subDoc = subsSnapshot.docs[0];
-               const currentStatus = subDoc.data().status;
-               const newStatus = verifiedSub.status === 'authorized' ? 'active' : 'pending';
-
-               if (currentStatus !== newStatus) {
-                 await db.collection('subscriptions').doc(subDoc.id).update({
-                   status: newStatus,
-                   next_billing_date: verifiedSub.next_payment_date || null,
-                   updated_at: new Date().toISOString()
-                 });
-
-                 const pharmDocRef = db.collection('pharmacies').doc(subDoc.data().pharmacy_id);
-                 const pharmDoc = await pharmDocRef.get();
-                 
-                 if (pharmDoc.exists) {
-                   const email = pharmDoc.data()?.email;
-                   const name = pharmDoc.data()?.name;
-
-                   if (newStatus === 'active') {
-                      await pharmDocRef.update({ 
-                        is_active: 1, 
-                        subscription_active: true,
-                        updated_at: new Date().toISOString()
-                      });
-                      emailService.sendSubscriptionActiveEmail(email, name);
-                      console.log(`Subscription ${verifiedSub.id} activated pharmacy ${subDoc.data().pharmacy_id}`);
-                   } else if (newStatus === 'pending') {
-                      emailService.sendSubscriptionFailedEmail(email, name);
-                   } else if (verifiedSub.status === 'cancelled') {
-                      await pharmDocRef.update({ 
-                        is_active: 0, 
-                        subscription_active: false,
-                        updated_at: new Date().toISOString()
-                      });
-                      emailService.sendSubscriptionCancelledEmail(email, name);
-                   }
-                   
-                   await updateDashboardStats();
-                 }
-               }
             }
           }
         } catch (err) {
-          console.error('Webhook processing error (PreApproval):', err);
+          console.error('Webhook processing error (Payment):', err);
         }
       }
-    }
-    
-    // Always return 200 OK so MP doesn't retry infinitely 
-    res.status(200).json({ success: true, message: 'Webhook received' });
+
+      // 3. Handle Subscription PreApproval events
+      if (type === 'subscription_preapproval' || action === 'created' || action === 'updated') {
+        const preApprovalId = data?.id || eventId;
+        if (preApprovalId) {
+          try {
+            const { preApprovalClient } = await getMPClient();
+            const verifiedSub = await preApprovalClient.get({ id: preApprovalId });
+            
+            if (verifiedSub && verifiedSub.id) {
+              const subsSnapshot = await db.collection('subscriptions').where('mp_preapproval_id', '==', verifiedSub.id).get();
+              if (!subsSnapshot.empty) {
+                 const subDoc = subsSnapshot.docs[0];
+                 const currentStatus = subDoc.data().status;
+                 let newStatus = 'pending';
+                 if (verifiedSub.status === 'authorized') newStatus = 'active';
+                 else if (verifiedSub.status === 'cancelled') newStatus = 'cancelled';
+                 else if (verifiedSub.status === 'paused') newStatus = 'paused';
+                 else if (verifiedSub.status === 'suspended') newStatus = 'suspended';
+
+                 if (currentStatus !== newStatus || verifiedSub.status === 'cancelled') {
+                   await db.collection('subscriptions').doc(subDoc.id).update({
+                     status: newStatus,
+                     next_billing_date: verifiedSub.next_payment_date || null,
+                     updated_at: new Date().toISOString()
+                   });
+
+                   const pharmDocRef = db.collection('pharmacies').doc(subDoc.data().pharmacy_id);
+                   const pharmDoc = await pharmDocRef.get();
+                   
+                   if (pharmDoc.exists) {
+                     const email = pharmDoc.data()?.email;
+                     const name = pharmDoc.data()?.name;
+
+                     if (newStatus === 'active') {
+                        await pharmDocRef.update({ 
+                          is_active: 1, 
+                          subscription_active: true,
+                          sub_status: 'active',
+                          updated_at: new Date().toISOString()
+                        });
+                        emailService.sendSubscriptionActiveEmail(email, name);
+                        console.log(`Subscription ${verifiedSub.id} activated pharmacy ${subDoc.data().pharmacy_id}`);
+                     } else if (newStatus === 'pending') {
+                        emailService.sendSubscriptionFailedEmail(email, name);
+                     } else if (newStatus === 'cancelled') {
+                        await pharmDocRef.update({ 
+                          is_active: 0, 
+                          subscription_active: false,
+                          sub_status: 'cancelled',
+                          updated_at: new Date().toISOString()
+                        });
+                        emailService.sendSubscriptionCancelledEmail(email, name);
+                        console.log(`Subscription ${verifiedSub.id} cancelled pharmacy ${subDoc.data().pharmacy_id}`);
+                     } else if (newStatus === 'paused' || newStatus === 'suspended') {
+                        await pharmDocRef.update({ 
+                          is_active: 0, 
+                          subscription_active: false,
+                          sub_status: newStatus,
+                          updated_at: new Date().toISOString()
+                        });
+                        console.log(`Subscription ${verifiedSub.id} ${newStatus} for pharmacy ${subDoc.data().pharmacy_id}`);
+                     }
+                     
+                     await updateDashboardStats();
+                   }
+                 }
+              }
+            }
+          } catch (err) {
+            console.error('Webhook processing error (PreApproval):', err);
+          }
+        }
+      }
+    })().catch(err => console.error('Unhandled error in async webhook processing:', err));
   });
 
   // Dev: Simulate Payment Approval
@@ -1715,6 +1944,7 @@ async function startServer() {
       }
 
       await updateDashboardStats();
+      await logAdminAction(req.user.id, 'pharmacy', id, 'activate', { prev_status: 'inactive' });
       res.json({ message: 'Pharmacy activated successfully' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1750,6 +1980,7 @@ async function startServer() {
       }
 
       await updateDashboardStats();
+      await logAdminAction(req.user.id, 'pharmacy', id, 'deactivate', { prev_status: 'active' });
       res.json({ message: 'Pharmacy deactivated successfully' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1767,15 +1998,22 @@ async function startServer() {
       const pharmacy = pharmacyDoc.data();
 
       // Delete user from Firebase Auth
-      try {
-        await auth.deleteUser(pharmacy?.user_id);
-      } catch (e) {
-        console.warn('User not found in Auth, skipping delete');
+      if (pharmacy?.user_id) {
+        try {
+          await auth.deleteUser(pharmacy.user_id);
+        } catch (e) {
+          console.warn('User not found in Auth, skipping delete');
+        }
+        // Delete from users collection
+        try {
+          await db.collection('users').doc(pharmacy.user_id).delete();
+        } catch (e) {
+          console.warn('User not found in Firestore, skipping delete');
+        }
       }
 
       // Delete from Firestore
       await db.collection('pharmacies').doc(id).delete();
-      await db.collection('users').doc(pharmacy?.user_id).delete();
       
       const subsSnapshot = await db.collection('subscriptions').where('pharmacy_id', '==', id).get();
       for (const doc of subsSnapshot.docs) await doc.ref.delete();
@@ -1786,7 +2024,14 @@ async function startServer() {
       const paymentsSnapshot = await db.collection('payments').where('pharmacy_id', '==', id).get();
       for (const doc of paymentsSnapshot.docs) await doc.ref.delete();
 
+      const shiftsSnapshot = await db.collection('shifts').where('pharmacy_id', '==', id).get();
+      for (const doc of shiftsSnapshot.docs) await doc.ref.delete();
+
+      const clicksSnapshot = await db.collection('clicks').where('pharmacy_id', '==', id).get();
+      for (const doc of clicksSnapshot.docs) await doc.ref.delete();
+
       await updateDashboardStats();
+      await logAdminAction(req.user.id, 'pharmacy', id, 'delete', { deleted_email: pharmacy?.email });
       res.json({ message: 'Pharmacy deleted successfully' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1859,6 +2104,9 @@ async function startServer() {
         await db.collection('users').doc(userId).update(userUpdate);
       }
 
+      await logAdminAction(req.user.id, 'pharmacy', id, 'update', { 
+        updated_fields: Object.keys(updatedData)
+      });
       res.json({ id, ...pharmacyData, ...updatedData });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -2207,6 +2455,7 @@ async function startServer() {
          });
       }
 
+      await logAdminAction(req.user.id, 'subscription', req.params.id, 'update', { status, plan_type });
       res.json({ message: 'Assinatura atualizada' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -2230,6 +2479,7 @@ async function startServer() {
           is_active: 0
         });
       }
+      await logAdminAction(req.user.id, 'subscription', req.params.id, 'delete', { pharmacy_id: pharmacyId });
       res.json({ message: 'Assinatura excluída' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -2281,6 +2531,7 @@ async function startServer() {
         ...req.body,
         updated_at: new Date().toISOString()
       });
+      await logAdminAction(req.user.id, 'config', 'subscription_plans', 'update', { plans: Object.keys(req.body) });
       res.json({ message: 'Planos atualizados com sucesso' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });

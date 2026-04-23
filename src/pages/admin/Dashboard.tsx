@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { CheckCircle, XCircle, Star, Trash2, Ban, Edit, Plus, X, Calendar, Search, Filter, History, DollarSign, FileText, RefreshCw, ShieldCheck, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { CheckCircle, XCircle, Star, Trash2, Ban, Edit, Plus, X, Calendar, Search, Filter, History, DollarSign, FileText, RefreshCw, ShieldCheck, AlertCircle, CheckCircle2, Download } from 'lucide-react';
 import { safeJsonFetch } from '../../lib/api';
 import { calculateHighlightEnd, isShiftPast, formatToBRDate } from '../../lib/dateUtils';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
@@ -63,6 +63,7 @@ export default function AdminDashboard() {
   const [historySub, setHistorySub] = useState<any>(null);
   const [subPayments, setSubPayments] = useState<any[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
 
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const adminEmail = import.meta.env.VITE_ADMIN_EMAIL;
@@ -203,6 +204,15 @@ export default function AdminDashboard() {
       const reportsData = await safeFetch('/api/admin/reports');
       if (typeof reportsData === 'string') throw new Error('Falha ao obter relatórios (resposta não-JSON)');
       setReports(reportsData);
+
+      // Fetch Audit Logs if Master Admin
+      if (isAdminMaster) {
+        const auditLogSnapshot = await getDocs(collection(db, 'audit_logs'));
+        const logs = auditLogSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        // Sort newest first
+        logs.sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        setAuditLogs(logs);
+      }
       
     } catch (error) {
       console.error('Dashboard fetchData error:', error);
@@ -271,6 +281,46 @@ export default function AdminDashboard() {
       return matchesSearch && matchesStatus;
     });
   }, [adminSubscribers, subSearchTerm, subStatusFilter]);
+
+  const handleExportCSV = () => {
+    const headers = ['Nome', 'E-mail', 'Plano', 'Valor', 'Status', 'Data Expiração'];
+    
+    const rows = filteredSubscribers.map(sub => {
+      const nome = sub.pharmacy_name || '';
+      const email = sub.pharmacy_email || '';
+      const plano = sub.plan_type === 'annual' ? 'Anual' : 'Mensal';
+      const valor = sub.amount !== undefined ? sub.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '0,00';
+      
+      let status = sub.status || '';
+      if (status === 'active' || status === 'authorized') status = 'Ativa';
+      else if (status === 'cancelled') status = 'Cancelada';
+      else if (status === 'expired') status = 'Expirada';
+      else if (status === 'pending') status = 'Pendente';
+
+      const expDate = sub.expires_at ? new Date(sub.expires_at).toLocaleDateString('pt-BR') : 'N/A';
+
+      // Quote strings just in case commas are present
+      return [
+        `"${nome.replace(/"/g, '""')}"`,
+        `"${email.replace(/"/g, '""')}"`,
+        `"${plano}"`,
+        `"${valor}"`,
+        `"${status}"`,
+        `"${expDate}"`
+      ].join(',');
+    });
+
+    const csvContent = [headers.join(','), ...rows].join('\n');
+    const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `assinantes_export_${new Date().toISOString().slice(0,10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   const handleViewHistory = async (sub: any) => {
     setHistorySub(sub);
@@ -365,13 +415,14 @@ export default function AdminDashboard() {
   const handleActivate = async (id: string) => {
     try {
       const token = await getAuthToken();
-      await fetch(`/api/admin/pharmacies/${id}/activate`, {
+      await safeJsonFetch(`/api/admin/pharmacies/${id}/activate`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       });
       fetchData();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error activating', error);
+      alert(error.message || 'Erro ao ativar farmácia.');
     }
   };
 
@@ -379,13 +430,14 @@ export default function AdminDashboard() {
     if (!window.confirm('Tem certeza que deseja desativar esta farmácia?')) return;
     try {
       const token = await getAuthToken();
-      await fetch(`/api/admin/pharmacies/${id}/deactivate`, {
+      await safeJsonFetch(`/api/admin/pharmacies/${id}/deactivate`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       });
       fetchData();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error deactivating', error);
+      alert(error.message || 'Erro ao desativar farmácia.');
     }
   };
 
@@ -393,13 +445,14 @@ export default function AdminDashboard() {
     if (!window.confirm('Tem certeza que deseja EXCLUIR esta farmácia permanentemente?')) return;
     try {
       const token = await getAuthToken();
-      await fetch(`/api/admin/pharmacies/${id}`, {
+      await safeJsonFetch(`/api/admin/pharmacies/${id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       });
       fetchData();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error deleting', error);
+      alert(error.message || 'Erro ao excluir farmácia.');
     }
   };
 
@@ -579,9 +632,9 @@ export default function AdminDashboard() {
       <h1 className="text-2xl font-bold text-gray-900 mb-6">Painel Admin Master</h1>
       
       {/* Tabs */}
-      <div className="border-b border-gray-200 mb-8">
-        <nav className="-mb-px flex space-x-8">
-          {['pharmacies', 'shifts', 'highlights', 'subscribers', 'subscriptions', 'reports', 'settings'].filter(tab => (tab !== 'reports' && tab !== 'subscriptions' && tab !== 'settings' && tab !== 'subscribers') || isAdminMaster).map((tab) => (
+      <div className="border-b border-gray-200 mb-8 overflow-x-auto">
+        <nav className="-mb-px flex space-x-8 min-w-max">
+          {['pharmacies', 'shifts', 'highlights', 'subscribers', 'subscriptions', 'reports', 'finance', 'audit', 'settings'].filter(tab => (tab !== 'reports' && tab !== 'subscriptions' && tab !== 'settings' && tab !== 'subscribers' && tab !== 'audit' && tab !== 'finance') || isAdminMaster).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -597,6 +650,7 @@ export default function AdminDashboard() {
               {tab === 'subscribers' && 'Assinantes'}
               {tab === 'reports' && 'Relatórios e Métricas'}
               {tab === 'subscriptions' && 'Planos de Assinatura'}
+              {tab === 'audit' && 'Logs de Auditoria'}
               {tab === 'settings' && 'Configurações'}
             </button>
           ))}
@@ -906,7 +960,16 @@ export default function AdminDashboard() {
         <div className="space-y-4">
           <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-200">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
-              <h2 className="text-xl font-bold text-gray-900">Controle de Assinantes</h2>
+              <div className="flex items-center gap-4">
+                <h2 className="text-xl font-bold text-gray-900">Controle de Assinantes</h2>
+                <button
+                  onClick={handleExportCSV}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-md text-sm font-medium transition-colors"
+                >
+                  <Download className="w-4 h-4" />
+                  Exportar CSV
+                </button>
+              </div>
               
               <div className="flex flex-col sm:flex-row gap-4 w-full md:w-auto">
                 {/* Search */}
@@ -989,43 +1052,90 @@ export default function AdminDashboard() {
                           {sub.expires_at ? new Date(sub.expires_at).toLocaleDateString('pt-BR') : 'N/A'}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => handleViewHistory(sub)}
-                              className="text-emerald-600 hover:text-emerald-900 bg-emerald-50 p-1.5 rounded-lg transition-colors flex items-center gap-1"
-                              title="Ver Histórico Financeiro"
-                            >
-                              <History className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => {
-                                setEditingSub(sub);
-                                setSubFormData({ 
-                                  status: sub.status || 'pending', 
-                                  next_billing_date: sub.next_billing_date || null,
-                                  expires_at: sub.expires_at || null,
-                                  plan_type: sub.plan_type || 'monthly'
-                                });
-                                setIsSubModalOpen(true);
-                              }}
-                              className="text-blue-600 hover:text-blue-900 bg-blue-50 px-2 py-1 rounded"
-                            >
-                              Editar
-                            </button>
-                            {(sub.status === 'active' || sub.status === 'authorized') && (
+                          <div className="flex flex-col gap-2">
+                            <div className="flex gap-2 items-center">
+                              <span className="text-xs font-bold text-gray-400 w-16 uppercase">Assinat.:</span>
                               <button
-                                onClick={() => handleDeactivateSub(sub.id)}
-                                className="text-amber-600 hover:text-amber-900 bg-amber-50 px-2 py-1 rounded"
+                                onClick={() => handleViewHistory(sub)}
+                                className="text-emerald-600 hover:text-emerald-900 bg-emerald-50 p-1 rounded-lg transition-colors flex items-center gap-1"
+                                title="Ver Histórico Financeiro"
                               >
-                                Desativar
+                                <History className="w-4 h-4" />
                               </button>
-                            )}
-                            <button
-                              onClick={() => handleDeleteSub(sub.id)}
-                              className="text-red-600 hover:text-red-900 bg-red-50 p-1 rounded"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
+                              <button
+                                onClick={() => {
+                                  setEditingSub(sub);
+                                  setSubFormData({ 
+                                    status: sub.status || 'pending', 
+                                    next_billing_date: sub.next_billing_date || null,
+                                    expires_at: sub.expires_at || null,
+                                    plan_type: sub.plan_type || 'monthly'
+                                  });
+                                  setIsSubModalOpen(true);
+                                }}
+                                className="text-blue-600 hover:text-blue-900 bg-blue-50 p-1 rounded"
+                                title="Editar Assinatura"
+                              >
+                                <Edit className="w-4 h-4" />
+                              </button>
+                              {(sub.status === 'active' || sub.status === 'authorized') && (
+                                <button
+                                  onClick={() => handleDeactivateSub(sub.id)}
+                                  className="text-amber-600 hover:text-amber-900 bg-amber-50 p-1 rounded"
+                                  title="Desativar Assinatura"
+                                >
+                                  <Ban className="w-4 h-4" />
+                                </button>
+                              )}
+                              <button
+                                onClick={() => handleDeleteSub(sub.id)}
+                                className="text-red-600 hover:text-red-900 bg-red-50 p-1 rounded"
+                                title="Excluir Assinatura"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                            
+                            {(() => {
+                               const linkedPharm = pharmacies.find(p => p.id === sub.pharmacy_id);
+                               if (!linkedPharm) return null;
+                               return (
+                                <div className="flex gap-2 items-center mt-1 pt-1 border-t border-gray-100">
+                                  <span className="text-xs font-bold text-gray-400 w-16 uppercase">Perfil:</span>
+                                  <button 
+                                    onClick={() => openEditModal(linkedPharm)}
+                                    className="text-blue-600 hover:text-blue-900 bg-blue-50 p-1 rounded flex items-center gap-1 inline-flex"
+                                    title="Editar Dados da Farmácia"
+                                  >
+                                    <Edit className="w-4 h-4" />
+                                  </button>
+                                  {!linkedPharm.is_active ? (
+                                    <button 
+                                      onClick={() => handleActivate(linkedPharm.id)}
+                                      className="text-emerald-600 hover:text-emerald-900 bg-emerald-50 px-2 py-1 rounded inline-flex font-bold text-[10px]"
+                                      title="Ativar Farmácia"
+                                    >
+                                      ATIVAR
+                                    </button>
+                                  ) : (
+                                    <button 
+                                      onClick={() => handleDeactivate(linkedPharm.id)}
+                                      className="text-amber-600 hover:text-amber-900 bg-amber-50 p-1 rounded flex items-center gap-1 inline-flex"
+                                      title="Desativar Farmácia no Catálogo"
+                                    >
+                                      <Ban className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                  <button 
+                                    onClick={() => handleDelete(linkedPharm.id)}
+                                    className="text-red-600 hover:text-red-900 bg-red-50 p-1 rounded flex items-center gap-1 inline-flex"
+                                    title="Excluir Farmácia Definitivamente"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </div>
+                               );
+                            })()}
                           </div>
                         </td>
                       </tr>
@@ -1446,6 +1556,61 @@ export default function AdminDashboard() {
           </form>
         </div>
       </div>
+      )}
+
+      {activeTab === 'audit' && isAdminMaster && (
+        <div className="space-y-4">
+          <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-200">
+            <h2 className="text-xl font-bold text-gray-900 mb-6">Logs de Auditoria Administrativa</h2>
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Data / Hora</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Admin</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ação</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Recurso Info</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {auditLogs.length === 0 ? (
+                     <tr>
+                       <td colSpan={4} className="px-6 py-8 text-center text-gray-500">Nenhum registro de auditoria encontrado.</td>
+                     </tr>
+                  ) : (
+                    auditLogs.map((log) => (
+                      <tr key={log.id} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-medium">
+                          {new Date(log.timestamp).toLocaleDateString('pt-BR')} {new Date(log.timestamp).toLocaleTimeString('pt-BR')}
+                        </td>
+                        <td className="px-6 py-4 max-w-[200px] truncate text-sm text-gray-900">
+                          {log.admin_id}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          <span className={`px-2 py-1 inline-flex text-xs leading-5 font-bold rounded-md ${
+                            log.action === 'delete' ? 'bg-red-100 text-red-800' :
+                            log.action === 'update' ? 'bg-amber-100 text-amber-800' :
+                            log.action === 'activate' ? 'bg-emerald-100 text-emerald-800' :
+                            log.action === 'deactivate' ? 'bg-orange-100 text-orange-800' :
+                            'bg-gray-100 text-gray-800'
+                          }`}>
+                            {log.action.toUpperCase()}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-sm text-gray-900 break-words">
+                          <span className="font-semibold">{log.resource_type}</span>: {log.resource_id}
+                          <div className="text-xs text-gray-500 mt-1 max-w-md overflow-x-auto">
+                            {JSON.stringify(log.details)}
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Modal Nova/Editar Farmácia */}

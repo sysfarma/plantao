@@ -1,55 +1,51 @@
-# Especificação Técnica: Implementações Pendentes
+# Especificação Técnica: Implementações Pendentes (Integração MP)
 
-Esta especificação detalha os componentes, comportamentos e atualizações de página necessários para atingir 100% de conclusão nos módulos de Assinaturas e Planos, conforme identificado no relatório de analytics.
+Esta especificação foi gerada com base no diagnóstico contido no arquivo `analytics/report.md`. Ela detalha estritamente os comportamentos (behaviors), componentes (components) e alterações visuais (pages) correspondentes às pendências exigidas para robustecer a infraestrutura existente do Mercado Pago.
 
-## 1. Componentes (Components)
+---
 
-### `SubscriberFilters`
-- **Descrição:** Barra de ferramentas para filtrar a lista de assinantes.
-- **Props/Estado:** 
-  - `onFilterChange`: Callback para enviar os critérios ao backend ou filtrar localmente.
-- **Elementos:** Campo de busca (Search input) e Select Dropdown (Status: Ativo, Expirado, Pendente, Cancelado).
+## 1. Comportamentos (Behaviors - Lógica e Backend)
 
-### `PaymentHistoryTable`
-- **Descrição:** Modal ou seção expansível dentro da aba de Assinantes.
-- **Funcionalidade:** Listar todos os documentos da coleção `payments` filtrados por `pharmacy_id`. Deve exibir ID MP, Valor, Método, Status e Data.
+### 1.1 Tratar Reembolsos e Chargebacks no Webhook
+- **Local:** `server.ts` (Rota do Webhook de Payment).
+- **Contexto:** Garantir consistência nas contas quando uma devolução for processada pelas operadoras ou pelo próprio painel do MP.
+- **Implementação:** Interceptar transições de status como `"refunded"`, `"charged_back"` e `"rejected"`. Adicionar lógica de negócio para setar `is_active: 0` na entidade de Farmácia e expurgar a respectiva assinatura.
 
-### `PlanEditorForm`
-- **Descrição:** Formulário dinâmico para edição de planos.
-- **Campos:** 
-  - Nome Amigável (Título do card).
-  - Descrição Curta.
-  - Lista de Benefícios (CRUD de itens simples).
-  - Configurações MP: Parcelas permitidas, Desconto no anual (%).
+### 1.2 Rota de Cancelamento Voluntário de Assinatura
+- **Local:** `server.ts` (Nova Rota Autenticada Exemplo: `DELETE /api/subscriptions/cancel`).
+- **Contexto:** Permitir cancelamento a pedido do lojista (Right to Cancel) para frear cobrança indevida.
+- **Implementação:** Validar dono da Farmácia, localizar o `.mp_preapproval_id` real, dar update no `preApprovalClient` informando `{ status: "cancelled" }` e derrubar as permissões ativas `is_active = 0` no Firebase.
 
-### `MercadoPagoTester`
-- **Descrição:** Botão acoplado à configuração de credenciais.
-- **Comportamento:** Chama uma rota de debug que tenta instanciar o `MercadoPagoConfig` e buscar as informações da conta (endpoint `/v1/account`) para validar a chave.
+### 1.3 Mapeamento Detalhado e Completo de PreApproval Status
+- **Local:** `server.ts` (Webhook de PreApproval em `app.post('/api/webhooks/payment')`).
+- **Contexto:** Transparência nos relatórios de logs da Plataforma.
+- **Implementação:** Acrescentar traduções ou interpretações específicas dos fluxos de falha como `"suspended"` e `"paused"`. Evitar que essas ocorrências sejam engolidas na variável base e salvas incorretamente como `"pending"`.
 
-## 2. Comportamentos (Behaviors)
+### 1.4 Webhook Async Processing (Correção Antibloqueio MP)
+- **Local:** `server.ts` (Todo o gateway `/api/webhooks/*`).
+- **Contexto:** Impede gargalos no banco ou quedas de serviço de e-mail de provocarem penalidades de Tries (Retries massivos) pela API do Mercado Pago por superarem Timeout.
+- **Implementação:** Refatorar o middleware para que realize validação criptográfica (Hash `x-signature`) e, quando aprovado, imediatamente emita o `res.status(200).json(...)`. Só depois de "estancar" a porta HTTP, o backend dará seguimento as queries pesadas Firestore + EmailService em Promise/Background Task.
 
-### `PlanUpgradeFlow` (Upgrade/Downgrade)
-- **Lógica:** Implementar no `/server.ts` a rota `PUT /api/subscriptions/update`.
-- **Regra:** Se o usuário já tem uma assinatura ativa, deve cancelar a anterior (ou fazer o update do valor no MP) e gerar o novo ciclo. Preferencialmente, redirecionar para o checkout para confirmar o novo método/valor.
+### 1.5 Injeção Dinâmica de Webhook URL (`notification_url`)
+- **Local:** `server.ts` (Criação de transações: `/api/subscriptions/create`, `/api/payments/pix`, etc).
+- **Contexto:** Tornar integrações imunes a inconsistência do IP/Sufixo se a plataforma for migrada ou movida de domínio.
+- **Implementação:** Anexar forçadamente a chave `notification_url` nos corpos (body) das chamadas aos Clientes MP utilizando `process.env.APP_URL` de base, garantindo que o Webhook do preapproval vai mirar nativamente naquele Back-end.
 
-### `DataExportAction` (CSV Export)
-- **Lógica:** Função auxiliar no frontend que recebe o array `adminSubscribers`, converte para formato CSV (utilizando os cabeçalhos da tabela) e dispara o download via Blob.
+---
 
-### `EnhancedWebhookHandler`
-- **Lógica:** Atualizar a rota `/api/webhooks/payment` no `server.ts` para capturar os estados de `refunded` (estorno) e `cancelled` (cancelamento pelo portal MP).
-- **Ação:** Deve disparar o e-mail de notificação de cancelamento e setar `is_active: 0` na farmácia imediatamente.
+## 2. Componentes (Components - Frontend UI)
 
-### `AuditLogger`
-- **Lógica:** Toda alteração manual feita pelo Admin via `PUT /api/admin/subscriptions/:id` deve criar um documento na coleção `audit_logs` registrando: `admin_id`, `target_id`, `previous_state`, `new_state`, `timestamp`.
+### 2.1 Componente: `CancelSubscriptionModal`
+- **Descrição:** Reutilizável de confirmação destrutiva.
+- **Comportamento:** Ao ser disparado, alerta o lojista com gravidade que seus Plantões cadastrados serão removidos publicamente; Exigir duplo clique ou inserção de nome da Farmácia para destrancar botão principal; Ao acionar, varre Endpoint de Cancelamento reportando `(Loading) Processando interrupção...` com fallback visual.
+
+---
 
 ## 3. Páginas (Pages)
 
-### `AdminDashboard` (Atualizações)
-- **Aba Assinantes:** Integrar `SubscriberFilters` e `PaymentHistoryTable`.
-- **Aba Planos:** Migrar de campos estáticos para o `PlanEditorForm` e adicionar funcionalidade de "Novo Plano" que cria documentos dinâmicos em `config/subscription_plans`.
-- **Aba Configurações:** Inserir o componente `MercadoPagoTester`.
-
-### `PharmacyDashboard` / `Checkout` (Atualizações)
-- **Visual:** Implementar estados de *Skeleton Loading* enquanto o checkout do Mercado Pago carrega.
-- **Feedback:** Modal de sucesso/erro mais descritivo baseado na resposta do `init_point` ou processamento do Pix.
-- **Gerenciamento:** Se já houver assinatura, substituir os botões de "Comprar" por "Alterar Plano" (acionando o `PlanUpgradeFlow`).
+### 3.1 Painel da Farmácia (`Dashboard.tsx`)
+- **Seção a Intervir:** Aba ("Visão Geral").
+- **Implementação Visual:**
+  1. Embutir suporte textual à interpretação de status recém mapeados pelo lado da UI (Renderizar blocos cor Neutra/Aviso para farmácia que esteja de status *Suspensa* por falta de saldo e indicar regularização).
+  2. Implementar link âncora vermelho ou sutil "*Desejo cancelar minha assinatura*" integrado ao status da Assinatura Ativa.
+  3. Acoplar localmente o Modal `CancelSubscriptionModal` construído.

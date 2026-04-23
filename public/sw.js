@@ -29,32 +29,48 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(event.request.url);
 
-  // Exclude external API requests from generic catching to avoid breaking them
-  if (url.origin !== location.origin) {
+  // Exclude external API requests, websockets, and Vite dev files
+  if (
+    url.origin !== location.origin ||
+    url.pathname.startsWith('/@') ||
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/webhooks') ||
+    url.pathname.includes('node_modules') ||
+    url.pathname === '/manifest.json'
+  ) {
     return;
   }
 
   // Network First strategy for the SPA
   event.respondWith(
-    fetch(event.request).then((networkResponse) => {
-      return caches.open(CACHE_NAME).then((cache) => {
-        // Cache successful GET requests for same origin
-        if (networkResponse.ok) {
-          cache.put(event.request, networkResponse.clone());
+    fetch(event.request)
+      .then((networkResponse) => {
+        return caches.open(CACHE_NAME).then((cache) => {
+          // Cache successful GET requests
+          if (networkResponse.ok && networkResponse.type === 'basic') {
+            cache.put(event.request, networkResponse.clone());
+          }
+          return networkResponse;
+        });
+      })
+      .catch(async () => {
+        const cachedResponse = await caches.match(event.request);
+        if (cachedResponse) {
+          return cachedResponse;
         }
-        return networkResponse;
-      });
-    }).catch(async () => {
-      const cachedResponse = await caches.match(event.request);
-      if (cachedResponse) {
-        return cachedResponse;
-      }
-      // If no cache, try serving the root index.html to allow SPA routing
-      if (event.request.mode === 'navigate') {
-        const rootCache = await caches.match('/');
-        if (rootCache) return rootCache;
-      }
-      throw new Error('Network error and no cache available.');
-    })
+        
+        // If no cache, try serving the root index.html to allow SPA routing
+        if (event.request.mode === 'navigate') {
+          const rootCache = await caches.match('/');
+          if (rootCache) return rootCache;
+        }
+
+        // Return a graceful fallback instead of throwing an uncaught promise error
+        return new Response('Network error and no cache available for this resource.', {
+          status: 503,
+          statusText: 'Service Unavailable',
+          headers: new Headers({ 'Content-Type': 'text/plain' })
+        });
+      })
   );
 });

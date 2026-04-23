@@ -1,8 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { CheckCircle, AlertCircle, QrCode, CreditCard, Star, Edit, Calendar, Plus, Trash2, TrendingUp, Zap, RefreshCw } from 'lucide-react';
+import { CheckCircle, AlertCircle, QrCode, CreditCard, Star, Edit, Calendar, Plus, Trash2, TrendingUp, Zap, RefreshCw, X } from 'lucide-react';
 import PixPaymentManager from '../../components/PixPaymentManager';
+import CardPaymentForm from '../../components/CardPaymentForm';
+import CancelSubscriptionModal from '../../components/CancelSubscriptionModal';
 import { isShiftPast, formatToBRDate } from '../../lib/dateUtils';
+import { safeJsonFetch } from '../../lib/api';
+import { getAuthToken } from '../../lib/firebase';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { collection, doc, addDoc, updateDoc, deleteDoc, query, where, onSnapshot } from 'firebase/firestore';
 import { db, auth } from '../../lib/firebase';
@@ -29,6 +33,41 @@ export default function PharmacyDashboard() {
   const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
   const [shiftForm, setShiftForm] = useState({ date: '', start_time: '07:00', end_time: '22:00', is_24h: false });
   const [editingShiftId, setEditingShiftId] = useState<string | null>(null);
+
+  const [isUpdateCardModalOpen, setIsUpdateCardModalOpen] = useState(false);
+  const [updatingCard, setUpdatingCard] = useState(false);
+  const [cardUpdateSuccess, setCardUpdateSuccess] = useState(false);
+
+  const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
+
+  const handleUpdateCard = async (token: string, paymentData: any) => {
+    setUpdatingCard(true);
+    setCardUpdateSuccess(false);
+    try {
+      const authToken = await getAuthToken();
+      if (!authToken) throw new Error('Usuário não autenticado');
+
+      const result = await safeJsonFetch('/api/subscriptions/update-card', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`
+        },
+        body: JSON.stringify({ card_token: token })
+      });
+
+      if (result.success) {
+        setCardUpdateSuccess(true);
+        setTimeout(() => setIsUpdateCardModalOpen(false), 3000);
+      } else {
+        throw new Error(result.error || 'Erro ao atualizar o cartão');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Erro ao processar atualização do cartão');
+    } finally {
+      setUpdatingCard(false);
+    }
+  };
 
   useEffect(() => {
     const user = auth.currentUser;
@@ -199,6 +238,8 @@ export default function PharmacyDashboard() {
   if (!profile) return <div className="p-8">Erro ao carregar perfil.</div>;
 
   const isPending = profile.subscription?.status === 'pending';
+  const isPaused = profile.subscription?.status === 'paused' || profile.sub_status === 'paused';
+  const isSuspended = profile.subscription?.status === 'suspended' || profile.sub_status === 'suspended';
   const isActive = profile.is_active === 1;
 
   return (
@@ -238,18 +279,72 @@ export default function PharmacyDashboard() {
             <h2 className="text-lg font-semibold mb-4">Status da Assinatura</h2>
             
             {isActive ? (
-              <div className="flex items-center gap-3 text-emerald-700 bg-emerald-50 p-4 rounded-lg">
-                <CheckCircle className="w-6 h-6" />
-                <div>
-                  <p className="font-medium">Assinatura Ativa</p>
-                  <p className="text-sm">Sua farmácia está visível nas buscas. Expira em: {new Date(profile.subscription?.expires_at).toLocaleDateString('pt-BR')}</p>
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-3 text-emerald-700 bg-emerald-50 p-4 rounded-lg">
+                  <CheckCircle className="w-6 h-6" />
+                  <div>
+                    <p className="font-medium">Assinatura Ativa</p>
+                    <p className="text-sm">Sua farmácia está visível nas buscas. Expira em: {new Date(profile.subscription?.expires_at).toLocaleDateString('pt-BR')}</p>
+                  </div>
+                  <div className="ml-auto flex gap-2">
+                    <button 
+                      onClick={() => setIsUpdateCardModalOpen(true)}
+                      className="inline-flex items-center gap-2 px-4 py-2 border border-emerald-200 text-emerald-700 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition-colors text-sm font-bold"
+                    >
+                      <CreditCard className="w-4 h-4" />
+                      Atualizar Cartão
+                    </button>
+                    <Link 
+                      to="/pharmacy/pricing" 
+                      className="inline-flex items-center gap-2 px-4 py-2 border border-emerald-200 text-emerald-700 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition-colors text-sm font-bold"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      Mudar Plano
+                    </Link>
+                  </div>
                 </div>
+                <div className="flex justify-end">
+                  <button 
+                    onClick={() => setIsCancelModalOpen(true)}
+                    className="text-sm text-red-500 hover:text-red-700 hover:underline px-2"
+                  >
+                    Desejo cancelar minha assinatura
+                  </button>
+                </div>
+              </div>
+            ) : isPaused || isSuspended ? (
+              <div className="flex flex-col gap-4">
+                <div className="flex items-center gap-3 text-amber-800 bg-amber-50 p-4 rounded-lg border border-amber-200">
+                  <AlertCircle className="w-6 h-6" />
+                  <div>
+                    <p className="font-medium">
+                      {isPaused ? 'Assinatura Pausada' : 'Assinatura Suspensa (Falha no Cartão)'}
+                    </p>
+                    <p className="text-sm">
+                      {isPaused 
+                        ? 'Sua assinatura foi pausada. Ela precisa ser reativada para sua farmácia voltar ao mapa.'
+                        : 'Identificamos uma falha no processamento da última cobrança no seu cartão de crédito.'}
+                    </p>
+                  </div>
+                  {isSuspended && (
+                    <div className="ml-auto flex gap-2">
+                      <button 
+                        onClick={() => setIsUpdateCardModalOpen(true)}
+                        className="inline-flex items-center gap-2 px-4 py-2 border border-amber-300 text-amber-800 bg-amber-100 rounded-lg hover:bg-amber-200 transition-colors text-sm font-bold"
+                      >
+                        <CreditCard className="w-4 h-4" />
+                        Atualizar Cartão
+                      </button>
+                    </div>
+                  )}
+                </div>
+                
                 <Link 
                   to="/pharmacy/pricing" 
-                  className="ml-auto inline-flex items-center gap-2 px-4 py-2 border border-emerald-200 text-emerald-700 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition-colors text-sm font-bold"
+                  className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-emerald-600 text-white font-bold rounded-lg hover:bg-emerald-700 transition-colors shadow-sm"
                 >
-                  <RefreshCw className="w-4 h-4" />
-                  Mudar Plano
+                  <RefreshCw className="w-5 h-5" />
+                  Regularizar Assinatura
                 </Link>
               </div>
             ) : isPending ? (
@@ -586,6 +681,50 @@ export default function PharmacyDashboard() {
             </table>
           )}
         </div>
+      )}
+      {/* Update Card Modal */}
+      {isUpdateCardModalOpen && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black bg-opacity-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden relative">
+            <button 
+              onClick={() => setIsUpdateCardModalOpen(false)}
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 z-10"
+            >
+              <X className="w-6 h-6" />
+            </button>
+            <div className="p-6">
+              <h2 className="text-xl font-bold text-gray-900 mb-6">Atualizar Cartão de Crédito</h2>
+              {cardUpdateSuccess ? (
+                <div className="text-center py-8">
+                  <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <CheckCircle className="w-8 h-8 text-emerald-600" />
+                  </div>
+                  <h3 className="text-lg font-bold text-gray-900">Cartão Atualizado!</h3>
+                  <p className="text-gray-500 mt-2">Suas próximas mensalidades serão cobradas neste novo cartão.</p>
+                </div>
+              ) : (
+                <CardPaymentForm 
+                  amount={0} 
+                  onSuccess={handleUpdateCard} 
+                  loading={updatingCard}
+                  isUpdate={true} 
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cancel Subscription Modal */}
+      {isCancelModalOpen && (
+        <CancelSubscriptionModal
+          onClose={() => setIsCancelModalOpen(false)}
+          onSuccess={() => {
+            setIsCancelModalOpen(false);
+            window.location.reload();
+          }}
+          pharmacyName={profile.name}
+        />
       )}
     </div>
   );

@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /admin/
+Disallow: /checkout/
+
+# Crawl-delay: 1 (opcional para diminuir carga do servidor)
+
+Sitemap: https://farmaciasdeplantao.app.br/sitemap.xml

@@ -259,6 +259,14 @@ service cloud.firestore {
     // Rules
     // ===============================================================
 
+    match /audit_logs/{logId} {
+      // Only admins can read audit_logs. 
+      // Writing is strictly via backend (server SDK bypasses these rules anyway), 
+      // but we explicitly forbid frontend writes for safety.
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
     match /users/{userId} {
       allow read: if isOwner(userId) || isAdmin();
       allow create: if isAuthenticated() && isValidUser(request.resource.data) && 

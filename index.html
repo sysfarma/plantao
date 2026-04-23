@@ -1,12 +1,9 @@
 <!doctype html>
-<html lang="pt-br">
+<html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="manifest" href="/manifest.json" />
-    <meta name="theme-color" content="#059669" />
-    <link rel="apple-touch-icon" href="/pwa-icon.svg" />
-
+    
 <!-- Google tag (gtag.js) -->
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-259RNMTLZJ"></script>
 <script>
@@ -17,16 +14,50 @@
   gtag('config', 'G-259RNMTLZJ');
 </script>
 
-     <!-- Basic SEO -->
+    <!-- Basic SEO -->
     <title>Farmácia de Plantão: Encontre Farmácias Abertas Agora</title>
     <meta name="description" content="Descubra qual farmácia de plantão está aberta agora na sua cidade. Encontre drogarias 24 horas, telefones, endereços e rotas rápidas no Farmácias de Plantão." />
     <meta name="keywords" content="farmácia de plantão, farmácia aberta agora, drogaria 24h, farmácia perto de mim, plantão hoje, medicamentos" />
     <meta name="author" content="Farmácias de Plantão Oficial" />
     <meta name="robots" content="index, follow" />
-
     
-    <title>FARMÁCIAS DE PLANTÃO OFICIAL</title>
+    <!-- Open Graph (Facebook/WhatsApp/LinkedIn) -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://farmaciasdeplantao.app.br/" />
+    <meta property="og:title" content="Farmácia de Plantão: Encontre Farmácias Abertas Agora" />
+    <meta property="og:description" content="Precisa de remédios de madrugada? Descubra qual farmácia está de plantão hoje na sua cidade. Localize drogarias abertas 24h." />
+    <meta property="og:image" content="https://farmaciasdeplantao.app.br/og-image.jpg" />
+    
+    <!-- Twitter Cards -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:url" content="https://farmaciasdeplantao.app.br/" />
+    <meta name="twitter:title" content="Farmácia de Plantão: Abertas Agora" />
+    <meta name="twitter:description" content="Localize rádidamente farmácias de plantão e abertas 24 horas perto de você." />
+    <meta name="twitter:image" content="https://farmaciasdeplantao.app.br/twitter-image.jpg" />
+    
+    <!-- PWA & Theme -->
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#059669" />
+    <link rel="apple-touch-icon" href="/pwa-icon.svg" />
+    <link rel="canonical" href="https://farmaciasdeplantao.app.br/" />
+    
     <script src="https://sdk.mercadopago.com/js/v2"></script>
+
+    <!-- Schema.org JSON-LD (WebSite Base) -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebSite",
+      "name": "Farmácias de Plantão",
+      "url": "https://farmaciasdeplantao.app.br/",
+      "description": "Encontre rapidamente farmácias abertas agora na sua cidade.",
+      "potentialAction": {
+        "@type": "SearchAction",
+        "target": "https://farmaciasdeplantao.app.br/busca?q={search_term_string}",
+        "query-input": "required name=search_term_string"
+      }
+    }
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -287,7 +287,33 @@ export default function Register() {
             </div>
           </div>
 
-          <div className="pt-4">
+          <div className="pt-2">
+            <div className="flex items-start">
+              <div className="flex items-center h-5">
+                <input
+                  id="terms"
+                  name="terms"
+                  type="checkbox"
+                  required
+                  className="w-4 h-4 text-emerald-600 bg-gray-100 border-gray-300 rounded focus:ring-emerald-500"
+                />
+              </div>
+              <div className="ml-3 text-sm">
+                <label htmlFor="terms" className="font-medium text-gray-700">
+                  Eu concordo com os{' '}
+                  <Link to="/termos" target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:text-emerald-700 hover:underline">
+                    Termos de Uso
+                  </Link>{' '}
+                  e a{' '}
+                  <Link to="/privacidade" target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:text-emerald-700 hover:underline">
+                    Política de Privacidade
+                  </Link>.
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-2">
             <button
               type="submit"
               disabled={loading}

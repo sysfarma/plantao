@@ -1,53 +1,31 @@
-# Relatório de Status: Assinantes e Planos de Assinatura
+# Relatório Analítico: Backlog e Gaps da Integração Mercado Pago
 
-Este relatório detalha o estado atual do desenvolvimento das funcionalidades de **Controle de Assinantes** e **Configuração de Planos**, identificando o que já foi implementado e as lacunas restantes para a finalização completa.
-
-## 1. Controle de Assinantes (Admin Master)
-
-### O que já funciona:
-- **Visualização:** Tabela centralizada listando Farmácia, E-mail, Plano contratado, Status e Data de Expiração.
-- **Edição Manual:** O Admin pode alterar manualmente o status (Ativo, Pendente, Cancelado, Expirado) e as datas de faturamento/expiração via modal.
-- **Exclusão:** Possibilidade de remover uma assinatura permanentemente, o que desativa automaticamente a farmácia.
-- **Sincronização:** Alterações no status da assinatura refletem imediatamente no acesso da farmácia ao sistema (campo `is_active` e `subscription_active`).
-
-### O que falta implementar:
-- **Filtros e Busca:** Adicionar filtros por Status (Ativos, Expirados, Pendentes) e um campo de busca por nome ou e-mail da farmácia.
-- **Histórico de Pagamentos:** Uma visualização detalhada de todos os pagamentos (Pix ou Cartão) realizados por aquele assinante específico.
-- **Logs de Auditoria:** Rastrear quem alterou o status da assinatura e quando (essencial para segurança).
-- **Exportação de Dados:** Botão para exportar a lista de assinantes em CSV/Excel para controle financeiro externo.
+**Objetivo:** Analisar o estado atual da integração ponta a ponta com a API do Mercado Pago no sistema e elencar exclusivamente os pontos pendentes, incompletos e fluxos ausentes obrigatórios para garantir segurança antifraude e consistência fiscal/comercial no ambiente de produção.
 
 ---
 
-## 2. Planos de Assinatura e Configuração (Admin Master)
+### 1. Tratamento de Reembolsos e Chargebacks (Incompleto/Vulnerável)
+- **Cenário Atual:** O webhook que escuta pagamentos avulsos/Pix (`/api/webhooks/payment`) consegue ativar o plano quando o status é transicionado para `"approved"`. Entretanto, se ocorrer estorno na operadora ou no cartão de crédito, status como `"refunded"`, `"charged_back"` ou `"rejected"` são apenas atualizados passivamente no painel de transações do Firestore (`payments`).
+- **Impacto Transacional:** Quando a devolução do dinheiro ocorre, a base do sistema **não atinge a tabela de farmácias para expurgar ou cancelar a inscrição no código atual**. O usuário recebe o dinheiro de volta, mas a sua farmácia e seu "Selo de Assinatura" (`is_active = 1`) continuam ativos indevidamente para sempre até o próximo ciclo ignorado.
+- **Resolução:** Injetar um bloco `else if` que force a desativação da farmácia e de sua inscrição local caso cheguem payloads de ruptura de receita.
 
-### O que já funciona:
-- **Configuração de API:** Interface para salvar a `Public Key` e o `Access Token` do Mercado Pago diretamente no Firestore (`config/mercadopago`).
-- **Gestão de Preços:** Possibilidade de ativar/desativar e alterar os valores dos planos Mensal e Anual.
-- **Integração Backend:** Rotas para persistir essas configurações e servir os preços dinâmicos para a página de checkout das farmácias.
+### 2. Fluxo de Cancelamento Voluntário pelo Usuário (Ausente Front-end/Back-end)
+- **Cenário Atual:** A rota que finaliza preApprovals obsoletos (`cancelExistingSubscriptions`) atua somente nos bastidores quando uma **nova** contratação suplanta a antiga.
+- **Impacto Transacional:** Pelas normas comuns de direito do consumidor e SaaS, o lojista deve conseguir interromper seu plano a hora que quiser (Impedimento da Renovação Automática). Atualmente, no `Dashboard.tsx`, não existe um botão "Cancelar Assinatura". O Backend também não provê uma rota acessível `/api/subscriptions/cancel` para ser chamada nativamente. 
+- **Resolução:** Criar rota DELETE/PUT para cancelamento manual e integrá-la no Painel do usuário (UI) para evitar atrito ou chamados desgastantes no suporte via WhatsApp.
 
-### O que falta implementar:
-- **Criação de Novos Planos:** Atualmente o sistema está "hardcoded" para apenas Mensal e Anual. Falta uma interface para criar novos tipos de planos (ex: Semestral, Trimestral).
-- **Configurações Avançadas de Checkout:** Opções para configurar parcelamento, descontos automáticos no plano anual e período de teste gratuito (Free Trial).
-- **Validação de Credenciais:** Botão de "Testar Conexão" que valide se as chaves do Mercado Pago inseridas são válidas antes de salvar.
-- **Customização Visual:** Permitir que o admin altere a descrição e os benefícios listados em cada plano diretamente pelo painel.
+### 3. Sincronização Sensível de Status em Assinaturas (Requisitos SDK)
+- **Cenário Atual:** O webhook do tipo `subscription_preapproval` varre e filtra as condições `"authorized"` para `"active"` ou `"cancelled"` para `"cancelled"`.
+- **Impacto Transacional:** Assinaturas MP (`PreApprovals`) emitem outros microestados como `"paused"` (usado quando o lojista pausa do lado do aplicativo nativo do Mercado Pago na seção Minhas Assinaturas) ou `"suspended"` (usado quando o limite em cartão dá erro em sucessivas recuperações no fim do mês). Do jeito que o backend absorve isso hoje, a queda cairá no bloco raiz e ficará tida como `"pending"`. Isto barra a autenticação, porém perde-se a rastreabilidade contextual e detona alertas genéricos de "Pagamento Não Finalizado", confundindo tanto o admin quanto o usuário. 
 
----
+### 4. Gargalo Crítico de Timeout em Webhooks (Risco Backend)
+- **Cenário Atual:** A função do router responsável por receber do Mercado Pago faz a verificação do Hash criptográfico, busca o ID real via SDK, localiza os registros do Firestore, modifica-os e ainda invoca o provedor de disparo SMTP `emailService` **TUDO DE FORMA SÍNCRONA** (`await` encadeado sem retornar).
+- **Impacto Transacional:** A documentação do Mercado Pago exige Retorno Imediato HTTP `200 OK`. Se o banco Firestore estiver mais lento no dia ou o servidor de e-mail engasgar e tudo passar de uns escassos segundos, o Mercado Pago fará o *Dropping* e executará a fila de reenvios consecutivos (*Retries*). O endpoint da infraestrutura levará rajadas, engajando duplicação de emails e stress processual.
+- **Resolução:** Desacoplar a resposta da rede e a ação. Validou a assinatura? Responda imediatamente o `res.status(200)`. Deixe o resto do processamento em background sob promessa.
 
-## 3. Integração com Mercado Pago (Core)
-
-### O que já funciona:
-- **Checkout:** Geração de assinaturas recorrentes (Pre-approval) e pagamentos via Pix.
-- **Webhooks:** O servidor já processa notificações de pagamento aprovado e status de assinatura.
-- **Segurança:** Regras do Firestore protegem o `Access Token`, permitindo que apenas o Admin Master o visualize.
-
-### O que falta implementar:
-- **Troca de Plano (Upgrade/Downgrade):** Fluxo para o cliente mudar do plano mensal para o anual sem duplicar cobranças.
-- **Tratamento de Falhas Progressivo:** Melhorar o tratamento de webhooks para casos de estorno (chargeback) ou cancelamento direto no portal do Mercado Pago.
-- **Interface de Checkout Superior:** Melhorar a UI da farmácia durante o processo de pagamento, incluindo estados de carregamento e feedback visual mais rico do Mercado Pago.
+### 5. URL de Notificação Ativa Dinamicamente (Ausência de Flexibilidade)
+- **Cenário Atual:** Na elaboração de `paymentClient.create(...)` e `preApprovalClient.create(...)` em `/api/subscriptions/create`, o atributo opcional `notification_url` foi excluído do JSON do *body*.
+- **Impacto Transacional:** Essa omissão obriga o dependente (SysAdmin do projeto) a se lembrar de inserir a rota do sistema local estritamente pelo painel online e obscuro para webhooks (na área Developer do Mercado Pago). Se for gerada uma Preview, Staging, novo IP para testes – o webhook e a baixa manual de Pix morre, pois o Mercado Pago mandará para o link fixado do dashboard antigo. A adoção da propriedade injetada no momento do checkout previne configurações órfãs. 
 
 ---
-
-## Conclusão Geral do Sistema
-O sistema possui uma base sólida e funcional (back-to-front). O foco agora deve ser em **UX Administrativa** (filtros e organização) e **Resiliência Financeira** (detalhes de pagamento e trocas de plano).
-
-**Status Geral:** 85% Concluído.
+*Status das implementações recentes verificadas e completas: Buscas "customer fallback" perfeitas (Issue #03), Expiração correta para Pix em 30 min (Issue #04) e Renovação direta de Token de cartão na conta da farmácia (Issue #05) todas implantadas.*

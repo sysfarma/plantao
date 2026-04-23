@@ -152,9 +152,27 @@
         "updated_at": { "type": "string", "format": "date-time" }
       },
       "required": ["title", "description", "is_active", "order"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Trail of manual administrative actions",
+      "type": "object",
+      "properties": {
+        "admin_id": { "type": "string" },
+        "resource_type": { "type": "string" },
+        "resource_id": { "type": "string" },
+        "action": { "type": "string" },
+        "details": { "type": "object" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["admin_id", "resource_type", "resource_id", "action", "timestamp"]
     }
   },
   "firestore": {
+    "/audit_logs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Audit trails for administrative changes"
+    },
     "/config/{configId}": {
       "schema": "Config",
       "description": "System configuration flags and API keys"
