@@ -288,6 +288,13 @@ export default function PharmacyDashboard() {
                     <p className="text-sm">Sua farmácia está visível nas buscas. Expira em: {new Date(profile.subscription?.expires_at).toLocaleDateString('pt-BR')}</p>
                   </div>
                   <div className="ml-auto flex gap-2">
+                    <button
+                      onClick={() => setIsCancelModalOpen(true)}
+                      className="inline-flex items-center gap-2 px-4 py-2 border border-red-200 text-red-700 bg-red-50 rounded-lg hover:bg-red-100 transition-colors text-sm font-bold"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Cancelar Assinatura
+                    </button>
                     <button 
                       onClick={() => setIsUpdateCardModalOpen(true)}
                       className="inline-flex items-center gap-2 px-4 py-2 border border-emerald-200 text-emerald-700 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition-colors text-sm font-bold"

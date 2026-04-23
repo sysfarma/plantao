@@ -1,31 +1,67 @@
-# Relatório Analítico: Backlog e Gaps da Integração Mercado Pago
+# Relatório de Status - Integração Mercado Pago (Render.com)
 
-**Objetivo:** Analisar o estado atual da integração ponta a ponta com a API do Mercado Pago no sistema e elencar exclusivamente os pontos pendentes, incompletos e fluxos ausentes obrigatórios para garantir segurança antifraude e consistência fiscal/comercial no ambiente de produção.
+**Data da Análise:** `22 de Abril de 2026`
+**Domínio de Destino:** `https://farmaciasdeplantao.app.br`
+
+Este relatório descreve o status atual da implementação da API do Mercado Pago (Cobranças via Pix e Cartão de Crédito/Checkout Pro) no sistema, voltado para a transição à hospedagem no Render.com.
+
+---
+
+## 1. Visão Geral do Sistema Atual
+
+A aplicação é dividida em frontend (React/Vite) e backend (Server.ts integrado com Express). A comunicação com o Mercado Pago utiliza as credenciais configuradas em variáveis de ambiente e processa os webhooks (via assinatura assíncrona v1 do MP) para mudar o status na base Firestore. 
+
+*   O Checkout implementa pagamentos independentes via Pix e Pre-Approvals via Cartão.
+*   Uma interface do assinante no Dashboard fornece a habilidade de atualizar o cartão e (adicionado nesta análise) cancelar assinaturas ativas sem chamar o suporte.
+
+## 2. O que falta configurar para funcionar no Render.com em Produção
+
+Embora o código backend e frontend tenha alta cobertura funcional, certas configurações dependem de ações manuais ou variáveis exclusivas para a infraestrutura no **Render.com**.
+
+### A. Variáveis de Ambiente Corretas (Backend/Render)
+
+O Dashboard do Render exigirá o cadastro das seguintes chaves (exatamente com estes nomes). Verifiquei o código, e o servidor requer:
+
+1.  `MERCADOPAGO_ACCESS_TOKEN`
+    *   **Importante:** Deve ser o *Access Token de Produção* (`APP_USR-...`), obtido em "*Credenciais de Produção*" no painel de desenvolvedores do Mercado Pago. O token de teste (`TEST-...`) fará os pagamentos Pix expirarem na hora.
+2.  `MERCADOPAGO_WEBHOOK_SECRET`
+    *   O `server.ts` exige a assinatura (Hmac) para validar pagamentos usando o V1 signature validation.
+    *   **Obtenção:** No painel do MP > "*Notificações Webhooks*" > Configure as permissões > Em seguida será exibida a Hash de Segurança, que deve ir para essa env.
+3.  `APP_URL`
+    *   O backend usa isso para preencher o `"notification_url"`. **Precisa obrigatoriamente estar definido como:** `https://farmaciasdeplantao.app.br`
+    *   Sem isso, o webhook cairá em um endereço inacessível e os perfis Pix não serão ativados.
+
+### B. Configuração do Webhook no Mercado Pago
+
+O Mercado Pago precisa saber que deve enviar eventos para a hospedagem do Render. Você deverá:
+
+1.  No painel do Mercado Pago (Developers > Webhooks), registrar a URL:
+    *   `https://farmaciasdeplantao.app.br/webhooks`
+2.  Inscrever-se nos seguintes eventos obrigatórios:
+    *   **Pagamentos** (Aprovações/Cancelamentos do Pix)
+    *   **Planos e Assinaturas (Preapproval)** (Aprovações/Rejeições de renovação via Cartão)
+
+### C. Domínio do Cliente (Front-end CORS e Firebase)
+
+Quando o servidor for transferido de `*.run.app` para `farmaciasdeplantao.app.br`, haverá problemas com o botão do Google e acessibilidade se não ajustar o DNS (Cloudflare/Render) e o painel Auth. O backend *Mercado Pago* não liga para o CORS na ida, apenas atente que a volta do Webhook seja na URL HTTPS correta para ser processada pelo Node.js e que a UI possa consumir pelo novo domínio.
 
 ---
 
-### 1. Tratamento de Reembolsos e Chargebacks (Incompleto/Vulnerável)
-- **Cenário Atual:** O webhook que escuta pagamentos avulsos/Pix (`/api/webhooks/payment`) consegue ativar o plano quando o status é transicionado para `"approved"`. Entretanto, se ocorrer estorno na operadora ou no cartão de crédito, status como `"refunded"`, `"charged_back"` ou `"rejected"` são apenas atualizados passivamente no painel de transações do Firestore (`payments`).
-- **Impacto Transacional:** Quando a devolução do dinheiro ocorre, a base do sistema **não atinge a tabela de farmácias para expurgar ou cancelar a inscrição no código atual**. O usuário recebe o dinheiro de volta, mas a sua farmácia e seu "Selo de Assinatura" (`is_active = 1`) continuam ativos indevidamente para sempre até o próximo ciclo ignorado.
-- **Resolução:** Injetar um bloco `else if` que force a desativação da farmácia e de sua inscrição local caso cheguem payloads de ruptura de receita.
+## 3. Segurança & Resiliência Implementadas (Boas Práticas)
 
-### 2. Fluxo de Cancelamento Voluntário pelo Usuário (Ausente Front-end/Back-end)
-- **Cenário Atual:** A rota que finaliza preApprovals obsoletos (`cancelExistingSubscriptions`) atua somente nos bastidores quando uma **nova** contratação suplanta a antiga.
-- **Impacto Transacional:** Pelas normas comuns de direito do consumidor e SaaS, o lojista deve conseguir interromper seu plano a hora que quiser (Impedimento da Renovação Automática). Atualmente, no `Dashboard.tsx`, não existe um botão "Cancelar Assinatura". O Backend também não provê uma rota acessível `/api/subscriptions/cancel` para ser chamada nativamente. 
-- **Resolução:** Criar rota DELETE/PUT para cancelamento manual e integrá-la no Painel do usuário (UI) para evitar atrito ou chamados desgastantes no suporte via WhatsApp.
+*   **Idempotência:** O código backend de criação do Pix utiliza Headers de idempotência via `uuidv4()`. Se houver duplo clique no app, não gerará dois pagamentos.
+*   **Hash HMAC v1:** O webhook já confere os cabeçalhos `x-signature` e `x-request-id` enviados pelo MercadoPago, que barra invasores chamando `/webhooks` manualmente com payloads forjados, assumindo que `MERCADOPAGO_WEBHOOK_SECRET` não vaze.
+*   **Filtros Otimizados Firestore:** Quando pagamentos/assinaturas ativam/cancelam, os campos da farmácia associados `is_active`, `sub_status` sincronizam automaticamente. O reciclo de assinaturas desativa a antiga se houver troca de plano (up/downgrades).
 
-### 3. Sincronização Sensível de Status em Assinaturas (Requisitos SDK)
-- **Cenário Atual:** O webhook do tipo `subscription_preapproval` varre e filtra as condições `"authorized"` para `"active"` ou `"cancelled"` para `"cancelled"`.
-- **Impacto Transacional:** Assinaturas MP (`PreApprovals`) emitem outros microestados como `"paused"` (usado quando o lojista pausa do lado do aplicativo nativo do Mercado Pago na seção Minhas Assinaturas) ou `"suspended"` (usado quando o limite em cartão dá erro em sucessivas recuperações no fim do mês). Do jeito que o backend absorve isso hoje, a queda cairá no bloco raiz e ficará tida como `"pending"`. Isto barra a autenticação, porém perde-se a rastreabilidade contextual e detona alertas genéricos de "Pagamento Não Finalizado", confundindo tanto o admin quanto o usuário. 
+## 4. Onde Encontrar o Log de Debbug (Render)
 
-### 4. Gargalo Crítico de Timeout em Webhooks (Risco Backend)
-- **Cenário Atual:** A função do router responsável por receber do Mercado Pago faz a verificação do Hash criptográfico, busca o ID real via SDK, localiza os registros do Firestore, modifica-os e ainda invoca o provedor de disparo SMTP `emailService` **TUDO DE FORMA SÍNCRONA** (`await` encadeado sem retornar).
-- **Impacto Transacional:** A documentação do Mercado Pago exige Retorno Imediato HTTP `200 OK`. Se o banco Firestore estiver mais lento no dia ou o servidor de e-mail engasgar e tudo passar de uns escassos segundos, o Mercado Pago fará o *Dropping* e executará a fila de reenvios consecutivos (*Retries*). O endpoint da infraestrutura levará rajadas, engajando duplicação de emails e stress processual.
-- **Resolução:** Desacoplar a resposta da rede e a ação. Validou a assinatura? Responda imediatamente o `res.status(200)`. Deixe o resto do processamento em background sob promessa.
+Em caso de pagamentos reportarem "Aguardando Pagamento" indefinidamente após o usuário ter pago:
+1.  Verifique a aba **Logs** do Web Service no Render.
+2.  Filtre a saída pelas frases que inserimos no backend:
+    *   `Webhook received ...` (Início)
+    *   `Payment <id> verified and approved. Pharmacy <id> activated.` (Sucesso no Pix)
+    *   `Error validating webhook signature` (Alerta para erro na Secret Key)
+    *   `Invalid Signature` (Se o Hmac falhar)
+    *   `Mercado Pago API Subscription Error:` ou `Mercado Pago API PIX Error:` (Falhas de Criação).
 
-### 5. URL de Notificação Ativa Dinamicamente (Ausência de Flexibilidade)
-- **Cenário Atual:** Na elaboração de `paymentClient.create(...)` e `preApprovalClient.create(...)` em `/api/subscriptions/create`, o atributo opcional `notification_url` foi excluído do JSON do *body*.
-- **Impacto Transacional:** Essa omissão obriga o dependente (SysAdmin do projeto) a se lembrar de inserir a rota do sistema local estritamente pelo painel online e obscuro para webhooks (na área Developer do Mercado Pago). Se for gerada uma Preview, Staging, novo IP para testes – o webhook e a baixa manual de Pix morre, pois o Mercado Pago mandará para o link fixado do dashboard antigo. A adoção da propriedade injetada no momento do checkout previne configurações órfãs. 
-
----
-*Status das implementações recentes verificadas e completas: Buscas "customer fallback" perfeitas (Issue #03), Expiração correta para Pix em 30 min (Issue #04) e Renovação direta de Token de cartão na conta da farmácia (Issue #05) todas implantadas.*
+Ao aplicar todos os pontos da *Seção 2*, o fluxo financeiro na *Render.com* com o respectivo domínio estará pronto pra receber valores dos clientes da aplicação final.

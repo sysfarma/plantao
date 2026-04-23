@@ -1192,6 +1192,70 @@ async function startServer() {
     }
   });
 
+  // Pharmacy: Cancel Subscription voluntarily
+  app.delete('/api/subscriptions/cancel', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: 'Acesso negado' });
+
+    try {
+      const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
+      if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
+      
+      const pharmacyDoc = pharmacySnapshot.docs[0];
+      const pharmacyId = pharmacyDoc.id;
+
+      // Find active subscription
+      const subSnapshot = await db.collection('subscriptions')
+        .where('pharmacy_id', '==', pharmacyId)
+        .where('status', 'in', ['active', 'pending', 'authorized'])
+        .get();
+
+      if (subSnapshot.empty) {
+        return res.status(400).json({ error: 'Nenhuma assinatura ativa encontrada para cancelar.' });
+      }
+
+      const activeSubDoc = subSnapshot.docs[0];
+      const activeSub = activeSubDoc.data();
+
+      // Cancel in Mercado Pago if managed by them
+      if (activeSub.mp_preapproval_id && !activeSub.mp_preapproval_id.startsWith('sub_mock') && activeSub.mp_preapproval_id !== 'mock') {
+        const { preApprovalClient, isMock } = await getMPClient();
+        if (!isMock) {
+          try {
+            await preApprovalClient.update({
+              id: activeSub.mp_preapproval_id,
+              body: { status: 'cancelled' }
+            });
+          } catch (mpError: any) {
+             console.error('Info: PreApproval could not be cancelled in MP. Maybe already cancelled. Msg:', mpError.message);
+          }
+        }
+      }
+
+      const now = new Date().toISOString();
+
+      // Deactivate Sub locally
+      await db.collection('subscriptions').doc(activeSubDoc.id).update({
+        status: 'cancelled',
+        updated_at: now
+      });
+
+      // Deactivate Pharmacy
+      await db.collection('pharmacies').doc(pharmacyId).update({
+        is_active: 0,
+        subscription_active: false,
+        sub_status: 'cancelled',
+        updated_at: now
+      });
+
+      await updateDashboardStats();
+      
+      res.json({ success: true, message: 'Assinatura cancelada com sucesso.' });
+    } catch (err: any) {
+      console.error('Error in /api/subscriptions/cancel:', err);
+      res.status(500).json({ error: 'Erro ao cancelar assinatura: ' + err.message });
+    }
+  });
+
   // Pharmacy: Update Subscription Card Token
   app.put('/api/subscriptions/update-card', authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'pharmacy') return res.status(403).json({ error: 'Acesso negado' });
