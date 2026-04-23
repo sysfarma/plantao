@@ -1588,8 +1588,16 @@ async function startServer() {
 
     // Run processing asynchronously
     (async () => {
-      const { type, action, data } = req.body;
-      const eventId = req.query.id || req.body.id; // Mercado Pago sends ID in query or body depending on event
+      let { type, action, data } = req.body;
+      const eventId = req.query.id || req.body.id || req.query['data.id'];
+      
+      // Normalize type and action based on Mercado Pago inconsistent webhook schemas
+      if (!type && req.query.type) type = req.query.type;
+      if (!type && req.query.topic) type = req.query.topic;
+      if (action && typeof action === 'string') {
+         if (action.startsWith('payment')) type = 'payment';
+         if (action.startsWith('subscription')) type = 'subscription_preapproval';
+      }
       
       // 2. Handle standard payment events (Pix, single cards)
       if (type === 'payment' && data && data.id) {
