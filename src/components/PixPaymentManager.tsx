@@ -220,14 +220,6 @@ export default function PixPaymentManager({ onPaymentSuccess, planType = 'annual
             )}
           </div>
         </button>
-        
-        <button 
-          onClick={() => window.open('https://www.mercadopago.com.br/ajuda', '_blank')}
-          className="flex items-center justify-center gap-2 w-full py-3 text-gray-400 hover:text-gray-600 text-xs font-medium transition-colors"
-        >
-          <ExternalLink className="w-3.5 h-3.5" />
-          Ver instruções de pagamento
-        </button>
       </div>
 
       <div className="mt-8 flex items-center gap-2 px-4 py-2 bg-gray-50 rounded-full border border-gray-100 text-[10px] text-gray-400 font-bold uppercase tracking-widest">
