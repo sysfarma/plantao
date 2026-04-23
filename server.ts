@@ -1039,7 +1039,7 @@ async function startServer() {
       const now = new Date();
       const endYear = addYears(now, 1);
       
-      const appUrl = process.env.APP_URL || `https://${req.get('host')}`;
+      const appUrl = process.env.APP_URL || 'https://farmaciasdeplantao.app.br';
       
       const preApprovalBody: any = {
         back_url: `${appUrl}/pharmacy`,
@@ -1308,7 +1308,7 @@ async function startServer() {
       }
 
       const { preApprovalClient, isMock } = await getMPClient();
-      const appUrl = process.env.APP_URL || `https://${req.get('host')}`;
+      const appUrl = process.env.APP_URL || 'https://farmaciasdeplantao.app.br';
 
       const preApprovalBody: any = {
         back_url: `${appUrl}/pharmacy`,
@@ -1409,7 +1409,7 @@ async function startServer() {
       const isoExpiration = expirationDate.toISOString();
 
       const { paymentClient, isMock } = await getMPClient();
-      const appUrl = process.env.APP_URL || `https://${req.get('host')}`;
+      const appUrl = process.env.APP_URL || 'https://farmaciasdeplantao.app.br';
 
       try {
         if (isMock) throw new Error('mock_mode');
