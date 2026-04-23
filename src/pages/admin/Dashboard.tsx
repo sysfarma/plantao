@@ -66,7 +66,8 @@ export default function AdminDashboard() {
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
 
   const user = JSON.parse(localStorage.getItem('user') || '{}');
-  const adminEmail = import.meta.env.VITE_ADMIN_EMAIL;
+  const rawAdmin = import.meta.env.VITE_ADMIN_EMAIL;
+  const adminEmail = rawAdmin ? rawAdmin.replace(/['"]/g, '') : null;
   const isAdminMaster = adminEmail && user.email === adminEmail;
 
   const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);

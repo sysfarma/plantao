@@ -28,7 +28,8 @@ export default function GoogleLoginButton({ text = "continue_with" }: GoogleLogi
 
       let userData;
       if (!userSnap.exists()) {
-        const adminEmail = import.meta.env.VITE_ADMIN_EMAIL;
+        const rawAdmin = import.meta.env.VITE_ADMIN_EMAIL;
+        const adminEmail = rawAdmin ? rawAdmin.replace(/['"]/g, '') : null;
         const role = (adminEmail && result.user.email === adminEmail ? 'admin' : 'client') as 'admin' | 'pharmacy' | 'client';
         userData = {
           email: result.user.email,
@@ -66,7 +67,8 @@ export default function GoogleLoginButton({ text = "continue_with" }: GoogleLogi
       } else {
         userData = userSnap.data();
         // Upgrade to admin if email matches
-        const adminEmail = import.meta.env.VITE_ADMIN_EMAIL;
+        const rawAdmin = import.meta.env.VITE_ADMIN_EMAIL;
+        const adminEmail = rawAdmin ? rawAdmin.replace(/['"]/g, '') : null;
         if (adminEmail && result.user.email === adminEmail && userData.role !== 'admin') {
           userData.role = 'admin';
           await setDoc(userRef, { role: 'admin' }, { merge: true });
