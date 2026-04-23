@@ -17,7 +17,6 @@ export default function PixPaymentManager({ onPaymentSuccess, planType = 'annual
   const [pixData, setPixData] = useState<{ payment_id: string; qr_code: string; qr_code_base64: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const [status, setStatus] = useState<'pending' | 'approved'>('pending');
-  const [subscriptionId, setSubscriptionId] = useState<string | null>(null);
   const [timeLeft, setTimeLeft] = useState(1800); // 30 minutes in seconds
 
   const generatePix = async () => {
@@ -39,22 +38,6 @@ export default function PixPaymentManager({ onPaymentSuccess, planType = 'annual
 
       setPixData(data);
       setTimeLeft(1800); // Reset timer
-      
-      // Find pharmacy and subscription for status tracking
-      const user = auth.currentUser;
-      if (user) {
-        const pharmQuery = query(collection(db, 'pharmacies'), where('user_id', '==', user.uid));
-        const pharmSnapshot = await getDocs(pharmQuery);
-        if (!pharmSnapshot.empty) {
-          const pId = pharmSnapshot.docs[0].id;
-          
-          const subsQuery = query(collection(db, 'subscriptions'), where('pharmacy_id', '==', pId));
-          const subsSnapshot = await getDocs(subsQuery);
-          if (!subsSnapshot.empty) {
-            setSubscriptionId(subsSnapshot.docs[0].id);
-          }
-        }
-      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -77,17 +60,21 @@ export default function PixPaymentManager({ onPaymentSuccess, planType = 'annual
 
   // Listen for payment status
   useEffect(() => {
-    if (!pixData || !subscriptionId) return;
+    if (!pixData || !pixData.payment_id) return;
 
-    const unsubscribe = onSnapshot(doc(db, 'subscriptions', subscriptionId), (docSnap) => {
-      if (docSnap.exists() && docSnap.data().status === 'active') {
-        setStatus('approved');
-        setTimeout(() => onPaymentSuccess(), 2000);
+    const paymentsQuery = query(collection(db, 'payments'), where('mp_payment_id', '==', pixData.payment_id.toString()));
+    const unsubscribe = onSnapshot(paymentsQuery, (snapshot) => {
+      if (!snapshot.empty) {
+        const paymentDoc = snapshot.docs[0];
+        if (paymentDoc.data().status === 'approved') {
+          setStatus('approved');
+          setTimeout(() => onPaymentSuccess(), 2000);
+        }
       }
     });
 
     return () => unsubscribe();
-  }, [pixData, subscriptionId, onPaymentSuccess]);
+  }, [pixData, onPaymentSuccess]);
 
   const handleCopy = () => {
     if (pixData?.qr_code) {
