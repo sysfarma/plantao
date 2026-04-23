@@ -60,9 +60,12 @@ export default function PixPaymentManager({ onPaymentSuccess, planType = 'annual
 
   // Listen for payment status
   useEffect(() => {
-    if (!pixData || !pixData.payment_id) return;
+    if (!pixData || !pixData.payment_id || !auth.currentUser?.uid) return;
 
-    const paymentsQuery = query(collection(db, 'payments'), where('mp_payment_id', '==', pixData.payment_id.toString()));
+    const paymentsQuery = query(collection(db, 'payments'), 
+      where('user_id', '==', auth.currentUser.uid),
+      where('mp_payment_id', '==', pixData.payment_id.toString())
+    );
     const unsubscribe = onSnapshot(paymentsQuery, (snapshot) => {
       if (!snapshot.empty) {
         const paymentDoc = snapshot.docs[0];
@@ -127,17 +130,47 @@ export default function PixPaymentManager({ onPaymentSuccess, planType = 'annual
 
   if (status === 'approved') {
     return (
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.9 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="flex flex-col items-center justify-center p-8 bg-emerald-50 rounded-3xl border border-emerald-200 text-center"
-      >
-        <div className="w-20 h-20 bg-emerald-500 text-white rounded-full flex items-center justify-center mb-6 shadow-xl shadow-emerald-200">
-          <CheckCircle className="w-12 h-12" />
-        </div>
-        <h3 className="text-2xl font-bold text-emerald-900 mb-2">Pagamento Aprovado!</h3>
-        <p className="text-emerald-700 font-medium">Sua farmácia agora é Premium.</p>
-      </motion.div>
+      <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm">
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.8, y: 20 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          className="w-full max-w-sm flex flex-col items-center justify-center p-10 bg-white rounded-3xl shadow-2xl relative overflow-hidden"
+        >
+          <div className="absolute inset-0 bg-gradient-to-br from-emerald-50 to-white -z-10" />
+          <motion.div 
+            initial={{ scale: 0 }}
+            animate={{ scale: 1.2, transition: { type: 'spring', bounce: 0.6, duration: 0.8 } }}
+            className="w-24 h-24 bg-emerald-500 text-white rounded-full flex items-center justify-center mb-8 shadow-xl shadow-emerald-200"
+          >
+            <CheckCircle className="w-14 h-14" />
+          </motion.div>
+          
+          <motion.h3 
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0, transition: { delay: 0.2 } }}
+            className="text-2xl font-black text-gray-900 mb-3 text-center"
+          >
+            Pagamento Aprovado!
+          </motion.h3>
+          
+          <motion.p 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1, transition: { delay: 0.4 } }}
+            className="text-gray-500 font-medium text-center mb-6"
+          >
+            Sua assinatura foi ativada com sucesso. Redirecionando...
+          </motion.p>
+          
+          <motion.div 
+             initial={{ opacity: 0 }}
+             animate={{ opacity: 1, transition: { delay: 0.6 } }}
+             className="flex items-center gap-2 text-xs font-bold text-emerald-600 uppercase tracking-widest"
+          >
+            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+            Aguarde
+          </motion.div>
+        </motion.div>
+      </div>
     );
   }
 

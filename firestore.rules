@@ -186,7 +186,7 @@ service cloud.firestore {
 
     function isValidPayment(data) {
       return hasRequiredFields(['pharmacy_id', 'amount', 'status', 'created_at']) &&
-             hasOnlyAllowedFields(['pharmacy_id', 'amount', 'status', 'created_at', 'updated_at', 'method', 'mp_payment_id', 'user_id', 'owner_id']) &&
+             hasOnlyAllowedFields(['pharmacy_id', 'amount', 'status', 'created_at', 'updated_at', 'method', 'mp_payment_id', 'user_id', 'owner_id', 'plan_type']) &&
              data.pharmacy_id is string && data.pharmacy_id.size() < 100 &&
              data.amount is number && data.amount > 0 &&
              data.status in ['pending', 'approved', 'rejected'] &&
@@ -306,7 +306,8 @@ service cloud.firestore {
     }
 
     match /payments/{paymentId} {
-      allow read: if isAdmin() || isSensitiveResourceOwner(resource.data) || (isAuthenticated() && isPharmacyOwner(resource.data.pharmacy_id));
+      allow get: if isAdmin() || isSensitiveResourceOwner(resource.data) || (isAuthenticated() && isPharmacyOwner(resource.data.pharmacy_id));
+      allow list: if isAdmin() || (isAuthenticated() && resource.data.user_id == request.auth.uid);
       allow create: if isAuthenticated() && isValidPayment(request.resource.data) && isPharmacyOwner(request.resource.data.pharmacy_id);
       allow update: if isAdmin() && isValidPayment(request.resource.data) && areImmutableFieldsUnchanged(['pharmacy_id', 'created_at']);
       allow delete: if isAdmin();

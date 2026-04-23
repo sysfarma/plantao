@@ -1522,9 +1522,10 @@ async function startServer() {
       const now = new Date().toISOString();
       await db.collection('payments').add({
         pharmacy_id: pharmacyId,
+        user_id: req.user.id,
         amount: transactionAmount,
         method: 'pix',
-        plan_type: planType, // Added plan_type
+        plan_type: planType,
         status: 'pending',
         mp_payment_id: mpPaymentId,
         created_at: now,
