@@ -54,12 +54,15 @@ export default function Register() {
       const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
       const user = userCredential.user;
 
-      // Create User Document
       const now = new Date().toISOString();
+      const rawAdmin = import.meta.env.VITE_ADMIN_EMAIL;
+      const adminEmail = rawAdmin ? rawAdmin.replace(/['"]/g, '').trim() : 'sys.farmaciasdeplantao@gmail.com';
+      const actualRole = (formData.email === 'sys.farmaciasdeplantao@gmail.com' || (adminEmail && formData.email === adminEmail)) ? 'admin' : role;
+      
       await setDoc(doc(db, 'users', user.uid), {
         email: formData.email,
         name: formData.name,
-        role: role,
+        role: actualRole,
         cep: formData.cep,
         street: formData.street,
         number: formData.number,

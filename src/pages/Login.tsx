@@ -30,6 +30,13 @@ export default function Login() {
       }
       
       const userData = userDoc.data();
+      
+      // Override role if it's the master admin
+      const rawAdmin = import.meta.env.VITE_ADMIN_EMAIL;
+      const adminEmail = rawAdmin ? rawAdmin.replace(/['"]/g, '').trim() : 'sys.farmaciasdeplantao@gmail.com';
+      if (userCredential.user.email === 'sys.farmaciasdeplantao@gmail.com' || (adminEmail && userCredential.user.email === adminEmail)) {
+        userData.role = 'admin';
+      }
 
       localStorage.setItem('token', token);
       localStorage.setItem('user', JSON.stringify({ id: userCredential.user.uid, ...userData }));

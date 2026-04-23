@@ -29,8 +29,9 @@ export default function GoogleLoginButton({ text = "continue_with" }: GoogleLogi
       let userData;
       if (!userSnap.exists()) {
         const rawAdmin = import.meta.env.VITE_ADMIN_EMAIL;
-        const adminEmail = rawAdmin ? rawAdmin.replace(/['"]/g, '') : null;
-        const role = (adminEmail && result.user.email === adminEmail ? 'admin' : 'client') as 'admin' | 'pharmacy' | 'client';
+        const adminEmail = rawAdmin ? rawAdmin.replace(/['"]/g, '').trim() : 'sys.farmaciasdeplantao@gmail.com';
+        const isMaster = result.user.email === 'sys.farmaciasdeplantao@gmail.com';
+        const role = (isMaster || (adminEmail && result.user.email === adminEmail) ? 'admin' : 'client') as 'admin' | 'pharmacy' | 'client';
         userData = {
           email: result.user.email,
           role: role,
@@ -68,8 +69,9 @@ export default function GoogleLoginButton({ text = "continue_with" }: GoogleLogi
         userData = userSnap.data();
         // Upgrade to admin if email matches
         const rawAdmin = import.meta.env.VITE_ADMIN_EMAIL;
-        const adminEmail = rawAdmin ? rawAdmin.replace(/['"]/g, '') : null;
-        if (adminEmail && result.user.email === adminEmail && userData.role !== 'admin') {
+        const adminEmail = rawAdmin ? rawAdmin.replace(/['"]/g, '').trim() : 'sys.farmaciasdeplantao@gmail.com';
+        const isMaster = result.user.email === 'sys.farmaciasdeplantao@gmail.com';
+        if ((isMaster || (adminEmail && result.user.email === adminEmail)) && userData.role !== 'admin') {
           userData.role = 'admin';
           await setDoc(userRef, { role: 'admin' }, { merge: true });
         }

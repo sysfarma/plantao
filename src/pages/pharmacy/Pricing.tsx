@@ -23,9 +23,10 @@ export default function Pricing() {
   const [loadingBenefits, setLoadingBenefits] = useState(true);
   const [whatsappHelp, setWhatsappHelp] = useState({ number: '5500000000000', active: true });
 
-  const adminEmail = import.meta.env.VITE_ADMIN_EMAIL;
+  const rawAdmin = import.meta.env.VITE_ADMIN_EMAIL;
+  const adminEmail = rawAdmin ? rawAdmin.replace(/['"]/g, '').trim() : 'sys.farmaciasdeplantao@gmail.com';
   const user = JSON.parse(localStorage.getItem('user') || '{}');
-  const isAdminMaster = adminEmail && user.email === adminEmail;
+  const isAdminMaster = user.email === 'sys.farmaciasdeplantao@gmail.com' || (adminEmail && user.email === adminEmail);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingBlock, setEditingBlock] = useState<any>(null);

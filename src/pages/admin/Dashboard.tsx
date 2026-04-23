@@ -67,8 +67,8 @@ export default function AdminDashboard() {
 
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const rawAdmin = import.meta.env.VITE_ADMIN_EMAIL;
-  const adminEmail = rawAdmin ? rawAdmin.replace(/['"]/g, '') : null;
-  const isAdminMaster = adminEmail && user.email === adminEmail;
+  const adminEmail = rawAdmin ? rawAdmin.replace(/['"]/g, '').trim() : 'sys.farmaciasdeplantao@gmail.com';
+  const isAdminMaster = user.email === 'sys.farmaciasdeplantao@gmail.com' || (adminEmail && user.email === adminEmail);
 
   const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
   const [shiftForm, setShiftForm] = useState({ pharmacy_id: '', date: '', start_time: '07:00', end_time: '22:00', is_24h: false });
