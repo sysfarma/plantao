@@ -263,7 +263,7 @@ export default function PublicLayout() {
           </div>
         </div>
       </footer>
-      <MobileBottomNav />
+      <MobileBottomNav onMenuClick={() => setIsMenuOpen(!isMenuOpen)} />
     </div>
   );
 }

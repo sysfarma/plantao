@@ -126,7 +126,7 @@ export default function PharmacyLayout() {
       <main className="flex-1 overflow-auto max-w-[80%] mx-auto w-full">
         <Outlet />
       </main>
-      <MobileBottomNav />
+      <MobileBottomNav onMenuClick={() => setIsMenuOpen(!isMenuOpen)} />
     </div>
   );
 }

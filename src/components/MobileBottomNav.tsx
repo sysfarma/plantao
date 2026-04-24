@@ -1,8 +1,12 @@
 import { Link } from 'react-router-dom';
-import { Home, Clock, User, Calendar } from 'lucide-react';
+import { Home, Clock, Menu, Calendar } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
-export default function MobileBottomNav() {
+interface MobileBottomNavProps {
+  onMenuClick?: () => void;
+}
+
+export default function MobileBottomNav({ onMenuClick }: MobileBottomNavProps) {
   const [user, setUser] = useState<any>(null);
 
   useEffect(() => {
@@ -28,13 +32,13 @@ export default function MobileBottomNav() {
         <Calendar className="w-6 h-6 mb-1" />
         <span className="text-[10px] font-medium">Próximos</span>
       </Link>
-      <Link 
-        to={user ? '/perfil' : '/login'} 
+      <button 
+        onClick={onMenuClick} 
         className="flex flex-col items-center justify-center w-full h-full text-gray-500 hover:text-emerald-600 transition-colors"
       >
-        <User className="w-6 h-6 mb-1" />
-        <span className="text-[10px] font-medium">Perfil</span>
-      </Link>
+        <Menu className="w-6 h-6 mb-1" />
+        <span className="text-[10px] font-medium">Menu</span>
+      </button>
     </nav>
   );
 }
