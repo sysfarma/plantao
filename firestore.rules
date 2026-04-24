@@ -307,7 +307,7 @@ service cloud.firestore {
 
     match /payments/{paymentId} {
       allow get: if isAdmin() || isSensitiveResourceOwner(resource.data) || (isAuthenticated() && isPharmacyOwner(resource.data.pharmacy_id));
-      allow list: if isAdmin() || (isAuthenticated() && resource.data.user_id == request.auth.uid);
+      allow list: if isAdmin() || (isAuthenticated() && (resource.data.user_id == request.auth.uid || isPharmacyOwner(resource.data.pharmacy_id)));
       allow create: if isAuthenticated() && isValidPayment(request.resource.data) && isPharmacyOwner(request.resource.data.pharmacy_id);
       allow update: if isAdmin() && isValidPayment(request.resource.data) && areImmutableFieldsUnchanged(['pharmacy_id', 'created_at']);
       allow delete: if isAdmin();

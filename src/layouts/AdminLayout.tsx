@@ -121,7 +121,7 @@ export default function AdminLayout() {
         </div>
       </aside>
       
-      <main className="flex-1 overflow-auto max-w-[80%] mx-auto w-full">
+      <main className="flex-1 overflow-auto w-full">
         <Outlet />
       </main>
       <MobileBottomNav onMenuClick={() => setIsMenuOpen(!isMenuOpen)} />

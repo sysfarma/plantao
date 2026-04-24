@@ -244,7 +244,7 @@ export default function PharmacyDashboard() {
   const isActive = profile.is_active === 1;
 
   return (
-    <div className="p-8 max-w-5xl mx-auto">
+    <div className="p-4 md:p-8 w-full mx-auto">
       <h1 className="text-2xl font-bold text-gray-900 mb-6">Painel da Farmácia</h1>
 
       {/* Tabs */}
@@ -281,66 +281,64 @@ export default function PharmacyDashboard() {
             
             {isActive ? (
               <div className="flex flex-col gap-3">
-                <div className="flex items-center gap-3 text-emerald-700 bg-emerald-50 p-4 rounded-lg">
-                  <CheckCircle className="w-6 h-6" />
-                  <div>
-                    <p className="font-medium">Assinatura Ativa</p>
-                    <p className="text-sm">Sua farmácia está visível nas buscas. Expira em: {new Date(profile.subscription?.expires_at).toLocaleDateString('pt-BR')}</p>
+                <div className="flex flex-col md:flex-row md:items-center gap-4 text-emerald-700 bg-emerald-50 p-4 rounded-lg">
+                  <div className="flex items-start gap-3 flex-1 min-w-0">
+                    <CheckCircle className="w-6 h-6 flex-shrink-0 mt-0.5" />
+                    <div className="min-w-0">
+                      <p className="font-medium truncate">Assinatura Ativa</p>
+                      <p className="text-sm break-words">Sua farmácia está visível nas buscas. Expira em: {new Date(profile.subscription?.expires_at).toLocaleDateString('pt-BR')}</p>
+                    </div>
                   </div>
-                  <div className="ml-auto flex gap-2">
-                    <button
-                      onClick={() => setIsCancelModalOpen(true)}
-                      className="inline-flex items-center gap-2 px-4 py-2 border border-red-200 text-red-700 bg-red-50 rounded-lg hover:bg-red-100 transition-colors text-sm font-bold"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                      Cancelar Assinatura
-                    </button>
+                  <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto">
                     <button 
                       onClick={() => setIsUpdateCardModalOpen(true)}
-                      className="inline-flex items-center gap-2 px-4 py-2 border border-emerald-200 text-emerald-700 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition-colors text-sm font-bold"
+                      className="inline-flex items-center justify-center gap-2 px-4 py-2 border border-emerald-200 text-emerald-700 bg-emerald-100/50 rounded-lg hover:bg-emerald-100 transition-colors text-sm font-bold flex-1 sm:flex-none whitespace-nowrap"
                     >
-                      <CreditCard className="w-4 h-4" />
-                      Atualizar Cartão
+                      <CreditCard className="w-4 h-4 flex-shrink-0" />
+                       Atualizar Cartão
                     </button>
                     <Link 
                       to="/pharmacy/pricing" 
-                      className="inline-flex items-center gap-2 px-4 py-2 border border-emerald-200 text-emerald-700 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition-colors text-sm font-bold"
+                      className="inline-flex items-center justify-center gap-2 px-4 py-2 border border-emerald-200 text-emerald-700 bg-emerald-100/50 rounded-lg hover:bg-emerald-100 transition-colors text-sm font-bold flex-1 sm:flex-none whitespace-nowrap"
                     >
-                      <RefreshCw className="w-4 h-4" />
+                      <RefreshCw className="w-4 h-4 flex-shrink-0" />
                       Mudar Plano
                     </Link>
                   </div>
                 </div>
-                <div className="flex justify-end">
+                <div className="pt-2 text-center md:text-right border-t border-gray-100">
                   <button 
                     onClick={() => setIsCancelModalOpen(true)}
-                    className="text-sm text-red-500 hover:text-red-700 hover:underline px-2"
+                    className="inline-flex items-center justify-center gap-2 text-sm font-medium text-gray-500 hover:text-red-600 transition-colors py-2 px-4 rounded-lg hover:bg-red-50 w-full sm:w-auto"
                   >
-                    Desejo cancelar minha assinatura
+                    <Trash2 className="w-4 h-4" />
+                    Cancelar Assinatura
                   </button>
                 </div>
               </div>
             ) : isPaused || isSuspended ? (
               <div className="flex flex-col gap-4">
-                <div className="flex items-center gap-3 text-amber-800 bg-amber-50 p-4 rounded-lg border border-amber-200">
-                  <AlertCircle className="w-6 h-6" />
-                  <div>
-                    <p className="font-medium">
-                      {isPaused ? 'Assinatura Pausada' : 'Assinatura Suspensa (Falha no Cartão)'}
-                    </p>
-                    <p className="text-sm">
-                      {isPaused 
-                        ? 'Sua assinatura foi pausada. Ela precisa ser reativada para sua farmácia voltar ao mapa.'
-                        : 'Identificamos uma falha no processamento da última cobrança no seu cartão de crédito.'}
-                    </p>
+                <div className="flex flex-col md:flex-row md:items-center gap-4 text-amber-800 bg-amber-50 p-4 rounded-lg border border-amber-200">
+                  <div className="flex items-start gap-3 flex-1 min-w-0">
+                    <AlertCircle className="w-6 h-6 flex-shrink-0 mt-0.5" />
+                    <div className="min-w-0">
+                      <p className="font-medium truncate">
+                        {isPaused ? 'Assinatura Pausada' : 'Assinatura Suspensa (Falha no Cartão)'}
+                      </p>
+                      <p className="text-sm break-words">
+                        {isPaused 
+                          ? 'Sua assinatura foi pausada. Ela precisa ser reativada para sua farmácia voltar ao mapa.'
+                          : 'Identificamos uma falha no processamento da última cobrança no seu cartão de crédito.'}
+                      </p>
+                    </div>
                   </div>
                   {isSuspended && (
-                    <div className="ml-auto flex gap-2">
+                    <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto">
                       <button 
                         onClick={() => setIsUpdateCardModalOpen(true)}
-                        className="inline-flex items-center gap-2 px-4 py-2 border border-amber-300 text-amber-800 bg-amber-100 rounded-lg hover:bg-amber-200 transition-colors text-sm font-bold"
+                        className="inline-flex items-center justify-center gap-2 px-4 py-2 border border-amber-300 text-amber-800 bg-amber-100 rounded-lg hover:bg-amber-200 transition-colors text-sm font-bold flex-1 sm:flex-none whitespace-nowrap"
                       >
-                        <CreditCard className="w-4 h-4" />
+                        <CreditCard className="w-4 h-4 flex-shrink-0" />
                         Atualizar Cartão
                       </button>
                     </div>
@@ -351,9 +349,20 @@ export default function PharmacyDashboard() {
                   to="/pharmacy/pricing" 
                   className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-emerald-600 text-white font-bold rounded-lg hover:bg-emerald-700 transition-colors shadow-sm"
                 >
-                  <RefreshCw className="w-5 h-5" />
+                  <RefreshCw className="w-5 h-5 flex-shrink-0" />
                   Regularizar Assinatura
                 </Link>
+                {!isPaused && (
+                  <div className="pt-2 text-center md:text-right border-t border-gray-100">
+                    <button 
+                      onClick={() => setIsCancelModalOpen(true)}
+                      className="inline-flex items-center justify-center gap-2 text-sm font-medium text-gray-500 hover:text-red-600 transition-colors py-2 px-4 rounded-lg hover:bg-red-50 w-full sm:w-auto"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Cancelar assinatura
+                    </button>
+                  </div>
+                )}
               </div>
             ) : isPending ? (
               <div className="flex flex-col gap-4">
