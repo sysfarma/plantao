@@ -43,15 +43,17 @@ export default function Contact() {
               </h2>
               
               <div className="space-y-4">
-                <div className="flex items-start gap-4">
-                  <div className="p-2 bg-white rounded-lg shadow-sm">
-                    <Mail className="w-5 h-5 text-emerald-600" />
+                {(config?.email_support_active !== false) && (
+                  <div className="flex items-start gap-4">
+                    <div className="p-2 bg-white rounded-lg shadow-sm">
+                      <Mail className="w-5 h-5 text-emerald-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500 font-medium">E-mail de Suporte</p>
+                      <p className="text-gray-900 font-bold">{config?.support_email || 'suporte@farmaciasdeplantao.app.br'}</p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-sm text-gray-500 font-medium">E-mail de Suporte</p>
-                    <p className="text-gray-900 font-bold">{config?.support_email || 'suporte@farmaciasdeplantao.app.br'}</p>
-                  </div>
-                </div>
+                )}
 
                 <div className="flex items-start gap-4">
                   <div className="p-2 bg-white rounded-lg shadow-sm">

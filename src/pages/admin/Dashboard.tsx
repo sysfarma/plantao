@@ -46,6 +46,7 @@ export default function AdminDashboard() {
     whatsapp_support: '5500000000000', 
     future_shifts_days: 7, 
     whatsapp_active: true,
+    email_support_active: true,
     support_email: 'contato@farmaciasdeplantao.app.br',
     support_phone: '(00) 00000-0000'
   });
@@ -175,6 +176,7 @@ export default function AdminDashboard() {
           whatsapp_support: data?.whatsapp_support || '5500000000000',
           future_shifts_days: data?.future_shifts_days || 7,
           whatsapp_active: data?.whatsapp_active ?? true,
+          email_support_active: data?.email_support_active ?? true,
           support_email: data?.support_email || 'contato@farmaciasdeplantao.app.br',
           support_phone: data?.support_phone || '(00) 00000-0000'
         });
@@ -1697,6 +1699,18 @@ export default function AdminDashboard() {
               />
               <label htmlFor="whatsapp_active" className="text-sm font-medium text-gray-700">
                 Ativar Botão de WhatsApp flutuante no Checkout
+              </label>
+            </div>
+            <div className="flex items-center gap-2">
+              <input 
+                type="checkbox"
+                id="email_support_active"
+                checked={generalConfig.email_support_active ?? true}
+                onChange={e => setGeneralConfig({...generalConfig, email_support_active: e.target.checked})}
+                className="w-4 h-4 text-emerald-600 border-gray-300 rounded focus:ring-emerald-500"
+              />
+              <label htmlFor="email_support_active" className="text-sm font-medium text-gray-700">
+                Exibir E-mail de Suporte em 'Fale Conosco'
               </label>
             </div>
             <button
