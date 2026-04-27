@@ -295,28 +295,15 @@ export default function Home() {
 
   const handleTrackClick = async (id: string, type: 'whatsapp' | 'map') => {
     try {
-      const pharm = pharmacies.find(p => p.id === id);
-      const batch = writeBatch(db);
-      const clickRef = doc(collection(db, 'clicks'));
-      const pharmacyRef = doc(db, 'pharmacies', id);
-      const now = new Date().toISOString();
-
-      batch.set(clickRef, {
-        pharmacy_id: id,
-        user_id: pharm?.user_id || '', // Include owner_id for optimized security rules
-        type,
-        created_at: now,
-        updated_at: now
+      await safeJsonFetch(`/api/public/pharmacies/${id}/click`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ type })
       });
-
-      batch.update(pharmacyRef, {
-        [type === 'whatsapp' ? 'whatsapp_clicks' : 'map_clicks']: increment(1),
-        updated_at: now
-      });
-
-      await batch.commit();
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, 'clicks/batch');
+      console.error('Error tracking click', err);
     }
   };
 
@@ -541,7 +528,7 @@ export default function Home() {
         </div>
       </section>
 
-      <div className="w-full max-w-[90%] mx-auto px-4 sm:px-6 lg:px-8 mt-12 space-y-12">
+      <div className="w-full max-w-full sm:max-w-[90%] mx-auto px-4 sm:px-6 lg:px-8 mt-12 space-y-12">
         {showResultsFirst ? (
           <>
             <div className="w-full">

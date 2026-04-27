@@ -235,32 +235,6 @@ async function startServer() {
   app.use(cors());
   app.use(express.json());
 
-  // --- API Routes ---
-
-  // Debug: Check Admin Status
-  app.get('/api/debug/admin-check', async (req, res) => {
-    try {
-      const adminEmail = process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL.replace(/['"]/g, '').trim() : 'sys.farmaciasdeplantao@gmail.com';
-      if (!adminEmail) return res.status(500).json({ error: 'ADMIN_EMAIL not configured' });
-      let userRecord = null;
-      try {
-        userRecord = await auth.getUserByEmail(adminEmail);
-      } catch (e) {
-        return res.json({ authExists: false, error: 'User not found in Auth' });
-      }
-      
-      const userDoc = await db.collection('users').where('email', '==', adminEmail).get();
-      res.json({ 
-        authExists: !!userRecord, 
-        firestoreExists: !userDoc.empty,
-        uid: userRecord.uid,
-        role: userDoc.empty ? null : userDoc.docs[0].data().role,
-        projectId: admin.app().options.projectId || 'default'
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
 
   // Auth Middleware
   const authenticateToken = async (req: any, res: any, next: any) => {
@@ -294,23 +268,82 @@ async function startServer() {
         role: (isMasterAdmin || isConfigAdmin) ? 'admin' : (decodedToken.role || 'pharmacy')
       };
       next();
-    } catch (error: any) {
-      console.error('Auth Middleware: Error caught!', error.message);
-      return res.status(401).json({ 
-        error: 'Token inválido ou expirado', 
-        details: error.message,
-        code: error.code || 'unknown'
-      });
+    } catch (err) {
+      console.error('Auth Middleware Error:', err);
+      return res.status(403).json({ error: 'Token inválido ou expirado' });
     }
   };
 
+  // --- API Routes ---
+
+  // Debug: Check Admin Status
+  app.get('/api/debug/admin-check', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Acesso negado' });
+    }
+    try {
+      const adminEmail = process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL.replace(/['"]/g, '').trim() : 'sys.farmaciasdeplantao@gmail.com';
+      if (!adminEmail) return res.status(500).json({ error: 'ADMIN_EMAIL not configured' });
+      let userRecord = null;
+      try {
+        userRecord = await auth.getUserByEmail(adminEmail);
+      } catch (e) {
+        return res.json({ authExists: false, error: 'User not found in Auth' });
+      }
+      
+      const userDoc = await db.collection('users').where('email', '==', adminEmail).get();
+      res.json({ 
+        authExists: !!userRecord, 
+        firestoreExists: !userDoc.empty,
+        uid: userRecord.uid,
+        role: userDoc.empty ? null : userDoc.docs[0].data().role,
+        projectId: admin.app().options.projectId || 'default'
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+
+
+  // Rate limiting map for forgot-password
+  const resetRateLimits = new Map<string, number>();
+
   // Forgot Password
   app.post('/api/auth/forgot-password', async (req, res) => {
+    const ip = req.ip || req.connection?.remoteAddress || 'unknown';
+    const nowMs = Date.now();
+    
+    if (ip !== 'unknown' && resetRateLimits.has(ip)) {
+      if (nowMs - resetRateLimits.get(ip)! < 60000) { // 1 min limit per IP
+        return res.json({ message: 'Se o e-mail existir, um link foi enviado.' });
+      }
+    }
+    if (ip !== 'unknown') resetRateLimits.set(ip, nowMs);
+
+    // cleanup map occasionally
+    if (resetRateLimits.size > 1000) resetRateLimits.clear();
+
     const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email obrigatório' });
+
     try {
       const userSnapshot = await db.collection('users').where('email', '==', email).get();
       
       if (!userSnapshot.empty) {
+        // Prevent email bombing
+        const recentResets = await db.collection('password_resets').where('email', '==', email).get();
+        const recentDocs = recentResets.docs.map(doc => doc.data());
+        const lastReset = recentDocs.sort((a,b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+        
+        if (lastReset) {
+          const lastResetTime = new Date(lastReset.created_at).getTime();
+          const fifteenMinutes = 15 * 60 * 1000;
+          if (Date.now() - lastResetTime < fifteenMinutes) {
+             return res.json({ message: 'Se o e-mail existir, um link foi enviado.' });
+          }
+        }
+
         const token = crypto.randomBytes(32).toString('hex');
         const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
         const expiresAt = new Date(Date.now() + 3600000).toISOString(); // 1 hour
@@ -1581,37 +1614,41 @@ async function startServer() {
     const xRequestId = req.headers['x-request-id'] as string;
     const secret = process.env.MERCADOPAGO_WEBHOOK_SECRET;
 
-    if (xSignature && xRequestId && secret) {
-      try {
-        const parts = xSignature.split(',');
-        let ts = '';
-        let hash = '';
-        parts.forEach(part => {
-          const [key, value] = part.split('=');
-          if (key.trim() === 'ts') ts = value;
-          if (key.trim() === 'v1') hash = value;
-        });
+    if (!xSignature || !xRequestId || !secret) {
+      console.error('Missing Webhook Signature headers or Webhook Secret.');
+      return res.status(400).json({ error: 'Missing security headers or secret' });
+    }
 
-        // For Mercado Pago signature v1: 
-        // id : event_id or data.id from url parameters
-        const urlParams = new URLSearchParams(req.query as any);
-        const dataId = urlParams.get('data.id') || req.body.data?.id || req.query.id;
-        
-        if (ts && hash && dataId) {
-          const manifest = `id:${dataId};request-id:${xRequestId};ts:${ts};`;
-          const hmac = crypto.createHmac('sha256', secret).update(manifest).digest('hex');
-          
-          if (hmac !== hash) {
-            console.error('Invalid Webhook Signature. Expected:', hash, 'Got:', hmac);
-            return res.status(403).json({ error: 'Invalid Signature' });
-          }
-        }
-      } catch (e) {
-        console.error('Error validating webhook signature', e);
-        // Continue processing in development if validation errors out 
+    try {
+      const parts = xSignature.split(',');
+      let ts = '';
+      let hash = '';
+      parts.forEach(part => {
+        const [key, value] = part.split('=');
+        if (key.trim() === 'ts') ts = value;
+        if (key.trim() === 'v1') hash = value;
+      });
+
+      // For Mercado Pago signature v1: 
+      // id : event_id or data.id from url parameters
+      const urlParams = new URLSearchParams(req.query as any);
+      const dataId = urlParams.get('data.id') || req.body.data?.id || req.query.id;
+      
+      if (!ts || !hash || !dataId) {
+        console.error('Invalid signature format or missing data ID.');
+        return res.status(400).json({ error: 'Invalid signature payload' });
       }
-    } else {
-      console.warn('Webhook received without X-Signature headers or Webhook Secret missing in .env. Processing as unverified.');
+
+      const manifest = `id:${dataId};request-id:${xRequestId};ts:${ts};`;
+      const hmac = crypto.createHmac('sha256', secret).update(manifest).digest('hex');
+      
+      if (hmac !== hash) {
+        console.error('Invalid Webhook Signature. Expected:', hash, 'Got:', hmac);
+        return res.status(403).json({ error: 'Invalid Signature' });
+      }
+    } catch (e) {
+      console.error('Error validating webhook signature', e);
+      return res.status(500).json({ error: 'Internal signature validation error' });
     }
 
     // Send immediate 200 OK to Mercado Pago to prevent Timeout/Retries

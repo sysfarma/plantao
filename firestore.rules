@@ -206,13 +206,6 @@ service cloud.firestore {
              (!('updated_at' in data) || isValidDateString(data.updated_at));
     }
 
-    function incrementedPharmacyCounter(pharmacyId, type) {
-      let pharmacyAfter = getAfter(/databases/$(database)/documents/pharmacies/$(pharmacyId)).data;
-      let pharmacyBefore = get(/databases/$(database)/documents/pharmacies/$(pharmacyId)).data;
-      let counterField = type == 'whatsapp' ? 'whatsapp_clicks' : 'map_clicks';
-      return pharmacyAfter[counterField] == (pharmacyBefore.get(counterField, 0)) + 1;
-    }
-
     function isValidHighlight(data) {
       return hasRequiredFields(['pharmacy_id', 'type', 'date_start', 'date_end', 'city', 'state', 'created_at']) &&
              hasOnlyAllowedFields(['pharmacy_id', 'type', 'date_start', 'date_end', 'city', 'state', 'created_at', 'updated_at', 'user_id', 'owner_id']) &&
@@ -285,8 +278,7 @@ service cloud.firestore {
                     (isAdmin() || (request.resource.data.is_active == 0 && (!('subscription_active' in request.resource.data) || request.resource.data.subscription_active == false)));
       allow update: if isValidPharmacy(request.resource.data) && (
                     isAdmin() ||
-                    (isAuthenticated() && resource.data.user_id == request.auth.uid && areImmutableFieldsUnchanged(['user_id', 'created_at', 'is_active', 'subscription_active', 'sub_status', 'user_email'])) ||
-                    (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['whatsapp_clicks', 'map_clicks', 'updated_at']))
+                    (isAuthenticated() && resource.data.user_id == request.auth.uid && areImmutableFieldsUnchanged(['user_id', 'created_at', 'is_active', 'subscription_active', 'sub_status', 'user_email']))
                   );
       allow delete: if isAdmin();
     }
@@ -310,7 +302,7 @@ service cloud.firestore {
     match /payments/{paymentId} {
       allow get: if isAdmin() || isSensitiveResourceOwner(resource.data);
       allow list: if isAdmin() || (isAuthenticated() && resource.data.user_id == request.auth.uid);
-      allow create: if isAuthenticated() && isValidPayment(request.resource.data) && (request.resource.data.user_id == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && isValidPayment(request.resource.data) && (isPharmacyOwner(request.resource.data.pharmacy_id) || isAdmin());
       allow update: if isAdmin() && isValidPayment(request.resource.data) && areImmutableFieldsUnchanged(['pharmacy_id', 'created_at']);
       allow delete: if isAdmin();
     }
@@ -318,19 +310,18 @@ service cloud.firestore {
     match /shifts/{shiftId} {
       allow read: if true;
       allow create: if isAuthenticated() && isValidShift(request.resource.data) && 
-                    (request.resource.data.user_id == request.auth.uid || isAdmin());
+                    (isPharmacyOwner(request.resource.data.pharmacy_id) || isAdmin());
       allow update: if isAuthenticated() && isValidShift(request.resource.data) && 
                     areImmutableFieldsUnchanged(['pharmacy_id', 'created_at']) &&
-                    (resource.data.user_id == request.auth.uid || isAdmin());
+                    (isPharmacyOwner(resource.data.pharmacy_id) || isAdmin());
       allow delete: if isAuthenticated() && 
-                    (resource.data.user_id == request.auth.uid || isAdmin());
+                    (isPharmacyOwner(resource.data.pharmacy_id) || isAdmin());
     }
 
     match /clicks/{clickId} {
       allow get: if isAdmin() || isSensitiveResourceOwner(resource.data);
       allow list: if isAdmin() || (isAuthenticated() && resource.data.user_id == request.auth.uid);
-      allow create: if isValidClick(request.resource.data) && 
-                    incrementedPharmacyCounter(request.resource.data.pharmacy_id, request.resource.data.type); 
+      allow create: if isAdmin();
       allow update, delete: if isAdmin();
     }
 
