@@ -3,7 +3,8 @@ import { QrCode, Copy, CheckCircle, RefreshCw, Clock, ExternalLink, Loader2, Ale
 import { motion, AnimatePresence } from 'motion/react';
 import { safeJsonFetch } from '../lib/api';
 import { collection, addDoc, updateDoc, doc, getDocs, query, where, onSnapshot } from 'firebase/firestore';
-import { db, auth, getAuthToken } from '../lib/firebase';
+import { useFirebase } from '../components/FirebaseProvider';
+import { db, getAuthToken } from '../lib/firebase';
 
 interface PixPaymentManagerProps {
   onPaymentSuccess: () => void;
@@ -12,6 +13,7 @@ interface PixPaymentManagerProps {
 }
 
 export default function PixPaymentManager({ onPaymentSuccess, planType = 'annual', isUpdate = false }: PixPaymentManagerProps) {
+  const { user: firebaseUser } = useFirebase();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [pixData, setPixData] = useState<{ payment_id: string; qr_code: string; qr_code_base64: string } | null>(null);
@@ -60,10 +62,10 @@ export default function PixPaymentManager({ onPaymentSuccess, planType = 'annual
 
   // Listen for payment status
   useEffect(() => {
-    if (!pixData || !pixData.payment_id || !auth.currentUser?.uid) return;
+    if (!pixData || !pixData.payment_id || !firebaseUser?.uid) return;
 
     const paymentsQuery = query(collection(db, 'payments'), 
-      where('user_id', '==', auth.currentUser.uid),
+      where('user_id', '==', firebaseUser.uid),
       where('mp_payment_id', '==', pixData.payment_id.toString())
     );
     const unsubscribe = onSnapshot(paymentsQuery, (snapshot) => {

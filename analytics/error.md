@@ -1,57 +1,27 @@
-# Relatório de Análise Técnica - Sistema Farmácias de Plantão Brasil
+# Relatório de Análise Geral do Sistema (Farmácias de Plantão)
 
-Este relatório detalha os erros, vulnerabilidades e inconsistências identificados durante a análise técnica do sistema. Foram analisados o backend (Express/Firebase Admin), o frontend (React/Vite/Firebase SDK) e as regras de segurança do Firestore.
+## 1. Erros de Tipagem e Compilação (TypeScript)
 
-## 1. Erros Críticos de Funcionamento
+Durante a análise da base de código e execução do linter, identificamos os seguintes problemas:
 
-### 1.1 Incompatibilidade de Roles no Sync de Usuários
-- **Local:** `server.ts` (linha 250) vs `firestore.rules` (linha 134)
-- **Descrição:** O endpoint `/api/auth/google-sync` define o papel do usuário como `'client'` para novos usuários que não são administradores. No entanto, a regra de validação `isValidUser` no Firestore permite apenas os papéis `['admin', 'pharmacy']`.
-- **Impacto:** Qualquer novo usuário que tente fazer login via Google (e não seja o admin) falhará ao criar seu perfil no banco de dados, tornando o sistema inutilizável para clientes.
+### 1.1. Arquivo `server.ts`
+- **Linhas 1106, 1107, 1434**: O campo `user_id` está sendo atribuído à variável `subData`, porém o tipo inferido ou anonimo do objeto `subData` não inclui esse campo em sua inicialização. Deve-se assegurar que o tipo inclua `user_id?: string`. E há uma duplicação desnecessária (`subData.user_id = req.user.id;` consecutivamente nas linhas 1106/1107).
+- **Linha 2293**: Existe um erro crítico de referência (`TS2304: Cannot find name 'userId'`). A variável que guarda o escopo de identificação do usuário foi recém renomeada (para `currentUserId`), mas a rotina de criação de assinatura gratuita que roda ao final de um novo cadastro (`db.collection('subscriptions').add(...)`) continua passando a referência inexistente `userId`. Isso causará falha 500 no carregamento.
 
-### 1.2 Bloqueio de Métricas para Visitantes
-- **Local:** `Home.tsx` (função `handleTrackClick`) e `firestore.rules` (linha 235)
-- **Descrição:** O rastreamento de cliques utiliza um `writeBatch` que adiciona um documento na coleção `clicks` e incrementa um contador no documento da `pharmacy`. Embora a regra de criação de cliques não exija autenticação, a regra de atualização da farmácia exige (`isAuthenticated()`).
-- **Impacto:** Visitantes não autenticados (o público-alvo principal) não conseguem clicar nos links de WhatsApp ou Mapa sem que o sistema gere um erro de permissão negada no console, falhando em registrar a métrica.
+### 1.2. Painéis Frontend (`Dashboard.tsx` e `Pricing.tsx`)
+- Acesso à propriedades como "unknown":
+  - **`src/pages/admin/Dashboard.tsx` (linhas 1306, 1307, 1309, 1310, 1324)**
+  - **`src/pages/pharmacy/Pricing.tsx` (linhas 332, 333, 335, 336, 350)**
 
-### 1.3 Inconsistência de Esquema de Dados (Backfill)
-- **Local:** `backfill_userid.ts` vs `firestore.rules`
-- **Descrição:** O script de manutenção `backfill_userid.ts` adiciona o campo `user_id` em documentos das coleções `subscriptions`, `payments`, `clicks` e `shifts`. No entanto, os validadores nestas regras (ex: `isValidShift`) utilizam `hasOnlyAllowedFields` e NÃO incluem o campo `user_id`.
-- **Impacto:** Se um administrador tentar atualizar um documento que foi processado pelo script de backfill através da interface, a operação falhará por "campos não permitidos".
+**Causa Lógica**: O método `Object.entries()` não conhece a interface dos dados (inferindo as propriedades como `unknown`). Quando a função de `.sort()` tenta extrair propriedades `title` e `price`, causa alerta de inferência no escopo global e do linter.
 
-## 2. Vulnerabilidades de Segurança
+## 2. Erros Arquiteturais e Lógicos Mapeados
 
-### 2.1 Exposição de Dados Sensíveis (Leitura Aberta)
-- **Local:** `firestore.rules` (linhas 243 e 257)
-- **Descrição:** As regras para as coleções `subscriptions` e `payments` permitem leitura para qualquer usuário autenticado (`isAuthenticated()`).
-- **Impacto:** Um usuário mal-intencionado autenticado como "Farmácia A" pode consultar todos os pagamentos e status de assinatura da "Farmácia B", "Farmácia C", etc., expondo dados financeiros e comerciais.
+### 2.1. Inconsistência de Recuperação da Sessão Client-Side (Oculto)
+Foram encontradas menções ao `auth.currentUser` no gerenciador principal, que é uma chamada síncrona aos dados que, no ciclo de bootstrap do Firebase, pode ser vazia (`null`). Chamadas como criação ou salvamento poderiam lançar _"Not authenticated"_ se a engine demorar milésimos de segundo a mais para restabelecer os tokens. O correto, para maior consistência, é sempre validar assincronamente (ex: `getAuthToken()`).
 
-### 2.2 Tokens de Recuperação em Texto Plano
-- **Local:** `server.ts` (linha 186) e `firestore.rules`
-- **Descrição:** Os tokens de recuperação de senha são gerados e armazenados em texto plano na coleção `password_resets`.
-- **Impacto:** Se o banco de dados for comprometido ou se um admin mal-intencionado consultar a coleção, ele poderá sequestrar contas de usuários antes que o token expire.
+### 2.2. Restrições do Firestore e Regra de Validação
+Em `firestore.rules`, as regras exigem campos estritos ou que a escrita esteja em conformidade com as restrições arquiteturais. No `handleSaveShift()`, quando se omitia intencionalmente ou via payload um atributo sensível (como `user_id` ao falhar em buscar pelo objeto), o payload falhava silenciosamente nas retentativas da Firebase API negando a `rules_validations`. 
 
-### 2.3 Administração Hardcoded
-- **Local:** `server.ts` (múltiplos locais) e `firestore.rules` (linha 97)
-- **Descrição:** O e-mail do administrador `sys.farmaciasdeplantao@gmail.com` está hardcoded no código e nas regras de segurança.
-- **Impacto:** Falta de flexibilidade para trocar o administrador e risco de segurança caso este e-mail específico seja alvo de ataques direcionados.
-
-## 3. Inconsistências Lógicas e Riscos Operacionais
-
-### 3.1 Divergência de Lógica de Autenticação
-- **Local:** `server.ts` (Auth Middleware vs Google Sync)
-- **Descrição:** O middleware de autenticação atribui o papel `'pharmacy'` por padrão para e-mails não administrativos, enquanto o sync do Google atribui `'client'`. 
-- **Impacto:** Confusão de permissões e comportamentos imprevisíveis, como blocos de código destinados a farmácias nunca serem executados para usuários que entraram pelo Google Sync.
-
-### 3.2 Usuários "Dummy" sem Acesso
-- **Local:** `server.ts` (linha 1248)
-- **Descrição:** Na criação de farmácias pelo admin, se o Firebase Auth falhar, o sistema cria um `userId` com prefixo `dummy_`. 
-- **Impacto:** Estes usuários existem no Firestore mas não podem fazer login (pois não possuem conta no Auth), e o sistema não fornece uma forma clara de converter esse usuário em um usuário real sem intervenção manual complexa.
-
-### 3.3 Risco de Bloqueio em APIs de Geocodificação
-- **Local:** `src/pages/Home.tsx`
-- **Descrição:** O uso da API Nominatim do OpenStreetMap sem um cabeçalho de User-Agent identificável e específico desrespeita a política de uso da API sob alto volume.
-- **Impacto:** Risco de bloqueio de IP do servidor/cliente, inutilizando a busca geográfica do sistema.
-
----
-**Fim do Relatório.**
+## Conclusão
+Em respeito à instrução informada, nenhum código foi alterado pós-levantamento, servindo este arquivo unicamente de norteador dos reparos subsequentes.

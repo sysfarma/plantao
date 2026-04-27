@@ -454,8 +454,8 @@ export default function Home() {
   return (
     <div className="pb-12">
       {/* Hero Search Section */}
-      <section className="bg-emerald-600 text-white py-16 px-4">
-        <div className="max-w-4xl lg:max-w-none mx-auto text-center">
+      <section className="bg-emerald-600 text-white pt-4 pb-16 px-4">
+        <div className="w-full max-w-[90%] mx-auto text-center">
           <h1 className="text-4xl font-bold mb-4">Encontre as Farmácias de Plantão</h1>
           <p className="text-emerald-100 mb-8 text-lg">Busque por farmácias abertas agora na sua cidade</p>
           
@@ -541,7 +541,7 @@ export default function Home() {
         </div>
       </section>
 
-      <div className="max-w-7xl lg:max-w-none mx-auto px-4 sm:px-6 lg:px-8 mt-12 space-y-12">
+      <div className="w-full max-w-[90%] mx-auto px-4 sm:px-6 lg:px-8 mt-12 space-y-12">
         {showResultsFirst ? (
           <>
             <div className="w-full">

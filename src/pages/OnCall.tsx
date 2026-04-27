@@ -376,8 +376,8 @@ export default function OnCall() {
   return (
     <div className="pb-12">
       {/* Hero Search Section */}
-      <section className="bg-emerald-600 text-white py-16 px-4">
-        <div className="max-w-4xl lg:max-w-none mx-auto text-center">
+      <section className="bg-emerald-600 text-white pt-4 pb-16 px-4">
+        <div className="w-full max-w-[90%] mx-auto text-center">
           <h1 className="text-4xl font-bold mb-4">Plantões de Hoje</h1>
           <p className="text-emerald-100 mb-8 text-lg">Veja as farmácias que estão de plantão hoje na sua região</p>
           
@@ -448,7 +448,7 @@ export default function OnCall() {
         </div>
       </section>
 
-      <div className="max-w-7xl lg:max-w-none mx-auto px-4 sm:px-6 lg:px-8 mt-12">
+      <div className="w-full max-w-[90%] mx-auto px-4 sm:px-6 lg:px-8 mt-12">
         <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
           <h2 className="text-2xl font-bold text-gray-900">Farmácias de Plantão</h2>
           

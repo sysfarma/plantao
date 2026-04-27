@@ -1,7 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { CheckCircle, XCircle, Star, Trash2, Ban, Edit, Plus, X, Calendar, Search, Filter, History, DollarSign, FileText, RefreshCw, ShieldCheck, AlertCircle, CheckCircle2, Download } from 'lucide-react';
+import { CheckCircle, XCircle, Star, Trash2, Ban, Edit, Plus, X, Calendar, Search, Filter, History, DollarSign, FileText, RefreshCw, ShieldCheck, AlertCircle, CheckCircle2, Download, ArrowUp, ArrowDown } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { safeJsonFetch } from '../../lib/api';
+import { useFirebase } from '../../components/FirebaseProvider';
 import { calculateHighlightEnd, isShiftPast, formatToBRDate } from '../../lib/dateUtils';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import { collection, getDocs, doc, getDoc, addDoc, updateDoc, deleteDoc, query, where, setDoc } from 'firebase/firestore';
@@ -25,6 +27,7 @@ interface Pharmacy {
 }
 
 export default function AdminDashboard() {
+  const { user: firebaseUser } = useFirebase();
   const [pharmacies, setPharmacies] = useState<Pharmacy[]>([]);
   const [reports, setReports] = useState<any>(null);
   const [adminShifts, setAdminShifts] = useState<any[]>([]);
@@ -47,6 +50,7 @@ export default function AdminDashboard() {
     support_phone: '(00) 00000-0000'
   });
   const [subscriptionPlans, setSubscriptionPlans] = useState<any>({
+    free: { active: true, price: 0, title: 'Plano Gratuito', frequency: 1, frequency_type: 'years', benefits: [] },
     monthly: { active: true, price: 6.90, title: 'Plano Mensal', frequency: 1, frequency_type: 'months', benefits: [] },
     annual: { active: true, price: 69.96, title: 'Plano Anual', frequency: 1, frequency_type: 'years', benefits: [] }
   });
@@ -64,15 +68,20 @@ export default function AdminDashboard() {
   const [subPayments, setSubPayments] = useState<any[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [pharmacySearchTerm, setPharmacySearchTerm] = useState('');
+  const [pharmacySortField, setPharmacySortField] = useState<'name' | 'city' | 'status' | null>(null);
+  const [pharmacySortOrder, setPharmacySortOrder] = useState<'asc' | 'desc'>('asc');
 
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
   const rawAdmin = import.meta.env.VITE_ADMIN_EMAIL;
   const adminEmail = rawAdmin ? rawAdmin.replace(/['"]/g, '').trim() : 'sys.farmaciasdeplantao@gmail.com';
-  const isAdminMaster = user.email === 'sys.farmaciasdeplantao@gmail.com' || (adminEmail && user.email === adminEmail);
+  const isAdminMaster = firebaseUser?.email === 'sys.farmaciasdeplantao@gmail.com' || (adminEmail && firebaseUser?.email === adminEmail);
 
   const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
+  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
+  const [confirmModalData, setConfirmModalData] = useState<{ id: string, type: 'shift' | 'highlight' | 'pharmacy' } | null>(null);
   const [shiftForm, setShiftForm] = useState({ pharmacy_id: '', date: '', start_time: '07:00', end_time: '22:00', is_24h: false });
   const [editingShiftId, setEditingShiftId] = useState<string | null>(null);
+  const [pharmacyShiftSearch, setPharmacyShiftSearch] = useState('');
 
   const openCreateModal = () => {
     setEditingPharmacy(null);
@@ -266,6 +275,49 @@ export default function AdminDashboard() {
     });
   };
 
+  const filteredAndSortedPharmacies = useMemo(() => {
+    let result = pharmacies;
+    if (pharmacySearchTerm) {
+      const lowerSearch = pharmacySearchTerm.toLowerCase();
+      result = result.filter(p => 
+        p.name?.toLowerCase().includes(lowerSearch) || 
+        p.city?.toLowerCase().includes(lowerSearch) ||
+        p.state?.toLowerCase().includes(lowerSearch)
+      );
+    }
+
+    if (pharmacySortField) {
+      result = [...result].sort((a, b) => {
+        let valA: string | number = '';
+        let valB: string | number = '';
+        if (pharmacySortField === 'name') {
+          valA = a.name?.toLowerCase() || '';
+          valB = b.name?.toLowerCase() || '';
+        } else if (pharmacySortField === 'city') {
+          valA = a.city?.toLowerCase() || '';
+          valB = b.city?.toLowerCase() || '';
+        } else if (pharmacySortField === 'status') {
+          valA = a.is_active;
+          valB = b.is_active;
+        }
+
+        if (valA < valB) return pharmacySortOrder === 'asc' ? -1 : 1;
+        if (valA > valB) return pharmacySortOrder === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+    return result;
+  }, [pharmacies, pharmacySearchTerm, pharmacySortField, pharmacySortOrder]);
+
+  const togglePharmacySort = (field: 'name' | 'city' | 'status') => {
+    if (pharmacySortField === field) {
+      setPharmacySortOrder(pharmacySortOrder === 'asc' ? 'desc' : 'asc');
+    } else {
+      setPharmacySortField(field);
+      setPharmacySortOrder('asc');
+    }
+  };
+
   const filteredSubscribers = useMemo(() => {
     return adminSubscribers.filter(sub => {
       const lowerSearch = subSearchTerm.toLowerCase();
@@ -347,12 +399,14 @@ export default function AdminDashboard() {
 
   const openNewShiftModal = () => {
     setEditingShiftId(null);
-    setShiftForm({ pharmacy_id: pharmacies[0]?.id || '', date: '', start_time: '07:00', end_time: '22:00', is_24h: false });
+    setPharmacyShiftSearch('');
+    setShiftForm({ pharmacy_id: '', date: '', start_time: '07:00', end_time: '22:00', is_24h: false });
     setIsShiftModalOpen(true);
   };
 
   const openEditShiftModal = (shift: any) => {
     setEditingShiftId(shift.id);
+    setPharmacyShiftSearch(''); // Reset search when editing
     setShiftForm({
       pharmacy_id: shift.pharmacy_id,
       date: shift.date,
@@ -366,51 +420,85 @@ export default function AdminDashboard() {
   const handleSaveShift = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const token = await getAuthToken();
+      if (!token) throw new Error('Not authenticated');
+
+      const pharm = pharmacies.find(p => p.id === shiftForm.pharmacy_id);
+      if (!pharm?.user_id) {
+        throw new Error('Esta farmácia não possui um ID de usuário vinculado. Por favor, edite a farmácia primeiro para sincronizar.');
+      }
+
       const shiftData = {
         pharmacy_id: shiftForm.pharmacy_id,
+        user_id: pharm.user_id,
         date: shiftForm.date,
         start_time: shiftForm.is_24h ? '00:00' : shiftForm.start_time,
         end_time: shiftForm.is_24h ? '23:59' : shiftForm.end_time,
-        is_24h: shiftForm.is_24h ? 1 : 0,
-        updated_at: new Date().toISOString()
+        is_24h: shiftForm.is_24h ? 1 : 0
       };
       
-      if (editingShiftId) {
-        await updateDoc(doc(db, 'shifts', editingShiftId), shiftData);
-      } else {
-        await addDoc(collection(db, 'shifts'), {
-          ...shiftData,
-          created_at: new Date().toISOString()
-        });
+      const endpoint = editingShiftId ? `/api/admin/shifts/${editingShiftId}` : '/api/admin/shifts';
+      const method = editingShiftId ? 'PUT' : 'POST';
+
+      const result = await safeJsonFetch(endpoint, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(shiftData)
+      });
+      
+      if (typeof result === 'string') {
+        throw new Error('Erro na resposta do servidor: ' + result);
       }
       
       setIsShiftModalOpen(false);
       fetchData();
-    } catch (error) {
-      handleFirestoreError(error, editingShiftId ? OperationType.UPDATE : OperationType.CREATE, `shifts/${editingShiftId || ''}`);
-      alert('Erro ao salvar plantão.');
+    } catch (error: any) {
+      alert('Erro ao salvar plantão: ' + error.message);
     }
   };
 
-  const handleDeleteShift = async (id: string) => {
-    if (!window.confirm('Tem certeza que deseja excluir este plantão?')) return;
+  const triggerDeleteShiftConfirmation = (id: string) => {
+    setConfirmModalData({ id, type: 'shift' });
+    setIsDeleteConfirmOpen(true);
+  };
+
+  const triggerDeleteHighlightConfirmation = (id: string) => {
+    setConfirmModalData({ id, type: 'highlight' });
+    setIsDeleteConfirmOpen(true);
+  };
+
+  const processDeletion = async () => {
+    if (!confirmModalData) return;
+    
+    const { id, type } = confirmModalData;
+    const itemLabel = type === 'shift' ? 'plantão' : type === 'highlight' ? 'destaque' : 'farmácia';
+    const endpoint = type === 'shift' ? `/api/admin/shifts/${id}` : type === 'highlight' ? `/api/admin/highlights/${id}` : `/api/admin/pharmacies/${id}`;
+
     try {
-      await deleteDoc(doc(db, 'shifts', id));
+      const token = await getAuthToken();
+      if (!token) throw new Error('Falha na autenticação. Por favor, faça login novamente.');
+
+      await safeJsonFetch(endpoint, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      setIsDeleteConfirmOpen(false);
+      setConfirmModalData(null);
       fetchData();
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `shifts/${id}`);
+    } catch (error: any) {
+      console.error(`Error deleting ${type}:`, error);
+      alert(`Erro ao excluir ${itemLabel}: ` + (error.message || 'Erro desconhecido'));
     }
   };
 
   const handleDeleteHighlight = async (id: string) => {
-    if (!window.confirm('Tem certeza que deseja remover este destaque?')) return;
-    try {
-      await deleteDoc(doc(db, 'highlights', id));
-      fetchData();
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `highlights/${id}`);
-      alert('Erro ao remover destaque.');
-    }
+    triggerDeleteHighlightConfirmation(id);
   };
 
   const handleActivate = async (id: string) => {
@@ -459,11 +547,13 @@ export default function AdminDashboard() {
 
   const handleSetHighlight = async (id: string, type: 'day' | 'week' | 'month', city: string, state: string) => {
     try {
+      const pharm = pharmacies.find(p => p.id === id);
       const now = new Date();
       const end = calculateHighlightEnd(type);
 
       await addDoc(collection(db, 'highlights'), {
         pharmacy_id: id,
+        user_id: pharm?.user_id || '',
         type,
         date_start: now.toISOString(),
         date_end: end.toISOString(),
@@ -660,7 +750,17 @@ export default function AdminDashboard() {
 
       {activeTab === 'pharmacies' && (
         <div className="space-y-4">
-          <div className="flex justify-end">
+          <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+            <div className="relative w-full max-w-sm">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+              <input
+                type="text"
+                placeholder="Buscar por nome ou cidade..."
+                value={pharmacySearchTerm}
+                onChange={(e) => setPharmacySearchTerm(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
+              />
+            </div>
             <button onClick={openCreateModal} className="bg-emerald-600 text-white px-4 py-2 rounded-md font-medium hover:bg-emerald-700 flex items-center gap-2">
               <Plus className="w-5 h-5" /> Nova Farmácia
             </button>
@@ -669,15 +769,45 @@ export default function AdminDashboard() {
             <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Farmácia</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Local</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                <th 
+                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                  onClick={() => togglePharmacySort('name')}
+                >
+                  <div className="flex items-center gap-1">
+                    Farmácia
+                    {pharmacySortField === 'name' && (
+                      pharmacySortOrder === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />
+                    )}
+                  </div>
+                </th>
+                <th 
+                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                  onClick={() => togglePharmacySort('city')}
+                >
+                  <div className="flex items-center gap-1">
+                    Local
+                    {pharmacySortField === 'city' && (
+                      pharmacySortOrder === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />
+                    )}
+                  </div>
+                </th>
+                <th 
+                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                  onClick={() => togglePharmacySort('status')}
+                >
+                  <div className="flex items-center gap-1">
+                    Status
+                    {pharmacySortField === 'status' && (
+                      pharmacySortOrder === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />
+                    )}
+                  </div>
+                </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Destaques</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ações</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {pharmacies.map((pharmacy) => (
+              {filteredAndSortedPharmacies.map((pharmacy) => (
                 <tr key={pharmacy.id}>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="text-sm font-medium text-gray-900">{pharmacy.name}</div>
@@ -807,8 +937,16 @@ export default function AdminDashboard() {
                           <button onClick={() => openEditShiftModal(shift)} className="text-blue-600 hover:text-blue-900 bg-blue-50 px-3 py-1 rounded inline-flex items-center gap-1">
                             <Edit className="w-4 h-4" /> Editar
                           </button>
-                          <button onClick={() => handleDeleteShift(shift.id)} className="text-red-600 hover:text-red-900 bg-red-50 px-3 py-1 rounded inline-flex items-center gap-1">
-                            <Trash2 className="w-4 h-4" /> Excluir
+                          <button 
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              console.log('Action: Requesting delete shift', shift.id);
+                              triggerDeleteShiftConfirmation(shift.id);
+                            }} 
+                            className="text-red-600 hover:text-red-900 bg-red-50 px-3 py-1 rounded inline-flex items-center gap-1"
+                          >
+                            <Trash2 className="w-4 h-4 pointer-events-none" /> Excluir
                           </button>
                         </td>
                       </tr>
@@ -1187,14 +1325,28 @@ export default function AdminDashboard() {
             </div>
             
             <form onSubmit={handleSavePlans} className="space-y-12">
-              {Object.entries(subscriptionPlans || {})
+              {(Object.entries(subscriptionPlans || {}) as [string, { title: string; price: number; [key: string]: any }][])
                 .filter(([id]) => id !== 'updated_at')
-                .sort(([idA], [idB]) => {
-                  if (idA === 'monthly') return -1;
-                  if (idB === 'monthly') return 1;
-                  if (idA === 'annual') return -1;
-                  if (idB === 'annual') return 1;
-                  return idA.localeCompare(idB);
+                .sort(([idA, pA], [idB, pB]) => {
+                  const tA = (pA.title||"").toLowerCase();
+                  const tB = (pB.title||"").toLowerCase();
+                  
+                  const isFreeA = pA.price === 0 || tA.includes("gratuito") || tA.includes("grátis") || idA === "free";
+                  const isFreeB = pB.price === 0 || tB.includes("gratuito") || tB.includes("grátis") || idB === "free";
+                  if (isFreeA && !isFreeB) return -1;
+                  if (!isFreeA && isFreeB) return 1;
+                  
+                  const isAnA = idA.includes("annual") || tA.includes("anual");
+                  const isAnB = idB.includes("annual") || tB.includes("anual");
+                  if (isAnA && !isAnB) return -1;
+                  if (!isAnA && isAnB) return 1;
+                  
+                  const isMoA = idA.includes("monthly") || tA.includes("mensal");
+                  const isMoB = idB.includes("monthly") || tB.includes("mensal");
+                  if (isMoA && !isMoB) return -1;
+                  if (!isMoA && isMoB) return 1;
+                  
+                  return pA.price - pB.price;
                 })
                 .map(([id, plan]: [string, any]) => (
                 <div key={id} className="border border-gray-200 rounded-2xl p-6 bg-gray-50/50 hover:bg-white hover:shadow-lg transition-all relative">
@@ -1690,44 +1842,89 @@ export default function AdminDashboard() {
         </div>
       )}
       {/* Modal de Plantão (Admin) */}
-      {isShiftModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-lg max-w-md w-full">
-            <div className="flex justify-between items-center p-6 border-b border-gray-200">
-              <h2 className="text-xl font-bold text-gray-900">
-                {editingShiftId ? 'Editar Plantão' : 'Novo Plantão'}
-              </h2>
-              <button onClick={() => setIsShiftModalOpen(false)} className="text-gray-400 hover:text-gray-500">
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-            <form onSubmit={handleSaveShift} className="p-6 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Farmácia</label>
-                <select 
-                  required 
-                  value={shiftForm.pharmacy_id || ''} 
-                  onChange={e => setShiftForm({...shiftForm, pharmacy_id: e.target.value})} 
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
+      <AnimatePresence>
+        {isShiftModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsShiftModalOpen(false)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden"
+            >
+              <div className="flex justify-between items-center p-6 border-b border-gray-100 bg-gray-50/50">
+                <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                  <Calendar className="w-5 h-5 text-emerald-600" />
+                  {editingShiftId ? 'Editar Plantão' : 'Novo Plantão'}
+                </h2>
+                <button 
+                  onClick={() => setIsShiftModalOpen(false)} 
+                  className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-all"
                 >
-                  <option value="" disabled>Selecione uma farmácia...</option>
-                  {pharmacies.map(p => (
-                    <option key={p.id} value={p.id}>{p.name} ({p.city}/{p.state})</option>
-                  ))}
-                </select>
+                  <X className="w-5 h-5" />
+                </button>
               </div>
+              <form onSubmit={handleSaveShift} className="p-6 space-y-5">
               <div>
-                <label className="block text-sm font-medium text-gray-700">Data do Plantão</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Farmácia</label>
+                <div className="space-y-2">
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                      <Search className="h-4 w-4 text-gray-400" />
+                    </div>
+                    <input
+                      type="text"
+                      placeholder="Pesquisar farmácia..."
+                      value={pharmacyShiftSearch}
+                      onChange={e => setPharmacyShiftSearch(e.target.value)}
+                      className="block w-full pl-10 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm"
+                    />
+                  </div>
+                  <select 
+                    required 
+                    value={shiftForm.pharmacy_id || ''} 
+                    onChange={e => setShiftForm({...shiftForm, pharmacy_id: e.target.value})} 
+                    className="block w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm bg-white"
+                  >
+                    <option value="" disabled>Selecione uma farmácia...</option>
+                    {pharmacies
+                      .filter(p => {
+                        const search = pharmacyShiftSearch.toLowerCase();
+                        if (!search) return true;
+                        
+                        const name = (p.name || '').toLowerCase();
+                        const city = (p.city || '').toLowerCase();
+                        const state = (p.state || '').toLowerCase();
+                        
+                        return name.includes(search) || 
+                               city.includes(search) || 
+                               state.includes(search);
+                      })
+                      .map(p => (
+                      <option key={p.id} value={p.id}>{p.name} ({p.city}/{p.state})</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Data do Plantão</label>
                 <input 
                   type="date" 
                   required 
                   value={shiftForm.date || ''} 
                   onChange={e => setShiftForm({...shiftForm, date: e.target.value})} 
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" 
+                  className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" 
                 />
               </div>
               
-              <div className="flex items-center gap-2 mt-4 mb-4">
+              <div className="flex items-center gap-2">
                 <input 
                   type="checkbox" 
                   id="is_24h" 
@@ -1735,46 +1932,64 @@ export default function AdminDashboard() {
                   onChange={e => setShiftForm({...shiftForm, is_24h: e.target.checked})} 
                   className="w-4 h-4 text-emerald-600 border-gray-300 rounded focus:ring-emerald-500"
                 />
-                <label htmlFor="is_24h" className="text-sm font-medium text-gray-700">Plantão 24 Horas</label>
+                <label htmlFor="is_24h" className="block text-sm font-medium text-gray-700">Plantão 24 Horas</label>
               </div>
 
               {!shiftForm.is_24h && (
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700">Hora Início</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Hora Início</label>
                     <input 
                       type="time" 
                       required={!shiftForm.is_24h} 
                       value={shiftForm.start_time || ''} 
                       onChange={e => setShiftForm({...shiftForm, start_time: e.target.value})} 
-                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" 
+                      className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" 
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700">Hora Fim</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Hora Fim</label>
                     <input 
                       type="time" 
                       required={!shiftForm.is_24h} 
                       value={shiftForm.end_time || ''} 
                       onChange={e => setShiftForm({...shiftForm, end_time: e.target.value})} 
-                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" 
+                      className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm" 
                     />
                   </div>
                 </div>
               )}
 
-              <div className="pt-4 flex justify-end gap-3">
-                <button type="button" onClick={() => setIsShiftModalOpen(false)} className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50">
-                  Cancelar
-                </button>
-                <button type="submit" className="px-4 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700">
-                  Salvar
-                </button>
+              <div className="pt-2 flex justify-between gap-3">
+                {editingShiftId && (
+                  <button 
+                    type="button" 
+                    onClick={() => {
+                      const idToDelete = editingShiftId;
+                      if (idToDelete) {
+                        triggerDeleteShiftConfirmation(idToDelete);
+                      }
+                      setIsShiftModalOpen(false);
+                    }} 
+                    className="px-4 py-2 bg-red-50 text-red-600 border border-red-200 rounded-md hover:bg-red-100 flex items-center gap-2"
+                  >
+                    <Trash2 className="w-4 h-4 pointer-events-none" /> Excluir Plantão
+                  </button>
+                )}
+                <div className="flex gap-3 ml-auto">
+                  <button type="button" onClick={() => setIsShiftModalOpen(false)} className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50">
+                    Cancelar
+                  </button>
+                  <button type="submit" className="px-4 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700">
+                    Salvar
+                  </button>
+                </div>
               </div>
             </form>
-          </div>
+          </motion.div>
         </div>
       )}
+</AnimatePresence>
 
       {/* Modal Histórico de Pagamentos */}
       {isHistoryModalOpen && (
@@ -1889,9 +2104,9 @@ export default function AdminDashboard() {
                   onChange={e => setSubFormData({...subFormData, plan_type: e.target.value})} 
                   className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
                 >
-                  {Object.entries(subscriptionPlans || {})
+                  {(Object.entries(subscriptionPlans || {}) as [string, { title: string; price: number; [key: string]: any }][])
                     .filter(([id]) => id !== 'updated_at')
-                    .map(([id, plan]: [string, any]) => (
+                    .map(([id, plan]) => (
                       <option key={id} value={id}>{plan.title} ({id})</option>
                     ))
                   }
@@ -1921,6 +2136,58 @@ export default function AdminDashboard() {
           </div>
         </div>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <AnimatePresence>
+        {isDeleteConfirmOpen && confirmModalData && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => {
+                setIsDeleteConfirmOpen(false);
+                setConfirmModalData(null);
+              }}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative bg-white rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden"
+            >
+              <div className="p-8 text-center">
+                <div className="w-20 h-20 bg-red-50 text-red-600 rounded-full flex items-center justify-center mx-auto mb-6">
+                  <Trash2 className="w-10 h-10" />
+                </div>
+                <h3 className="text-2xl font-bold text-gray-900 mb-3">Confirmar Exclusão</h3>
+                <p className="text-gray-600 mb-8 leading-relaxed">
+                  Tem certeza que deseja excluir este {confirmModalData.type === 'shift' ? 'registro de plantão' : confirmModalData.type === 'highlight' ? 'destaque' : 'registro'}? 
+                  Esta ação é irreversível e o dado será removido do sistema.
+                </p>
+                <div className="grid grid-cols-2 gap-4">
+                  <button
+                    onClick={() => {
+                      setIsDeleteConfirmOpen(false);
+                      setConfirmModalData(null);
+                    }}
+                    className="px-4 py-3 border border-gray-200 rounded-xl text-gray-700 font-semibold hover:bg-gray-50 transition-all active:scale-95"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={processDeletion}
+                    className="px-4 py-3 bg-red-600 text-white rounded-xl font-semibold hover:bg-red-700 transition-all shadow-lg shadow-red-200 active:scale-95 flex items-center justify-center gap-2"
+                  >
+                    <Trash2 className="w-5 h-5" /> Excluir
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
     </div>
   );

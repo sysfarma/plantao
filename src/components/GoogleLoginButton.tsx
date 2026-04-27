@@ -60,6 +60,7 @@ export default function GoogleLoginButton({ text = "continue_with" }: GoogleLogi
 
           await addDoc(collection(db, 'subscriptions'), {
             pharmacy_id: pharmacyId,
+            user_id: result.user.uid,
             status: 'pending',
             expires_at: null,
             created_at: new Date().toISOString()

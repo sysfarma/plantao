@@ -4,6 +4,7 @@ import { CheckCircle, AlertCircle, QrCode, CreditCard, Star, Edit, Calendar, Plu
 import PixPaymentManager from '../../components/PixPaymentManager';
 import CardPaymentForm from '../../components/CardPaymentForm';
 import CancelSubscriptionModal from '../../components/CancelSubscriptionModal';
+import { useFirebase } from '../../components/FirebaseProvider';
 import { isShiftPast, formatToBRDate } from '../../lib/dateUtils';
 import { safeJsonFetch } from '../../lib/api';
 import { getAuthToken } from '../../lib/firebase';
@@ -13,6 +14,7 @@ import { db, auth } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firebaseError';
 
 export default function PharmacyDashboard() {
+  const { user: firebaseUser } = useFirebase();
   const [profile, setProfile] = useState<any>(null);
   const [highlights, setHighlights] = useState<any[]>([]);
   const [payments, setPayments] = useState<any[]>([]);
@@ -71,13 +73,12 @@ export default function PharmacyDashboard() {
   };
 
   useEffect(() => {
-    const user = auth.currentUser;
-    if (!user) {
+    if (!firebaseUser) {
       setLoading(false);
       return;
     }
 
-    const q = query(collection(db, 'pharmacies'), where('user_id', '==', user.uid));
+    const q = query(collection(db, 'pharmacies'), where('user_id', '==', firebaseUser.uid));
     const unsub = onSnapshot(q, (snapshot) => {
       if (!snapshot.empty) {
         const pDoc = snapshot.docs[0];
@@ -94,43 +95,46 @@ export default function PharmacyDashboard() {
     });
 
     return () => unsub();
-  }, [auth.currentUser]);
+  }, [firebaseUser]);
 
   useEffect(() => {
     if (!profile?.id) return;
 
     const pharmacyId = profile.id;
-    const userId = auth.currentUser?.uid;
+    const userId = firebaseUser?.uid;
 
-    // We filter by pharmacy_id AND user_id (where possible) to be rule-safe and performant
+    if (!userId) return;
+
+    // We filter by user_id to be rule-safe and performant, then filter by pharmacy in js.
     // Sensitive data listeners
-    const unsubSubs = onSnapshot(query(collection(db, 'subscriptions'), where('pharmacy_id', '==', pharmacyId)), (snapshot) => {
-      const subs = snapshot.docs.map(d => d.data());
+    const unsubSubs = onSnapshot(query(collection(db, 'subscriptions'), where('user_id', '==', userId)), (snapshot) => {
+      const subs = snapshot.docs.map(d => d.data()).filter(d => d.pharmacy_id === pharmacyId);
       if (subs.length > 0) {
         subs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
         setProfile((prev: any) => ({ ...prev, subscription: subs[0] }));
       }
     });
 
-    const unsubHigh = onSnapshot(query(collection(db, 'highlights'), where('pharmacy_id', '==', pharmacyId)), (snapshot) => {
-      setHighlights(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    const unsubHigh = onSnapshot(query(collection(db, 'highlights'), where('user_id', '==', userId)), (snapshot) => {
+      setHighlights(snapshot.docs.map(d => ({ id: d.id, ...d.data() })).filter((d: any) => d.pharmacy_id === pharmacyId));
     });
 
-    const unsubPay = onSnapshot(query(collection(db, 'payments'), where('pharmacy_id', '==', pharmacyId)), (snapshot) => {
-      setPayments(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    const unsubPay = onSnapshot(query(collection(db, 'payments'), where('user_id', '==', userId)), (snapshot) => {
+      setPayments(snapshot.docs.map(d => ({ id: d.id, ...d.data() })).filter((d: any) => d.pharmacy_id === pharmacyId));
     });
 
-    const unsubShifts = onSnapshot(query(collection(db, 'shifts'), where('pharmacy_id', '==', pharmacyId)), (snapshot) => {
-      setShifts(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    const unsubShifts = onSnapshot(query(collection(db, 'shifts'), where('user_id', '==', userId)), (snapshot) => {
+      setShifts(snapshot.docs.map(d => ({ id: d.id, ...d.data() })).filter((d: any) => d.pharmacy_id === pharmacyId));
     });
 
     const unsubClicks = onSnapshot(query(
       collection(db, 'clicks'), 
-      where('pharmacy_id', '==', pharmacyId)
+      where('user_id', '==', userId)
     ), (snapshot) => {
       const dailyClicks: Record<string, { date: string, whatsapp: number, map: number }> = {};
       snapshot.forEach(doc => {
         const click = doc.data();
+        if (click.pharmacy_id !== pharmacyId) return;
         const date = new Date(click.created_at).toLocaleDateString('pt-BR');
         if (!dailyClicks[date]) {
           dailyClicks[date] = { date, whatsapp: 0, map: 0 };
@@ -179,10 +183,12 @@ export default function PharmacyDashboard() {
   const handleSaveShift = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const user = auth.currentUser;
+      const userId = firebaseUser?.uid;
+      if (!userId) throw new Error('Usuário não autenticado');
+
       const shiftData = {
         pharmacy_id: profile.id,
-        user_id: user?.uid, // Include owner_id for optimized security rules
+        user_id: userId, // Include owner_id for optimized security rules
         date: shiftForm.date,
         start_time: shiftForm.is_24h ? '00:00' : shiftForm.start_time,
         end_time: shiftForm.is_24h ? '23:59' : shiftForm.end_time,

@@ -51,7 +51,7 @@ export default function PublicLayout() {
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col pb-16 md:pb-0">
       <header className="bg-white border-b border-gray-200 sticky top-0 z-50">
-        <div className="max-w-[100%] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+        <div className="w-full max-w-[90%] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <Link to="/" className="flex items-center gap-2 text-emerald-600 font-bold text-xl">
             <Pill className="w-6 h-6" />
             <span>Farmácias de Plantão</span>
@@ -250,7 +250,7 @@ export default function PublicLayout() {
         <Outlet />
       </main>
       <footer className="bg-white border-t border-gray-200 py-12 mt-auto">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="w-full max-w-[90%] mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col md:flex-row justify-between items-center gap-6">
             <div className="text-gray-500 text-sm">
               &copy; {new Date().getFullYear()} Farmácias de Plantão Brasil. Todos os direitos reservados.

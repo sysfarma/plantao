@@ -79,7 +79,7 @@ export default function FutureShifts() {
   if (loading) return <div className="p-8 text-center text-emerald-600">Carregando próximos plantões...</div>;
 
   return (
-    <div className="max-w-4xl mx-auto py-12 px-4">
+    <div className="w-full max-w-[90%] mx-auto py-12 px-4">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
         <div className="flex items-center gap-3">
           <div className="p-3 bg-emerald-100 rounded-2xl text-emerald-600">

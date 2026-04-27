@@ -49,13 +49,35 @@ export default function Pricing() {
         // Auto-select first active plan
         const activePlans = Object.keys(plansData).filter(id => plansData[id].active);
         
+        const sortedPlans = [...activePlans].sort((idA, idB) => {
+          const pA = plansData[idA];
+          const pB = plansData[idB];
+          const tA = (pA.title||"").toLowerCase();
+          const tB = (pB.title||"").toLowerCase();
+          
+          const isFreeA = pA.price === 0 || tA.includes("gratuito") || tA.includes("grátis");
+          const isFreeB = pB.price === 0 || tB.includes("gratuito") || tB.includes("grátis");
+          if (isFreeA && !isFreeB) return -1;
+          if (!isFreeA && isFreeB) return 1;
+          
+          const isAnA = idA.includes("annual") || tA.includes("anual");
+          const isAnB = idB.includes("annual") || tB.includes("anual");
+          if (isAnA && !isAnB) return -1;
+          if (!isAnA && isAnB) return 1;
+          
+          const isMoA = idA.includes("monthly") || tA.includes("mensal");
+          const isMoB = idB.includes("monthly") || tB.includes("mensal");
+          if (isMoA && !isMoB) return -1;
+          if (!isMoA && isMoB) return 1;
+          
+          return pA.price - pB.price;
+        });
+
         // If has profile, try to select its plan
         if (profileData?.subscription?.plan_type && activePlans.includes(profileData.subscription.plan_type)) {
           setSelectedPlanId(profileData.subscription.plan_type);
-        } else if (activePlans.includes('annual')) {
-          setSelectedPlanId('annual');
-        } else if (activePlans.length > 0) {
-          setSelectedPlanId(activePlans[0]);
+        } else if (sortedPlans.length > 0) {
+          setSelectedPlanId(sortedPlans[0]);
         }
       } catch (error) {
         console.error('Error fetching data:', error);
@@ -80,13 +102,21 @@ export default function Pricing() {
         ];
         
         if (isAdminMaster) {
-          defaults.forEach(async (d) => {
-            await addDoc(collection(db, 'pricing_blocks'), {
-              ...d,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString()
-            });
-          });
+          const initDefaults = async () => {
+            try {
+              for (const d of defaults) {
+                await addDoc(collection(db, 'pricing_blocks'), {
+                  ...d,
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString()
+                });
+              }
+            } catch (err: any) {
+              console.error('Error initializing pricing blocks:', err);
+              alert('Erro ao inicializar preços padrão. Verifique se os limites da conta/Firebase foram excedidos.\nDetalhes: ' + err.message);
+            }
+          };
+          initDefaults();
         } else {
           setBenefits(defaults);
         }
@@ -296,16 +326,28 @@ export default function Pricing() {
                   {/* Plan Selector */}
                   <div className="flex justify-center mb-8">
                     <div className="flex flex-wrap justify-center p-1 bg-emerald-800/50 rounded-xl gap-1">
-                      {Object.entries(plans)
-                        .filter(([id, p]: [string, any]) => p.active && id !== 'updated_at')
-                        .sort(([idA], [idB]) => {
-                          if (idA === 'extra_1776642077763') return -1;
-                          if (idB === 'extra_1776642077763') return 1;
-                          if (idA === 'monthly') return -1;
-                          if (idB === 'monthly') return 1;
-                          if (idA === 'annual') return -1;
-                          if (idB === 'annual') return 1;
-                          return idA.localeCompare(idB);
+                      {(Object.entries(plans) as [string, { title: string; price: number; [key: string]: any }][])
+                        .filter(([id, p]) => p.active && id !== 'updated_at')
+                        .sort(([idA, pA], [idB, pB]) => {
+                          const tA = (pA.title||"").toLowerCase();
+                          const tB = (pB.title||"").toLowerCase();
+                          
+                          const isFreeA = pA.price === 0 || tA.includes("gratuito") || tA.includes("grátis");
+                          const isFreeB = pB.price === 0 || tB.includes("gratuito") || tB.includes("grátis");
+                          if (isFreeA && !isFreeB) return -1;
+                          if (!isFreeA && isFreeB) return 1;
+                          
+                          const isAnA = idA.includes("annual") || tA.includes("anual");
+                          const isAnB = idB.includes("annual") || tB.includes("anual");
+                          if (isAnA && !isAnB) return -1;
+                          if (!isAnA && isAnB) return 1;
+                          
+                          const isMoA = idA.includes("monthly") || tA.includes("mensal");
+                          const isMoB = idB.includes("monthly") || tB.includes("mensal");
+                          if (isMoA && !isMoB) return -1;
+                          if (!isMoA && isMoB) return 1;
+                          
+                          return pA.price - pB.price;
                         })
                         .map(([id, p]: [any, any]) => (
                         <button
@@ -434,7 +476,7 @@ export default function Pricing() {
           href={`https://wa.me/${whatsappHelp.number}?text=Olá, estou na página de checkout e preciso de ajuda com a assinatura.`}
           target="_blank"
           rel="noopener noreferrer"
-          className="fixed bottom-6 right-6 z-40 bg-[#25D366] text-white p-4 rounded-full shadow-2xl hover:scale-110 transition-transform active:scale-95 flex items-center gap-2 group"
+          className="fixed bottom-[calc(var(--spacing)*18)] right-6 z-40 bg-[#25D366] text-white p-4 rounded-full shadow-2xl hover:scale-110 transition-transform active:scale-95 flex items-center gap-2 group"
         >
           <Smartphone className="w-6 h-6" />
           <span className="max-w-0 overflow-hidden group-hover:max-w-xs transition-all duration-500 ease-in-out whitespace-nowrap font-bold text-sm">

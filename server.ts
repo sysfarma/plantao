@@ -62,6 +62,20 @@ if (!admin.apps.length) {
   console.log('Firebase Admin initialized with Project ID:', firebaseConfig.projectId);
 }
 
+// Interfaces
+interface SubscriptionData {
+  pharmacy_id: string;
+  mp_preapproval_id: string;
+  status: string;
+  amount: number;
+  plan_type: string;
+  created_at: string;
+  updated_at: string;
+  next_billing_date: string;
+  init_point: string | undefined;
+  user_id?: string;
+}
+
 const db = getFirestore(firebaseConfig.firestoreDatabaseId);
 const auth = getAuth();
 
@@ -272,10 +286,12 @@ async function startServer() {
       
       const adminEnv = process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL.replace(/['"]/g, '').trim() : null;
       const isMasterAdmin = decodedToken.email === 'sys.farmaciasdeplantao@gmail.com';
+      const isConfigAdmin = adminEnv && decodedToken.email === adminEnv;
+
       req.user = {
         id: decodedToken.uid,
         email: decodedToken.email,
-        role: (isMasterAdmin || (adminEnv && decodedToken.email === adminEnv)) ? 'admin' : 'pharmacy'
+        role: (isMasterAdmin || isConfigAdmin) ? 'admin' : (decodedToken.role || 'pharmacy')
       };
       next();
     } catch (error: any) {
@@ -401,6 +417,7 @@ async function startServer() {
           // Create pending subscription
           await db.collection('subscriptions').add({
             pharmacy_id: pharmacyId,
+            user_id: req.user.id,
             status: 'pending',
             expires_at: null,
             created_at: now,
@@ -477,8 +494,10 @@ async function startServer() {
           updated_at: now
         });
         
+        const pdoc2 = await db.collection('pharmacies').doc(pharmacyId).get();
         await db.collection('subscriptions').add({
           pharmacy_id: pharmacyId,
+          user_id: pdoc2.data()?.user_id || '',
           status: 'active',
           plan_type: 'extra_1776642077763', // Plano Gratuito
           expires_at: null,
@@ -675,8 +694,17 @@ async function startServer() {
     
     try {
       const now = new Date().toISOString();
+      const pharmacyDoc = await db.collection('pharmacies').doc(id).get();
+      if (!pharmacyDoc.exists) {
+        return res.status(404).json({ error: 'Pharmacy not found' });
+      }
+
+      const pharmacyData = pharmacyDoc.data()!;
+      const userId = pharmacyData.user_id || '';
+
       const clickData = {
         pharmacy_id: id,
+        user_id: userId,
         type,
         created_at: now,
         updated_at: now
@@ -975,6 +1003,7 @@ async function startServer() {
         
         await db.collection('subscriptions').add({
           pharmacy_id: pharmacyId,
+          user_id: req.user.id,
           status: 'active',
           plan_type: planType,
           amount: 0,
@@ -1087,7 +1116,7 @@ async function startServer() {
       }
 
       // 3. Save to Firestore
-      const subData = {
+      const subData: SubscriptionData = {
         pharmacy_id: pharmacyId,
         mp_preapproval_id: subscriptionResponse.id,
         status: subscriptionResponse.status === 'authorized' ? 'active' : 'pending',
@@ -1096,9 +1125,9 @@ async function startServer() {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         next_billing_date: calculateNextBillingDate(planConfig.frequency || 1, planConfig.frequency_type || 'months'),
-        init_point: subscriptionResponse.init_point
+        init_point: subscriptionResponse.init_point,
+        user_id: req.user.id
       };
-
       await db.collection('subscriptions').add(subData);
 
       // If authorized, activate pharmacy
@@ -1351,6 +1380,7 @@ async function startServer() {
         
         const newSubRef = await db.collection('subscriptions').add({
           pharmacy_id: pharmacyId,
+          user_id: req.user.id,
           status: 'active',
           plan_type: planType,
           amount: 0,
@@ -1412,7 +1442,7 @@ async function startServer() {
         }
       }
 
-      const subData = {
+      const subData: SubscriptionData = {
         pharmacy_id: pharmacyId,
         mp_preapproval_id: subscriptionResponse.id,
         status: subscriptionResponse.status === 'authorized' ? 'active' : 'pending',
@@ -1421,9 +1451,9 @@ async function startServer() {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         next_billing_date: calculateNextBillingDate(planConfig.frequency || 1, planConfig.frequency_type || 'months'),
-        init_point: subscriptionResponse.init_point
+        init_point: subscriptionResponse.init_point,
+        user_id: req.user.id
       };
-
       const newSubRef = await db.collection('subscriptions').add(subData);
 
       if (subData.status === 'active') {
@@ -1644,9 +1674,11 @@ async function startServer() {
                 // 1. Cancel ANY other existing active/pending subscription to ensure only the new one is active
                 await cancelExistingSubscriptions(pharmacyId);
 
+                const pharmDoc1 = await db.collection('pharmacies').doc(pharmacyId).get();
                 // We create a NEW one for fixed durations like PIX
                 await db.collection('subscriptions').add({
                   pharmacy_id: pharmacyId,
+                  user_id: pharmDoc1.data()?.user_id || '',
                   status: 'active',
                   plan_type: planType,
                   expires_at: expiresAt.toISOString(),
@@ -1814,8 +1846,10 @@ async function startServer() {
           next_billing_date: nextBillingDate
         });
       } else {
+        const pharmDoc2 = await db.collection('pharmacies').doc(pharmacyId).get();
         await db.collection('subscriptions').add({
           pharmacy_id: pharmacyId,
+          user_id: pharmDoc2.data()?.user_id || '',
           status: 'active',
           plan_type: planType,
           amount: planConfig.price || 0,
@@ -1996,8 +2030,10 @@ async function startServer() {
           updated_at: now
         });
       } else {
+        const pdocState = await db.collection('pharmacies').doc(id).get();
         await db.collection('subscriptions').add({
           pharmacy_id: id,
+          user_id: pdocState.data()?.user_id || '',
           status: 'active',
           expires_at: expiresAt.toISOString(),
           created_at: now,
@@ -2005,8 +2041,11 @@ async function startServer() {
         });
       }
 
+      const pdoc = await db.collection('pharmacies').doc(id).get();
+      const puser = pdoc.data()?.user_id || '';
       await db.collection('payments').add({
         pharmacy_id: id,
+        user_id: puser,
         amount: 69.96,
         method: 'pix',
         status: 'approved',
@@ -2126,7 +2165,7 @@ async function startServer() {
         return res.status(404).json({ error: 'Farmácia não encontrada' });
       }
       const pharmacyData = pharmacyDoc.data()!;
-      const userId = pharmacyData.user_id;
+      let currentUserId = pharmacyData.user_id;
 
       // Update Auth User if email or password provided
       if (email || password) {
@@ -2135,26 +2174,45 @@ async function startServer() {
           if (email) updateData.email = email;
           if (password) updateData.password = password;
           
-          if (userId && !userId.startsWith('dummy_')) {
-            await auth.updateUser(userId, updateData);
+          if (currentUserId && !currentUserId.startsWith('dummy_')) {
+            await auth.updateUser(currentUserId, updateData);
           } else if (email && password) {
             // Create real user if it was a dummy
             const userRecord = await auth.createUser({ email, password });
             const now = new Date().toISOString();
-            await db.collection('users').doc(userRecord.uid).set({
+            currentUserId = userRecord.uid;
+            await db.collection('users').doc(currentUserId).set({
               email,
               role: 'pharmacy',
               created_at: now,
               updated_at: now
             });
             await db.collection('pharmacies').doc(id).update({ 
-              user_id: userRecord.uid,
+              user_id: currentUserId,
               updated_at: now
             });
           }
         } catch (authError: any) {
-          console.error('Error updating Auth user:', authError);
-          // Continue updating Firestore even if Auth fails
+          if (authError.code === 'auth/email-already-exists') {
+            // Re-link to the existing user instead of failing
+            const existingUser = await auth.getUserByEmail(email);
+            currentUserId = existingUser.uid;
+            if (password) {
+              try {
+                await auth.updateUser(currentUserId, { password });
+              } catch (pwdErr) {
+                // ignore
+              }
+            }
+            await db.collection('pharmacies').doc(id).update({ 
+              user_id: currentUserId,
+              updated_at: new Date().toISOString()
+            });
+            // Update email in users collection as well implicitly since they own it
+          } else {
+            console.error('Error updating Auth user:', authError);
+            // Continue updating Firestore even if Auth fails (for non-critical errors)
+          }
         }
       }
 
@@ -2167,7 +2225,7 @@ async function startServer() {
       await db.collection('pharmacies').doc(id).update(updatedData);
       
       // Also update user doc if exists
-      if (userId && !userId.startsWith('dummy_')) {
+      if (currentUserId && !currentUserId.startsWith('dummy_')) {
         const userUpdate: any = { updated_at: new Date().toISOString() };
         if (email) userUpdate.email = email;
         if (cep) userUpdate.cep = cep;
@@ -2177,7 +2235,7 @@ async function startServer() {
         if (city) userUpdate.city = city;
         if (state) userUpdate.state = state;
         
-        await db.collection('users').doc(userId).update(userUpdate);
+        await db.collection('users').doc(currentUserId).set(userUpdate, { merge: true });
       }
 
       await logAdminAction(req.user.id, 'pharmacy', id, 'update', { 
@@ -2195,39 +2253,43 @@ async function startServer() {
     const { email, password, name, phone, whatsapp, street, number, neighborhood, city, state } = req.body;
     
     try {
-      let userId;
+      let currentUserId;
       try {
         const userRecord = await auth.createUser({
           email,
           password,
         });
-        userId = userRecord.uid;
+        currentUserId = userRecord.uid;
       } catch (authError: any) {
-        console.error('Error creating Auth user:', authError);
         if (authError.code === 'auth/email-already-exists') {
           const userRecord = await auth.getUserByEmail(email);
-          userId = userRecord.uid;
+          currentUserId = userRecord.uid;
           if (password) {
-            await auth.updateUser(userId, { password });
+            try {
+              await auth.updateUser(currentUserId, { password });
+            } catch (pwdErr) {
+              // ignore
+            }
           }
         } else {
+          console.error('Error creating Auth user:', authError);
           // Fallback to dummy user if auth creation fails (e.g., no service account)
-          userId = `dummy_${uuidv4()}`;
+          currentUserId = `dummy_${uuidv4()}`;
         }
       }
 
       const now = new Date().toISOString();
-      await db.collection('users').doc(userId).set({
+      await db.collection('users').doc(currentUserId).set({
         email,
         role: 'pharmacy',
         created_at: now,
         updated_at: now
-      });
+      }, { merge: true });
       
       const pharmacyId = uuidv4();
       
       await db.collection('pharmacies').doc(pharmacyId).set({
-        user_id: userId,
+        user_id: currentUserId,
         name,
         phone,
         whatsapp,
@@ -2250,6 +2312,7 @@ async function startServer() {
 
       await db.collection('subscriptions').add({
         pharmacy_id: pharmacyId,
+        user_id: currentUserId,
         status: 'active',
         expires_at: expiresAt.toISOString(),
         created_at: now,
@@ -2294,9 +2357,11 @@ async function startServer() {
   app.post('/api/admin/shifts', authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
     try {
-      const { pharmacy_id, date, start_time, end_time, is_24h } = req.body;
+      console.log('Creating shift:', req.body);
+      const { pharmacy_id, user_id, date, start_time, end_time, is_24h } = req.body;
       const newShift = {
         pharmacy_id,
+        user_id: user_id || '',
         date,
         start_time: is_24h ? '00:00' : start_time,
         end_time: is_24h ? '23:59' : end_time,
@@ -2304,9 +2369,12 @@ async function startServer() {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       };
+      console.log('New shift object:', newShift);
       const docRef = await db.collection('shifts').add(newShift);
+      console.log('Shift created with ID:', docRef.id);
       res.status(201).json({ id: docRef.id, ...newShift });
     } catch (err: any) {
+      console.error('Error creating shift:', err);
       res.status(500).json({ error: err.message });
     }
   });
@@ -2414,8 +2482,12 @@ async function startServer() {
     
     try {
       const now = new Date().toISOString();
+      const pharmacyDoc = await db.collection('pharmacies').doc(pharmacy_id).get();
+      const userId = pharmacyDoc.exists ? (pharmacyDoc.data()?.user_id || '') : '';
+
       const docRef = await db.collection('highlights').add({
         pharmacy_id,
+        user_id: userId,
         type,
         date_start,
         date_end,
@@ -2425,6 +2497,17 @@ async function startServer() {
         updated_at: now
       });
       res.json({ message: 'Highlight added', id: docRef.id });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Delete Highlight
+  app.delete('/api/admin/highlights/:id', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    try {
+      await db.collection('highlights').doc(req.params.id).delete();
+      res.json({ message: 'Highlight deleted successfully' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

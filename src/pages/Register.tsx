@@ -99,6 +99,7 @@ export default function Register() {
         // Create Subscription Document
         await addDoc(collection(db, 'subscriptions'), {
           pharmacy_id: pharmacyRef.id,
+          user_id: user.uid,
           status: 'pending',
           expires_at: null,
           created_at: now,

@@ -118,7 +118,7 @@ service cloud.firestore {
     }
 
     function hasOnlyAllowedFields(fields) {
-      return request.resource.data.keys().hasOnly(fields);
+      return request.resource.data.diff({}).affectedKeys().hasOnly(fields);
     }
 
     function isValidEmail(email) {
@@ -153,7 +153,7 @@ service cloud.firestore {
              data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
              data.city is string && data.city.size() > 0 && data.city.size() < 100 &&
              data.state is string && data.state.size() == 2 &&
-             data.is_active is int && (data.is_active == 0 || data.is_active == 1) &&
+             (data.is_active is int || data.is_active is number || data.is_active is bool) &&
              (!('subscription_active' in data) || data.subscription_active is bool) &&
              isValidDateString(data.created_at) &&
              (!('updated_at' in data) || isValidDateString(data.updated_at)) &&
@@ -173,13 +173,14 @@ service cloud.firestore {
     }
 
     function isValidShift(data) {
-      return hasRequiredFields(['pharmacy_id', 'date', 'start_time', 'end_time', 'is_24h', 'created_at']) &&
+      return hasRequiredFields(['pharmacy_id', 'user_id', 'date', 'start_time', 'end_time', 'is_24h', 'created_at']) &&
              hasOnlyAllowedFields(['pharmacy_id', 'date', 'start_time', 'end_time', 'is_24h', 'created_at', 'updated_at', 'user_id', 'owner_id']) &&
              data.pharmacy_id is string && data.pharmacy_id.size() < 100 &&
+             data.user_id is string && data.user_id.size() > 0 &&
              data.date is string && data.date.matches("^\\d{4}-\\d{2}-\\d{2}$") &&
              data.start_time is string && data.start_time.matches("^\\d{2}:\\d{2}$") &&
              data.end_time is string && data.end_time.matches("^\\d{2}:\\d{2}$") &&
-             data.is_24h is int && (data.is_24h == 0 || data.is_24h == 1) &&
+             (data.is_24h is int || data.is_24h is number || data.is_24h is bool) &&
              isValidDateString(data.created_at) &&
              (!('updated_at' in data) || isValidDateString(data.updated_at));
     }
@@ -248,7 +249,7 @@ service cloud.firestore {
              data.title is string && data.title.size() > 0 && data.title.size() < 100 &&
              data.description is string && data.description.size() > 0 && data.description.size() < 500 &&
              data.is_active is bool &&
-             data.order is int &&
+             (data.order is int || data.order is number) &&
              (!('icon' in data) || (data.icon is string && data.icon.size() < 50)) &&
              (!('color' in data) || (data.color is string && data.color.size() < 50)) &&
              (!('created_at' in data) || isValidDateString(data.created_at)) &&
@@ -291,7 +292,8 @@ service cloud.firestore {
     }
 
     match /subscriptions/{subscriptionId} {
-      allow read: if isAdmin() || isSensitiveResourceOwner(resource.data) || (isAuthenticated() && isPharmacyOwner(resource.data.pharmacy_id));
+      allow get: if isAdmin() || isSensitiveResourceOwner(resource.data);
+      allow list: if isAdmin() || (isAuthenticated() && resource.data.user_id == request.auth.uid);
       allow create, update: if isAdmin() && isValidSubscription(request.resource.data) && 
                             (request.method == 'create' || areImmutableFieldsUnchanged(['pharmacy_id', 'created_at']));
       allow delete: if isAdmin();
@@ -306,9 +308,9 @@ service cloud.firestore {
     }
 
     match /payments/{paymentId} {
-      allow get: if isAdmin() || isSensitiveResourceOwner(resource.data) || (isAuthenticated() && isPharmacyOwner(resource.data.pharmacy_id));
-      allow list: if isAdmin() || (isAuthenticated() && (resource.data.user_id == request.auth.uid || isPharmacyOwner(resource.data.pharmacy_id)));
-      allow create: if isAuthenticated() && isValidPayment(request.resource.data) && isPharmacyOwner(request.resource.data.pharmacy_id);
+      allow get: if isAdmin() || isSensitiveResourceOwner(resource.data);
+      allow list: if isAdmin() || (isAuthenticated() && resource.data.user_id == request.auth.uid);
+      allow create: if isAuthenticated() && isValidPayment(request.resource.data) && (request.resource.data.user_id == request.auth.uid || isAdmin());
       allow update: if isAdmin() && isValidPayment(request.resource.data) && areImmutableFieldsUnchanged(['pharmacy_id', 'created_at']);
       allow delete: if isAdmin();
     }
@@ -316,16 +318,17 @@ service cloud.firestore {
     match /shifts/{shiftId} {
       allow read: if true;
       allow create: if isAuthenticated() && isValidShift(request.resource.data) && 
-                    (get(/databases/$(database)/documents/pharmacies/$(request.resource.data.pharmacy_id)).data.user_id == request.auth.uid || isAdmin());
+                    (request.resource.data.user_id == request.auth.uid || isAdmin());
       allow update: if isAuthenticated() && isValidShift(request.resource.data) && 
                     areImmutableFieldsUnchanged(['pharmacy_id', 'created_at']) &&
-                    (get(/databases/$(database)/documents/pharmacies/$(resource.data.pharmacy_id)).data.user_id == request.auth.uid || isAdmin());
+                    (resource.data.user_id == request.auth.uid || isAdmin());
       allow delete: if isAuthenticated() && 
-                    (get(/databases/$(database)/documents/pharmacies/$(resource.data.pharmacy_id)).data.user_id == request.auth.uid || isAdmin());
+                    (resource.data.user_id == request.auth.uid || isAdmin());
     }
 
     match /clicks/{clickId} {
-      allow read: if isAdmin() || isSensitiveResourceOwner(resource.data) || (isAuthenticated() && isPharmacyOwner(resource.data.pharmacy_id));
+      allow get: if isAdmin() || isSensitiveResourceOwner(resource.data);
+      allow list: if isAdmin() || (isAuthenticated() && resource.data.user_id == request.auth.uid);
       allow create: if isValidClick(request.resource.data) && 
                     incrementedPharmacyCounter(request.resource.data.pharmacy_id, request.resource.data.type); 
       allow update, delete: if isAdmin();
