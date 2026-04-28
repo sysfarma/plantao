@@ -258,14 +258,18 @@ async function startServer() {
 
       const decodedToken = await auth.verifyIdToken(token);
       
+      const emailVerified = decodedToken.email_verified === true;
       const adminEnv = process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL.replace(/['"]/g, '').trim() : null;
       const isMasterAdmin = decodedToken.email === 'sys.farmaciasdeplantao@gmail.com';
       const isConfigAdmin = adminEnv && decodedToken.email === adminEnv;
+      const isAdmin = (isMasterAdmin || isConfigAdmin) && emailVerified;
 
       req.user = {
         id: decodedToken.uid,
+        uid: decodedToken.uid,
         email: decodedToken.email,
-        role: (isMasterAdmin || isConfigAdmin) ? 'admin' : (decodedToken.role || 'pharmacy')
+        email_verified: emailVerified,
+        role: isAdmin ? 'admin' : (decodedToken.role || 'pharmacy')
       };
       next();
     } catch (err) {
@@ -306,23 +310,28 @@ async function startServer() {
 
 
 
-  // Rate limiting map for forgot-password
-  const resetRateLimits = new Map<string, number>();
-
+  // Rate limiting handled via Firestore 
   // Forgot Password
   app.post('/api/auth/forgot-password', async (req, res) => {
     const ip = req.ip || req.connection?.remoteAddress || 'unknown';
     const nowMs = Date.now();
     
-    if (ip !== 'unknown' && resetRateLimits.has(ip)) {
-      if (nowMs - resetRateLimits.get(ip)! < 60000) { // 1 min limit per IP
-        return res.json({ message: 'Se o e-mail existir, um link foi enviado.' });
+    if (ip !== 'unknown') {
+      const clientKey = crypto.createHash('md5').update(`reset_${ip}`).digest('hex');
+      const rlRef = db.collection('rate_limits').doc(clientKey);
+      try {
+        const doc = await rlRef.get();
+        if (doc.exists) {
+          const data = doc.data();
+          if (data && nowMs - data.timestamp < 60000) { // 1 min limit per IP
+            return res.json({ message: 'Se o e-mail existir, um link foi enviado.' });
+          }
+        }
+        await rlRef.set({ timestamp: nowMs });
+      } catch (e) {
+        console.error("Rate limit check error:", e);
       }
     }
-    if (ip !== 'unknown') resetRateLimits.set(ip, nowMs);
-
-    // cleanup map occasionally
-    if (resetRateLimits.size > 1000) resetRateLimits.clear();
 
     const { email } = req.body;
     if (!email) return res.status(400).json({ error: 'Email obrigatório' });
@@ -331,10 +340,14 @@ async function startServer() {
       const userSnapshot = await db.collection('users').where('email', '==', email).get();
       
       if (!userSnapshot.empty) {
-        // Prevent email bombing
-        const recentResets = await db.collection('password_resets').where('email', '==', email).get();
-        const recentDocs = recentResets.docs.map(doc => doc.data());
-        const lastReset = recentDocs.sort((a,b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+        // Prevent email bombing - Security fix: use limit(1) and orderBy to prevent OOM
+        const recentResets = await db.collection('password_resets')
+          .where('email', '==', email)
+          .orderBy('created_at', 'desc')
+          .limit(1)
+          .get();
+        
+        const lastReset = recentResets.empty ? null : recentResets.docs[0].data();
         
         if (lastReset) {
           const lastResetTime = new Date(lastReset.created_at).getTime();
@@ -414,8 +427,8 @@ async function startServer() {
       
       if (!userDoc.exists) {
         // Create new user profile
-        const adminEmail = process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL.replace(/['"]/g, '').trim() : 'sys.farmaciasdeplantao@gmail.com';
-        const role = ((req.user.email === adminEmail) || (req.user.email === 'sys.farmaciasdeplantao@gmail.com') ? 'admin' : 'client') as 'admin' | 'pharmacy' | 'client';
+        // Role is securely validated and provided by the authenticateToken middleware
+        const role = req.user.role === 'admin' ? 'admin' : 'client';
         const now = new Date().toISOString();
         
         await db.collection('users').doc(req.user.id).set({
@@ -490,12 +503,13 @@ async function startServer() {
 
   // Register Pharmacy
   app.post('/api/auth/register', authenticateToken, async (req: any, res) => {
-    const { email, pharmacyData } = req.body;
+    const { pharmacyData } = req.body;
     
     try {
       const userId = req.user.uid;
-      const adminEmail = process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL.replace(/['"]/g, '').trim() : 'sys.farmaciasdeplantao@gmail.com';
-      const role = ((adminEmail && email === adminEmail) || email === 'sys.farmaciasdeplantao@gmail.com') ? 'admin' : 'pharmacy';
+      const email = req.user.email; // Use verified email from token
+      // Role is securely validated and provided by the authenticateToken middleware
+      const role = req.user.role === 'admin' ? 'admin' : 'pharmacy';
       const now = new Date().toISOString();
       
       await db.collection('users').doc(userId).set({
@@ -556,9 +570,45 @@ async function startServer() {
     }
   });
 
+  // Helper to ensure query params are strings (prevents Type Juggling / Pollution)
+  const ensureString = (val: any): string => {
+    if (typeof val === 'string') return val;
+    if (Array.isArray(val)) return String(val[0] || '');
+    return '';
+  };
+
+  // Helper object to extract only public PII-safe fields
+  const sanitizePublicPharmacy = (id: string, data: any) => ({
+    id,
+    name: data.name || '',
+    street: data.street || '',
+    number: data.number || '',
+    neighborhood: data.neighborhood || '',
+    city: data.city || '',
+    state: data.state || '',
+    zip: data.zip || data.cep || '',
+    cep: data.cep || data.zip || '',
+    phone: data.phone || '',
+    whatsapp: data.whatsapp || '',
+    website: data.website || '',
+    latitude: data.latitude || data.lat || null,
+    longitude: data.longitude || data.lng || null,
+    lat: data.lat || data.latitude || null,
+    lng: data.lng || data.longitude || null,
+    description: data.description || '',
+    logo_url: data.logo_url || null,
+    is_active: data.is_active,
+    created_at: data.created_at,
+    updated_at: data.updated_at
+  });
+
   // Public: Get Pharmacies by City/State
   app.get('/api/public/pharmacies', async (req, res) => {
-    const { city, state, name, cep } = req.query;
+    const city = ensureString(req.query.city);
+    const state = ensureString(req.query.state);
+    const name = ensureString(req.query.name);
+    const cep = ensureString(req.query.cep);
+    
     try {
       let pharmaciesQuery = db.collection('pharmacies').where('is_active', '==', 1);
 
@@ -566,17 +616,21 @@ async function startServer() {
         pharmaciesQuery = pharmaciesQuery.where('city', '==', city).where('state', '==', state);
       }
       
+      // Limit to 100 to prevent Denial of Wallet and OOM
+      pharmaciesQuery = pharmaciesQuery.limit(100);
+      
       const snapshot = await pharmaciesQuery.get();
-      let pharmacies = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
+      let pharmacies = snapshot.docs.map((doc: any) => sanitizePublicPharmacy(doc.id, doc.data()));
+
       
       if (name) {
         pharmacies = pharmacies.filter((p: any) => 
-          p.name.toLowerCase().includes((name as string).toLowerCase())
+          p.name && p.name.toLowerCase().includes(name.toLowerCase())
         );
       }
 
       if (cep) {
-        const cleanSearchCep = (cep as string).replace(/\D/g, '').substring(0, 5);
+        const cleanSearchCep = cep.replace(/\D/g, '').substring(0, 5);
         pharmacies = pharmacies.filter((p: any) => {
           const pharmCep = (p.cep || p.zip || '').replace(/\D/g, '').substring(0, 5);
           return pharmCep === cleanSearchCep;
@@ -591,7 +645,10 @@ async function startServer() {
 
   // Public: Get On-Call Pharmacies (Plantões de Hoje)
   app.get('/api/public/on-call', async (req, res) => {
-    const { city, state, cep } = req.query;
+    const city = ensureString(req.query.city);
+    const state = ensureString(req.query.state);
+    const cep = ensureString(req.query.cep);
+    
     try {
       // Robust date generation for Brazil (YYYY-MM-DD)
       const today = new Intl.DateTimeFormat('sv-SE', {
@@ -603,28 +660,33 @@ async function startServer() {
       
       console.log(`[API] On-call request: today=${today}, city=${city}, state=${state}, cep=${cep}`);
 
-      // Optimized strategy
-      let pharmaciesSnapshot;
-      try {
-        let pharmaciesQuery = db.collection('pharmacies').where('is_active', '==', 1);
-        if (city && state && !cep) {
-          // Note: This may require a composite index (is_active, city, state)
-          // If it fails, the catch block will fallback to a safer query
-          pharmaciesQuery = pharmaciesQuery.where('city', '==', city as string).where('state', '==', state as string);
-        }
-        pharmaciesSnapshot = await pharmaciesQuery.get();
-      } catch (idxError: any) {
-        console.warn('[API Warning] Optimized pharmacy query failed (likely missing index), falling back to broad query:', idxError.message);
-        pharmaciesSnapshot = await db.collection('pharmacies').where('is_active', '==', 1).get();
+      // 1. Extract active shifts for today first
+      // We limit to 300 to prevent Denial of Wallet/OOM but it's a much more targeted limit than 100 random pharmacies
+      const shiftsSnapshot = await db.collection('shifts').where('date', '==', today).limit(300).get();
+      
+      if (shiftsSnapshot.empty) {
+        return res.json([]);
       }
 
-      const [shiftsSnapshot] = await Promise.all([
-        db.collection('shifts').where('date', '==', today).get()
-      ]);
-      
-      const pharmaciesMap = new Map(pharmaciesSnapshot.docs.map(doc => [doc.id, doc.data()]));
+      const pharmacyIds = [...new Set(shiftsSnapshot.docs.map(doc => doc.data().pharmacy_id))];
+
+      // 2. Load the corresponding pharmacy documents
+      const pharmaciesMap = new Map();
+      // Chunking for whereIn limit of 30
+      for (let i = 0; i < pharmacyIds.length; i += 30) {
+        const chunk = pharmacyIds.slice(i, i + 30);
+        const pharmaciesSnapshot = await db.collection('pharmacies')
+          .where(admin.firestore.FieldPath.documentId(), 'in', chunk)
+          .where('is_active', '==', 1)
+          .get();
+        
+        pharmaciesSnapshot.docs.forEach(doc => {
+          pharmaciesMap.set(doc.id, doc.data());
+        });
+      }
+
       const onCallPharmacies = [];
-      const cleanSearchCep = cep ? (cep as string).replace(/\D/g, '').substring(0, 5) : null;
+      const cleanSearchCep = cep ? cep.replace(/\D/g, '').substring(0, 5) : null;
 
       for (const shiftDoc of shiftsSnapshot.docs) {
         const shift = shiftDoc.data();
@@ -635,8 +697,8 @@ async function startServer() {
           if (city && state && !cep) { 
              const pCity = pharmacy.city || '';
              const pState = pharmacy.state || '';
-             if (pCity.toLowerCase() !== (city as string).toLowerCase() || 
-                 pState.toLowerCase() !== (state as string).toLowerCase()) {
+             if (pCity.toLowerCase() !== city.toLowerCase() || 
+                 pState.toLowerCase() !== state.toLowerCase()) {
                continue;
              }
           }
@@ -647,8 +709,7 @@ async function startServer() {
           }
           
           onCallPharmacies.push({
-            id: shift.pharmacy_id,
-            ...(pharmacy as any),
+            ...sanitizePublicPharmacy(shift.pharmacy_id, pharmacy),
             shift: {
               start_time: shift.start_time,
               end_time: shift.end_time,
@@ -668,7 +729,9 @@ async function startServer() {
 
   // Public: Get Highlights
   app.get('/api/public/highlights', async (req, res) => {
-    const { city, state, cep } = req.query;
+    const city = ensureString(req.query.city);
+    const state = ensureString(req.query.state);
+    const cep = ensureString(req.query.cep);
     const now = new Date().toISOString();
     
     try {
@@ -681,13 +744,13 @@ async function startServer() {
       const highlights = highlightsSnapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }))
         .filter((h: any) => h.date_end >= now);
       
-      const cleanSearchCep = cep ? (cep as string).replace(/\D/g, '').substring(0, 5) : null;
+      const cleanSearchCep = cep ? cep.replace(/\D/g, '').substring(0, 5) : null;
 
       const result = [];
       for (const h of highlights) {
         if (city && state && !cep) {
-          if (h.city.toLowerCase() !== (city as string).toLowerCase() || 
-              h.state.toLowerCase() !== (state as string).toLowerCase()) {
+          if (h.city.toLowerCase() !== city.toLowerCase() || 
+              h.state.toLowerCase() !== state.toLowerCase()) {
             continue;
           }
         }
@@ -702,14 +765,7 @@ async function startServer() {
 
           result.push({ 
             ...h, 
-            name: p.name, 
-            phone: p.phone, 
-            whatsapp: p.whatsapp, 
-            street: p.street, 
-            number: p.number, 
-            neighborhood: p.neighborhood, 
-            city: p.city, 
-            state: p.state 
+            pharmacy: sanitizePublicPharmacy(h.pharmacy_id, p)
           });
         }
       }
@@ -725,6 +781,27 @@ async function startServer() {
     const { id } = req.params;
     const { type } = req.body; // 'whatsapp' or 'map'
     
+    // Add rate limiting via Firestore to prevent serverless concurrency bypass
+    const ip = req.ip || req.connection?.remoteAddress || 'unknown';
+    const nowMs = Date.now();
+    
+    if (ip !== 'unknown') {
+      const hashKey = crypto.createHash('md5').update(`click_${ip}_${id}_${type}`).digest('hex');
+      const rlRef = db.collection('rate_limits').doc(hashKey);
+      try {
+        const doc = await rlRef.get();
+        if (doc.exists) {
+          const data = doc.data();
+          if (data && nowMs - data.timestamp < 300000) { // Limit 1 click per type per pharmacy per IP every 5 minutes
+            return res.json({ success: true, message: 'Click ignored due to rate limit' });
+          }
+        }
+        await rlRef.set({ timestamp: nowMs });
+      } catch (e) {
+        console.error("Rate limit check error:", e);
+      }
+    }
+
     try {
       const now = new Date().toISOString();
       const pharmacyDoc = await db.collection('pharmacies').doc(id).get();
@@ -1233,68 +1310,6 @@ async function startServer() {
 
       const now = new Date().toISOString();
 
-      // Deactivate Sub
-      await db.collection('subscriptions').doc(activeSubDoc.id).update({
-        status: 'cancelled',
-        updated_at: now
-      });
-
-      // Deactivate Pharmacy
-      await db.collection('pharmacies').doc(pharmacyId).update({
-        is_active: 0,
-        subscription_active: false,
-        sub_status: 'cancelled',
-        updated_at: now
-      });
-
-      res.json({ success: true, message: 'Assinatura cancelada com sucesso.' });
-    } catch (err: any) {
-      console.error('Error in /api/subscriptions/cancel:', err);
-      res.status(500).json({ error: 'Erro ao cancelar assinatura: ' + err.message });
-    }
-  });
-
-  // Pharmacy: Cancel Subscription voluntarily
-  app.delete('/api/subscriptions/cancel', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: 'Acesso negado' });
-
-    try {
-      const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
-      if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
-      
-      const pharmacyDoc = pharmacySnapshot.docs[0];
-      const pharmacyId = pharmacyDoc.id;
-
-      // Find active subscription
-      const subSnapshot = await db.collection('subscriptions')
-        .where('pharmacy_id', '==', pharmacyId)
-        .where('status', 'in', ['active', 'pending', 'authorized'])
-        .get();
-
-      if (subSnapshot.empty) {
-        return res.status(400).json({ error: 'Nenhuma assinatura ativa encontrada para cancelar.' });
-      }
-
-      const activeSubDoc = subSnapshot.docs[0];
-      const activeSub = activeSubDoc.data();
-
-      // Cancel in Mercado Pago if managed by them
-      if (activeSub.mp_preapproval_id && !activeSub.mp_preapproval_id.startsWith('sub_mock') && activeSub.mp_preapproval_id !== 'mock') {
-        const { preApprovalClient, isMock } = await getMPClient();
-        if (!isMock) {
-          try {
-            await preApprovalClient.update({
-              id: activeSub.mp_preapproval_id,
-              body: { status: 'cancelled' }
-            });
-          } catch (mpError: any) {
-             console.error('Info: PreApproval could not be cancelled in MP. Maybe already cancelled. Msg:', mpError.message);
-          }
-        }
-      }
-
-      const now = new Date().toISOString();
-
       // Deactivate Sub locally
       await db.collection('subscriptions').doc(activeSubDoc.id).update({
         status: 'cancelled',
@@ -1310,7 +1325,7 @@ async function startServer() {
       });
 
       await updateDashboardStats();
-      
+
       res.json({ success: true, message: 'Assinatura cancelada com sucesso.' });
     } catch (err: any) {
       console.error('Error in /api/subscriptions/cancel:', err);

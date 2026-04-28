@@ -1,33 +1,32 @@
-# Relatório de Falhas de Segurança - Farmácias de Plantão
+# Relatório de Falhas de Segurança Mapeadas
 
-**Data da Auditoria:** 27 de Abril de 2026
+Esta é a análise atualizada focada em vulnerabilidades e falhas arquiteturais com impacto em segurança identificadas na atual versão do backend (`server.ts`). Nenhuma correção foi aplicada, mantendo-se estritamente o caráter de auditoria e especificação.
 
-Após análise da base de código (Regras do Firestore, Arquivo `server.ts` de Backend e rotas de acesso), foram identificadas as seguintes vulnerabilidades de segurança:
+## 1. Information Disclosure / PII Leakage (CRÍTICO)
+**Alvo:** Rotas `GET /api/public/pharmacies` e `GET /api/public/on-call` (`server.ts`: linhas 583 e 666)
 
----
+**Descrição:**
+A resposta que devolve as listagens para qualquer usuário não-autenticado usa o destrutor javascript `...doc.data()`, o que espelha exatamente a estrutura do banco de dados na resposta HTTP JSON. 
+- **Problema:** Ao fazer isso, a aplicação submetida à internet publica o `user_id` do Firebase Auth do dono da farmácia, o `email` primário de contato/gestão, e potencialmente o `mp_customer_id` (Mercado Pago). Isso fere princípios de Least Privilege e LGPD, facilitando cross-referencing e spam contra os e-mails e UIDs de owners. 
+- **Solução Arquitetural:** O mapeamento deve extrair em um novo objeto estritamente os campos públicos (`id`, `name`, `street`, `phone`, `whatsapp`, etc).
 
-## 1. Falha Crítica: Bypass de Autenticação em Webhook (Backend)
-- **Local:** `server.ts` -> Rota `POST /webhooks`
-- **Descrição:** A rota de recebimento de notificações do Mercado Pago efetua a validação das assinaturas via HMAC (`x-signature` header), porém possui uma falha lógica severa na condição. Caso o atacante simplesmente não envie o header `x-signature` ou `x-request-id`, o código cai num bloco `else` que dispara um `console.warn` mas **permite a continuação do fluxo e processamento síncrono e assíncrono do Webhook**, rotulando-o fiduciariamente sem verificação.
-- **Risco (Impacto Crítico):** Permite ataques de "Webhook Spoofing" em que invasores disparam callbacks inverídicos para aprovar assinaturas fictícias sem arcarem com cobrança real, configurando desfalque comercial automático à plataforma.
+## 2. Injeção de Falha de Disponibilidade na Resposta a Escalas (ALTA)
+**Alvo:** Rota `GET /api/public/on-call` (`server.ts`: linha 626 e 664)
 
-## 2. Falha Crítica: Acesso Não Autenticado aos Contadores das Farmácias (Firestore Rules)
-- **Local:** `firestore.rules` -> `match /pharmacies/{pharmacyId}`
-- **Descrição:** Múltiplas restrições de permissões no `allow update` foram estabelecidas na coleção de farmácias. Uma das condições libera qualquer atualização livre se apenas for restrita aos cliques de estatísticas (terceira cláusula condicional: `request.resource.data.diff(resource.data).affectedKeys().hasOnly(['whatsapp_clicks', 'map_clicks', 'updated_at'])`).
-Ao permitir que essas três propriedades sejam atualizadas isoladamente, a regra **inadvertidamente esquece de validar** o `isAuthenticated()`.
-- **Risco (Impacto Crítico):** Qualquer usuário anônimo e totalmente não autenticado na internet pode reescrever deliberadamente os cliques de WhatsApp e Mapa de todos os concorrentes para valores irreais arbitrariamente altos ou zerá-los intencionalmente em ataques de defacing do serviço.
+**Descrição:** 
+Como paliativo a problemas de "Denial of Wallet", adicionou-se na engine um limite genérico `.limit(100)` à query que lista todas as farmácias. Na sequência, recuperam-se de forma independente até 200 plantões de *hoje*, interligando "em memória" as chaves. 
+- **Problema:** Um criminoso não consegue mais esgotar a RAM, mas esse paliativo mascarou a lógica da aplicação quebrando o pilar de *Availability* (Disponibilidade Securitária). Se o banco possuir 150 farmácias ativas e a listagem barrar em 100, todos os shifts associados às 50 últimas farmácias descartadas pela query jamais aparecerão na resposta pública (silenciosamente omitidos porque a condição no laço local não o encontra o map). Isso impede que os cidadãos sejam encaminhados para a respectiva infraestrutura crítica vital (saúde). O SQL/NoSQL Join "em memória" deve ser refeito utilizando os recursos de indices ou Queries do Firebase, puxando os documentos através da referência real.
 
-## 3. Falha Alta: Escalonamento Horizontal / Broken Access Control em Entidades Relacionais (Firestore Rules)
-- **Local:** `firestore.rules` -> `match /shifts/{shiftId}` e `match /payments/{paymentId}`
-- **Descrição:** Nas regras que autorizam criação de **plantões** e **pagamentos**, o Firestore assegura que a entidade vinculou seu próprio UID (`request.resource.data.user_id == request.auth.uid`). No entanto, o `firestore.rules` e o validador interno `isValidShift` esquecem de verificar se a `request.resource.data.pharmacy_id` recebida no body dessa requisição realmente PERTENCE àquele mesmo usuário (`request.auth.uid`). 
-- **Risco (Impacto Alto):** Um ator malicioso, que tem uma conta válida no sistema de Farmácia e um provedor de UID válido, pode criar milhares de plantões e boletos atrelados propositalmente a **farmácias rivais e id's de terceiros**, gerando caos nas vitrines de plantão público, já que a vinculação é desprovida da checagem relacional primária.
+## 3. Denial of Service (OOM) via Abuso em Esquecimentos de Senha (ALTA)
+**Alvo:** Rota `POST /api/auth/forgot-password` (`server.ts`: linha 344)
 
-## 4. Falha Alta: Exposição Sensível de UID Administrativa (Information Disclosure)
-- **Local:** `server.ts` -> Rota `GET /api/debug/admin-check`
-- **Descrição:** É mantido exposto um endpoint de "diagnóstico e auditoria em tempo de execução" que retorna livremente o UID, o papel (role), a existência no Auth e o ID do projeto GCP do Administrador Root. Além de omitir o fluxo de sessão de middleware exigido para proteger essas chaves.
-- **Risco (Impacto Alto):** Informações confidenciais facilitam a escalada de privilégios. Com os IDs verdadeiros dos adms nas mãos do atacante, ele constrói payloads com os exatos dados da propriedade original e direciona com maior precisão os testes de representação (Spoofing).
+**Descrição:**
+A fim de prevenir o envio duplicado de e-mails de redefinição, a aplicação busca o "último token gerado". O trâmite busca TODOS os registros de redefinição daquele e-mail em `.where('email', '==', email).get()`, mapeia os vetores localmente na API e resolve a limitação via instrução JavaScript: `recentDocs.sort((a,b)...`.
+- **Problema:** Este handler, por iterar um carregamento horizontal, serve como vetor DoS de exaustão de Memória e Denial of Wallet do Firestore. Se um atacante spammar a rota para o *mesmo* alvo (simulando diversos IPs e bypassando o check local em banco do IP Rate Limit), o banco fará retornos cada vez maiores (100... 5.000... 10.000 documentos da coleção de resets). A conversão `.map` esgotará a RAM local do node escalando o custo de Cloud Functions / Run ao limite da conta. A busca jamais deveria trazer tudo para memória, devendo utilizar `.where('email', '==', email).orderBy('created_at', 'desc').limit(1).get()`.
 
-## 5. Falha Média: Possibilidade de Ataque *E-mail Bombing* e Uso Indevido de Recursos 
-- **Local:** `server.ts` -> Rota `POST /api/auth/forgot-password`
-- **Descrição:** O envio do e-mail de redefinição de senha utilizando o método "sendPasswordRecoveryEmail" executa abertamente por e-mail validado no banco, omitindo recursos antiabuso (*Rate Limiter*, Limitação de Concorrência ou IP Throttling).
-- **Risco (Impacto Médio):** Possibilita campanhas em que serviços disparadores lotam massivamente as caixas de correspondência. Devido a limites e cobranças unitárias nos e-mails transacionais (como SES/Mailgun), as chaves SMTP podem cair em negação por abuso originado neste único endpoint gerando lentidão irrestrita ao serviço.
+## 4. NoSQL Request Parameter Pollution / Type Juggling (MÉDIA)
+**Alvo:** Rotas Públicas `GET` que filtram CEP ou Nomes (`server.ts`: linhas 590, 699)
+
+**Descrição:** 
+A captura dos params `const { cep, name } = req.query;` considera passivamente que o formato enviado na string web sempre será um tipo Literal String.
+- **Problema:** Motores web como Express compilam URLs complexas como `?cep[$ne]=2&cep[]=123` em Objetos ou Arrays internamente. Quando essa variável chega aos castings diretos nas validações como `(cep as string).replace(...)` ou `p.name.toLowerCase().includes((name as string).toLowerCase())`, a engine do Node aborta e acusa _TypeError: includes is not a function_, estourando erros brutos 500 para requisições poluídas não parseadas (Crash por falta de higienização de input).

@@ -284,8 +284,8 @@ service cloud.firestore {
     }
 
     match /subscriptions/{subscriptionId} {
-      allow get: if isAdmin() || isSensitiveResourceOwner(resource.data);
-      allow list: if isAdmin() || (isAuthenticated() && resource.data.user_id == request.auth.uid);
+      allow get: if isSensitiveResourceOwner(resource.data) || isAdmin();
+      allow list: if (isAuthenticated() && resource.data.user_id == request.auth.uid) || isAdmin();
       allow create, update: if isAdmin() && isValidSubscription(request.resource.data) && 
                             (request.method == 'create' || areImmutableFieldsUnchanged(['pharmacy_id', 'created_at']));
       allow delete: if isAdmin();
@@ -300,8 +300,8 @@ service cloud.firestore {
     }
 
     match /payments/{paymentId} {
-      allow get: if isAdmin() || isSensitiveResourceOwner(resource.data);
-      allow list: if isAdmin() || (isAuthenticated() && resource.data.user_id == request.auth.uid);
+      allow get: if isSensitiveResourceOwner(resource.data) || isAdmin();
+      allow list: if (isAuthenticated() && resource.data.user_id == request.auth.uid) || isAdmin();
       allow create: if isAuthenticated() && isValidPayment(request.resource.data) && (isPharmacyOwner(request.resource.data.pharmacy_id) || isAdmin());
       allow update: if isAdmin() && isValidPayment(request.resource.data) && areImmutableFieldsUnchanged(['pharmacy_id', 'created_at']);
       allow delete: if isAdmin();
@@ -319,8 +319,8 @@ service cloud.firestore {
     }
 
     match /clicks/{clickId} {
-      allow get: if isAdmin() || isSensitiveResourceOwner(resource.data);
-      allow list: if isAdmin() || (isAuthenticated() && resource.data.user_id == request.auth.uid);
+      allow get: if isSensitiveResourceOwner(resource.data) || isAdmin();
+      allow list: if (isAuthenticated() && resource.data.user_id == request.auth.uid) || isAdmin();
       allow create: if isAdmin();
       allow update, delete: if isAdmin();
     }

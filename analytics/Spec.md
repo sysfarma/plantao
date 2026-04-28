@@ -1,28 +1,54 @@
-# Spec - Correções de Segurança Pendentes
+# Spec: SEO Local e Autoridade
 
-Com base no relatório de segurança, as seguintes correções precisam ser implementadas no sistema:
+Este documento descreve as implementações técnicas necessárias para atender aos requisitos de SEO Local e Autoridade detalhados no `analytics/report.md`.
 
-## 1. Webhook do Mercado Pago (Backend)
-- **File:** `server.ts`
-- **Component:** Rota `POST /webhooks`
-- **Behavior:** O fluxo de webhook deve rejeitar imediatamente a requisição abortando o processo se os cabeçalhos de assinatura (`x-signature` ou `x-request-id`) estiverem ausentes ou inválidos. A execução do processamento das assinaturas (assíncrono) não pode ocorrer se a verificação falhar ou os cabeçalhos não forem enviados.
+## 1. Novas Rotas e Páginas (Pages)
 
-## 2. Proteção de Cliques das Farmácias (Firestore Rules)
-- **File:** `firestore.rules`
-- **Component:** `match /pharmacies/{pharmacyId}` -> `allow update`
-- **Behavior:** Ao permitir atualizações restritas aos campos `whatsapp_clicks` e `map_clicks`, a regra deve exigir obrigatoriamente que a atualização ocorra mediante um incremento ou ser limitada via Backend, mitigando fraudes e abuso por usuários anônimos.
+### Rota Dinâmica por Localidade
+*   **Arquivo:** `/src/App.tsx`
+*   **Implementação:** Adicionar suporte para `/plantao/:uf/:city`.
+*   **Comportamento:** A página deve carregar os dados de plantão automaticamente baseada nos parâmetros da URL, sem depender exclusivamente de seleção manual no formulário.
 
-## 3. Validação Relacional em Plantões e Pagamentos (Backend/Firestore Rules)
-- **File:** `firestore.rules` e `server.ts`
-- **Component:** Operações de criação para `shifts` e `payments`
-- **Behavior:** Na regra de criação (`allow create`) ou na rota de API de criação correspondente em `server.ts`, é estritamente necessário verificar se a `pharmacy_id` atrelada ao request pertence, de fato, ao portfólio de farmácias do `request.auth.uid`. Usuários não podem vincular registros em IDs de farmácias alheias.
+### Refatoração de OnCall.tsx
+*   **Arquivo:** `/src/pages/OnCall.tsx`
+*   **Implementação:** 
+    *   Detectar parâmetros `uf` e `city` da URL (via `useParams`).
+    *   Se presentes, disparar a busca automaticamente para carregar as farmácias daquela cidade.
+    *   Sincronizar o estado dos filtros com a URL (Redirecionar de `?city=...&state=...` para `/plantao/uf/cidade`).
 
-## 4. Vazamento de Dados do Administrador (Backend)
-- **File:** `server.ts`
-- **Component:** Rota `GET /api/debug/admin-check`
-- **Behavior:** Proteger rigorosamente o endpoint utilizando o middleware `authenticateToken` e certificar-se de garantir acesso exclusivo à roles administrativas e limitar drasticamente as chaves devolvidas na Response, ou remover a rota em caso de desuso continuado.
+## 2. Componentes (Components)
 
-## 5. Prevenção a E-mail Bombing no Forgot Password (Backend)
-- **File:** `server.ts`
-- **Component:** Rota `POST /api/auth/forgot-password`
-- **Behavior:** É preciso implementar mecanismos de Throttling/Rate Limiting nesta rota, utilizando IP, verificação temporal no último registro disparado pela coleção `password_resets` para a conta, impedindo que requisições repetitivas resultem em envio massivo e descontrolado de e-mails para o SMTP Target.
+### SEOHandler (Novo Componente)
+*   **Objetivo:** Gerenciar tags `<title>` e `<meta>` dinamicamente.
+*   **Implementação:** Usar `react-helmet-async`.
+*   **Lógica:**
+    *   Default: "Plantões de Hoje | Farmácias de Plantão"
+    *   Cidade selecionada: "Plantão de farmácia em [Cidade] [UF] hoje - [Mês] [Ano]"
+    *   Description: "Confira a escala de plantão das farmácias de [Cidade] [UF] atualizada para hoje. Veja endereços, telefones e localização."
+
+### PharmacySchema (Novo Componente)
+*   **Objetivo:** Injetar JSON-LD nos cards de farmácia.
+*   **Implementação:** Gerar um script `application/ld+json` do tipo `Pharmacy`.
+*   **Campos obrigatórios:** `name`, `address`, `telephone`, `geo` (lat/lng), `openingHours` (se disponível).
+
+### FreshnessBanner (Novo Componente)
+*   **Objetivo:** Exibir a data de atualização.
+*   **Localização:** Topo da lista de resultados na `OnCall.tsx`.
+*   **Implementação:** "Última atualização: [Data Atual] às [Hora Atual]". A data deve ser gerada no momento da requisição bem-sucedida à API.
+
+## 3. Comportamentos e Backend (Behavior)
+
+### Sitemap Dinâmico
+*   **Arquivo:** `/server.ts`
+*   **Implementação:** Novo endpoint `GET /sitemap.xml`.
+*   **Lógica:**
+    1.  Buscar todas as combinações únicas de `city` e `state` na coleção `pharmacies`.
+    2.  Gerar um XML compatível com Sitemaps contendo as URLs `/plantao/:uf/:city`.
+    3.  Incluir a página inicial e páginas estáticas (Privacidade, Contato).
+
+### Otimização de Assets
+*   **Comportamento:** Implementar `loading="lazy"` em todas as imagens de logotipo de farmácia.
+*   **Behavior:** Garantir que o `alt` das imagens contenha o nome da farmácia para acessibilidade e SEO.
+
+### Redirecionamento Canônico
+*   **Behavior:** Caso o usuário acesse `/plantao` via busca convencional, atualizar a URL no navegador para a versão limpa `/plantao/es/castelo` assim que os resultados forem filtrados, incentivando o compartilhamento de URLs amigáveis.
