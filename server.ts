@@ -215,6 +215,51 @@ async function cancelExistingSubscriptions(pharmacyId: string, exceptSubId?: str
 let lastStatsUpdate = 0;
 const STATS_UPDATE_COOLDOWN = 5 * 60 * 1000; // 5 minute cache/throttle
 
+/**
+ * Tracks a successful payment in pre-calculated stats documents
+ * Idempotent: will not count the same paymentId twice
+ */
+async function trackPaymentMetric(amount: number, dateStr: string, paymentId?: string) {
+  try {
+    if (paymentId) {
+      const processedRef = db.collection('stats_processed_payments').doc(paymentId);
+      const processedDoc = await processedRef.get();
+      if (processedDoc.exists) {
+        console.log(`[Stats] Payment ${paymentId} already tracked, skipping.`);
+        return;
+      }
+      // Record that we are processing this payment
+      await processedRef.set({ tracked_at: new Date().toISOString(), amount });
+    }
+
+    const d = new Date(dateStr);
+    const year = d.getFullYear();
+    const month = d.getMonth(); // 0-11
+    
+    const yearRef = db.collection('stats_revenue').doc(`year_${year}`);
+    const statsRef = db.collection('config').doc('stats');
+
+    const updateData: any = {
+      [`m${month}`]: admin.firestore.FieldValue.increment(amount),
+      total: admin.firestore.FieldValue.increment(amount),
+      lastUpdate: new Date().toISOString()
+    };
+
+    // Ensure document exists before incrementing if needed (or use set with merge)
+    await yearRef.set(updateData, { merge: true });
+    
+    // Also update the global total in the main stats doc
+    await statsRef.set({
+      totalRevenue: admin.firestore.FieldValue.increment(amount),
+      lastUpdate: new Date().toISOString()
+    }, { merge: true });
+    
+    console.log(`[Stats] Tracked payment of ${amount} for ${year}-${month + 1}`);
+  } catch (err) {
+    console.error('Error tracking payment metric:', err);
+  }
+}
+
 async function updateDashboardStats(force = false) {
   const now = Date.now();
   if (!force && lastStatsUpdate && (now - lastStatsUpdate < STATS_UPDATE_COOLDOWN)) {
@@ -227,37 +272,65 @@ async function updateDashboardStats(force = false) {
     const pharmaCount = (await db.collection('pharmacies').count().get()).data().count;
     const activePharmaCount = (await db.collection('pharmacies').where('is_active', 'in', [1, true]).count().get()).data().count;
     
-    // Total Revenue using aggregation
-    const totalRevenueResult = await db.collection('payments')
-      .where('status', '==', 'approved')
-      .aggregate({
-        total: admin.firestore.AggregateField.sum('amount')
-      })
-      .get();
-    
-    const totalRevenue = totalRevenueResult.data().total || 0;
-
-    // stats by month - we can fetch just the payments for the current year to categorize by month
-    // This is still much better than fetching ALL payments ever made
     const currentYear = new Date().getFullYear();
-    const startOfYear = new Date(currentYear, 0, 1).toISOString();
-    const yearPaymentsSnapshot = await db.collection('payments')
-      .where('status', '==', 'approved')
-      .where('created_at', '>=', startOfYear)
-      .select('amount', 'created_at')
-      .get();
+    const yearRef = db.collection('stats_revenue').doc(`year_${currentYear}`);
+    const yearDoc = await yearRef.get();
+    
+    let totalRevenue = 0;
+    let revenueByMonth: { name: string, total: number }[] = [];
+    const monthNames = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
 
-    const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
-    const revenueByMonth = months.map((month, index) => {
-      const monthPayments = yearPaymentsSnapshot.docs.filter(doc => {
-        const d = new Date(doc.data().created_at);
-        return d.getMonth() === index && d.getFullYear() === currentYear;
-      });
-      return {
+    if (yearDoc.exists) {
+      const yearData = yearDoc.data() || {};
+      
+      // Get global total revenue from config/stats
+      const statsDoc = await db.collection('config').doc('stats').get();
+      totalRevenue = statsDoc.data()?.totalRevenue || 0;
+      
+      revenueByMonth = monthNames.map((month, index) => ({
         name: month,
-        total: monthPayments.reduce((acc, doc) => acc + (doc.data().amount || 0), 0)
-      };
-    });
+        total: yearData[`m${index}`] || 0
+      }));
+    } else {
+      // Lazy Migration / Fallback: perform full count for this year
+      console.log(`[Stats] Year doc not found for ${currentYear}, performing recovery scan...`);
+      
+      const totalRevenueResult = await db.collection('payments')
+        .where('status', '==', 'approved')
+        .aggregate({
+          total: admin.firestore.AggregateField.sum('amount')
+        })
+        .get();
+      
+      totalRevenue = totalRevenueResult.data().total || 0;
+
+      const startOfYear = new Date(currentYear, 0, 1).toISOString();
+      const yearPaymentsSnapshot = await db.collection('payments')
+        .where('status', '==', 'approved')
+        .where('created_at', '>=', startOfYear)
+        .select('amount', 'created_at')
+        .get();
+
+      const yearStats: any = { total: 0 };
+      revenueByMonth = monthNames.map((month, index) => {
+        const monthPayments = yearPaymentsSnapshot.docs.filter(doc => {
+          const d = new Date(doc.data().created_at);
+          return d.getMonth() === index && d.getFullYear() === currentYear;
+        });
+        const monthTotal = monthPayments.reduce((acc, doc) => acc + (doc.data().amount || 0), 0);
+        yearStats[`m${index}`] = monthTotal;
+        yearStats.total += monthTotal;
+        return {
+          name: month,
+          total: monthTotal
+        };
+      });
+
+      // Save the recovered year stats
+      await yearRef.set({ ...yearStats, lastUpdate: new Date().toISOString() });
+      // Also sync the global total if it seems out of date
+      await db.collection('config').doc('stats').set({ totalRevenue }, { merge: true });
+    }
 
     await db.collection('config').doc('stats').set({
       totalPharmacies: pharmaCount,
@@ -269,7 +342,7 @@ async function updateDashboardStats(force = false) {
         { name: 'Inativas', value: pharmaCount - activePharmaCount }
       ],
       lastUpdate: new Date().toISOString()
-    });
+    }, { merge: true });
   } catch (err) {
     console.error('Error updating dashboard stats:', err);
   }
@@ -775,23 +848,50 @@ async function startServer() {
     const lng = req.query.lng ? Number(req.query.lng) : null;
     const page = Number(req.query.page) || 1;
     const limit = Number(req.query.limit) || 50;
+    const cursorId = req.query.cursor as string;
     
     try {
       let pharmaciesQuery: any = db.collection('pharmacies').where('is_active', 'in', [1, true]);
 
-      // 1. Native Firestore Filters (reduces RUs and memory)
+      // 1. Native Firestore Filters
       if (state) {
         pharmaciesQuery = pharmaciesQuery.where('state', '==', state.toUpperCase());
       }
       
-      // If city is provided and no coordinates, we can use it as a native filter
-      // Note: This requires an index (state, city) or (city)
       if (city && lat === null && lng === null) {
         pharmaciesQuery = pharmaciesQuery.where('city', '==', city);
       }
+
+      const isComplexQuery = !!(lat !== null && lng !== null) || !!name || !!cep;
       
-      const snapshot = await pharmaciesQuery.limit(2000).get();
-      let pharmacies = snapshot.docs.map((doc: any) => sanitizePublicPharmacy(doc.id, doc.data()));
+      let pharmaciesDocs: any[] = [];
+      let total: number = 0;
+      let nextCursor: string | null = null;
+      let currentLimit = isComplexQuery ? 2000 : limit;
+
+      // Real pagination using cursors for simple queries
+      if (!isComplexQuery) {
+        pharmaciesQuery = pharmaciesQuery.orderBy('name', 'asc');
+        if (cursorId) {
+          const lastDoc = await db.collection('pharmacies').doc(cursorId).get();
+          if (lastDoc.exists) {
+            pharmaciesQuery = pharmaciesQuery.startAfter(lastDoc);
+          }
+        }
+        const snapshot = await pharmaciesQuery.limit(limit).get();
+        pharmaciesDocs = snapshot.docs;
+        if (pharmaciesDocs.length === limit) {
+          nextCursor = pharmaciesDocs[pharmaciesDocs.length - 1].id;
+        }
+        // For total in simple queries we might need a separate count if we want pagination info
+        // But for performance, we might skip it or use the count() aggregation
+        total = (await pharmaciesQuery.count().get()).data().count;
+      } else {
+        const snapshot = await pharmaciesQuery.limit(2000).get();
+        pharmaciesDocs = snapshot.docs;
+      }
+
+      let pharmacies = pharmaciesDocs.map((doc: any) => sanitizePublicPharmacy(doc.id, doc.data()));
 
       // 2. Distance Filtering (Memory fallback for radius search)
       if (lat !== null && lng !== null) {
@@ -842,17 +942,22 @@ async function startServer() {
         );
       }
 
-      const total = pharmacies.length;
-      const startIndex = (page - 1) * limit;
-      const paginatedData = pharmacies.slice(startIndex, startIndex + limit);
+      let finalData = pharmacies;
+      let finalTotal = isComplexQuery ? pharmacies.length : total;
+
+      if (isComplexQuery) {
+        const startIndex = (page - 1) * limit;
+        finalData = pharmacies.slice(startIndex, startIndex + limit);
+      }
 
       res.json({
-        data: paginatedData,
+        data: finalData,
         pagination: {
-          total,
+          total: finalTotal,
           page,
           limit,
-          totalPages: Math.ceil(total / limit)
+          totalPages: Math.ceil(finalTotal / limit),
+          nextCursor: nextCursor || null
         }
       });
     } catch (err: any) {
@@ -932,7 +1037,7 @@ async function startServer() {
         return res.json([]);
       }
 
-      // 3. Load the corresponding pharmacy documents (PARALLELIZED)
+  // 1. Load the corresponding pharmacy documents (PARALLELIZED)
       const pharmaciesMap = new Map();
       const chunks = [];
       for (let i = 0; i < pharmacyIds.length; i += 30) {
@@ -946,7 +1051,8 @@ async function startServer() {
           .get();
         
         pharmacysSnapshot.docs.forEach(doc => {
-          pharmaciesMap.set(doc.id, doc.data());
+          // Store already sanitized data in the map to ensure consistency
+          pharmaciesMap.set(doc.id, sanitizePublicPharmacy(doc.id, doc.data()));
         });
       }));
 
@@ -955,31 +1061,31 @@ async function startServer() {
 
       for (const shiftDoc of shiftsSnapshot.docs) {
         const shift = shiftDoc.data() as any;
-        const pharmacy = pharmaciesMap.get(shift.pharmacy_id);
+        const sanitizedPharmacy = pharmaciesMap.get(shift.pharmacy_id);
         
-        if (pharmacy) {
-          // If we have coords, we already filtered by distance in step 1 if state was provided.
-          // Otherwise, if we have CEP, we filter by prefix.
+        if (sanitizedPharmacy) {
+          // Filter by CEP if needed
           if (cleanSearchCep && lat === null) {
-            const pharmCep = (pharmacy.cep || pharmacy.zip || '').replace(/\D/g, '').substring(0, 5);
+            const pharmCep = (sanitizedPharmacy.cep || sanitizedPharmacy.zip || '').replace(/\D/g, '').substring(0, 5);
             if (!pharmCep.startsWith(cleanSearchCep) && !cleanSearchCep.startsWith(pharmCep.substring(0, 5))) {
               continue;
             }
           }
           
-          const sanitized = sanitizePublicPharmacy(shift.pharmacy_id, pharmacy);
-          if (lat !== null && lng !== null) {
-            (sanitized as any).distance = getDistance(lat, lng, Number(sanitized.lat), Number(sanitized.lng));
-          }
-
-          onCallPharmacies.push({
-            ...sanitized,
+          const onCallResult = {
+            ...sanitizedPharmacy,
             shift: {
               start_time: shift.start_time,
               end_time: shift.end_time,
               is_24h: shift.is_24h
             }
-          });
+          };
+
+          if (lat !== null && lng !== null) {
+            (onCallResult as any).distance = getDistance(lat, lng, Number(onCallResult.lat), Number(onCallResult.lng));
+          }
+
+          onCallPharmacies.push(onCallResult);
         }
       }
 
@@ -1038,7 +1144,8 @@ async function startServer() {
           .get();
         
         pharmacysSnapshot.docs.forEach(doc => {
-          pharmaciesMap.set(doc.id, doc.data());
+          // Apply sanitization immediately when fetching
+          pharmaciesMap.set(doc.id, sanitizePublicPharmacy(doc.id, doc.data()));
         });
       }));
 
@@ -1061,14 +1168,12 @@ async function startServer() {
            const pharmCep = (p.cep || p.zip || '').replace(/\D/g, '').substring(0, 5);
            if (pharmCep !== cleanSearchCep) continue;
         }
-
-        const sanitizedPharmacy = sanitizePublicPharmacy(h.pharmacy_id, p);
         
         result.push({
-          id: h.id,
+          ...p, // p is already sanitized and has the correct pharmacy id
+          highlight_id: h.id, // Save the highlight record ID separately
           date_start: h.date_start,
-          date_end: h.date_end,
-          ...sanitizedPharmacy
+          date_end: h.date_end
         });
       }
 
@@ -1490,6 +1595,19 @@ async function startServer() {
       const pharmacyData = pharmacyDoc.data();
       const pharmacyId = pharmacyDoc.id;
 
+      // Check if there is already an active subscription for this pharmacy
+      const existingActiveSub = await db.collection('subscriptions')
+        .where('pharmacy_id', '==', pharmacyId)
+        .where('status', '==', 'active')
+        .get();
+
+      if (!existingActiveSub.empty) {
+        return res.status(400).json({ 
+          error: 'Você já possui uma assinatura ativa.',
+          details: 'Se deseja alterar seu plano, utilize a opção de Atualizar Plano.'
+        });
+      }
+
       // Fetch dynamic plan config
       const plansDoc = await db.collection('config').doc('subscription_plans').get();
       const plansData = plansDoc.exists ? plansDoc.data() : {
@@ -1589,7 +1707,8 @@ async function startServer() {
           // Free trial or initial payment logic can go here
         },
         payer_email: email || pharmacyData.email,
-        status: 'pending'
+        status: 'pending',
+        external_reference: pharmacyId
       };
 
       // If we have a card token, we can try to finalize it
@@ -2118,20 +2237,28 @@ async function startServer() {
                   expiresAt = addDays(expiresAt, planConfig.frequency || 30);
                 }
                 
-                // 1. Cancel ANY other existing active/pending subscription to ensure only the new one is active
-                await cancelExistingSubscriptions(pharmacyId);
+                // 0. Double check if we already processed this specific payment to avoid redundancy
+                const existingSubFromPayment = await db.collection('subscriptions')
+                  .where('mp_payment_id', '==', paymentIdStr)
+                  .get();
 
-                const pharmDoc1 = await db.collection('pharmacies').doc(pharmacyId).get();
-                // We create a NEW one for fixed durations like PIX
-                await db.collection('subscriptions').add({
-                  pharmacy_id: pharmacyId,
-                  user_id: pharmDoc1.data()?.user_id || '',
-                  status: 'active',
-                  plan_type: planType,
-                  expires_at: expiresAt.toISOString(),
-                  created_at: new Date().toISOString(),
-                  updated_at: new Date().toISOString()
-                });
+                if (existingSubFromPayment.empty) {
+                  // 1. Cancel ANY other existing active/pending subscription to ensure only the new one is active
+                  await cancelExistingSubscriptions(pharmacyId);
+
+                  const pharmDoc1 = await db.collection('pharmacies').doc(pharmacyId).get();
+                  // We create a NEW one for fixed durations like PIX
+                  await db.collection('subscriptions').add({
+                    pharmacy_id: pharmacyId,
+                    user_id: pharmDoc1.data()?.user_id || '',
+                    status: 'active',
+                    plan_type: planType,
+                    mp_payment_id: paymentIdStr, // Record the payment ID for idempotency/redundancy check
+                    expires_at: expiresAt.toISOString(),
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
+                  });
+                }
 
                 // Ensure pharmacy is active
                 const pharmDoc = await db.collection('pharmacies').doc(pharmacyId).get();
@@ -2145,6 +2272,7 @@ async function startServer() {
                   emailService.sendPaymentApprovedEmail(pharmDoc.data()?.email, pharmDoc.data()?.name);
                 }
 
+                await trackPaymentMetric(verifiedPayment.transaction_amount || localPayment.amount || 0, verifiedPayment.date_approved || new Date().toISOString(), paymentIdStr);
                 await updateDashboardStats();
                 console.log(`Payment ${paymentId} verified and approved. Pharmacy ${pharmacyId} activated.`);
               } else if (verifiedPayment.status === 'refunded' || verifiedPayment.status === 'charged_back' || verifiedPayment.status === 'rejected') {
@@ -2240,6 +2368,46 @@ async function startServer() {
                      await updateDashboardStats();
                    }
                  }
+              } else {
+                // REDUNDANCY PROTECTION: Handle subscription created in MP but missing in our DB
+                const pharmacyId = verifiedSub.external_reference;
+                if (pharmacyId) {
+                  // Before adding, ensure we don't have another active one
+                  await cancelExistingSubscriptions(pharmacyId);
+                  
+                  const pharmSnap = await db.collection('pharmacies').doc(pharmacyId).get();
+                  if (pharmSnap.exists) {
+                    const pharmData = pharmSnap.data();
+                    const now = new Date().toISOString();
+                    
+                    let newStatus = 'pending';
+                    if (verifiedSub.status === 'authorized') newStatus = 'active';
+
+                    await db.collection('subscriptions').add({
+                      pharmacy_id: pharmacyId,
+                      user_id: pharmData?.user_id || '',
+                      mp_preapproval_id: verifiedSub.id,
+                      status: newStatus,
+                      plan_type: verifiedSub.reason?.toLowerCase().includes('mensal') ? 'monthly' : 'annual',
+                      amount: verifiedSub.auto_recurring?.transaction_amount || 0,
+                      created_at: now,
+                      updated_at: now,
+                      next_billing_date: verifiedSub.next_payment_date || null
+                    });
+
+                    if (newStatus === 'active') {
+                       await db.collection('pharmacies').doc(pharmacyId).update({
+                         is_active: 1,
+                         subscription_active: true,
+                         sub_status: 'active',
+                         updated_at: now
+                       });
+                       emailService.sendSubscriptionActiveEmail(pharmData?.email, pharmData?.name);
+                       console.log(`[Webhook] Redundant/Recovered subscription ${verifiedSub.id} activated for pharmacy ${pharmacyId}`);
+                    }
+                    await updateDashboardStats();
+                  }
+                }
               }
             }
           } catch (err) {
@@ -2322,6 +2490,7 @@ async function startServer() {
           updated_at: new Date().toISOString()
         });
         emailService.sendPaymentApprovedEmail(pharmDoc.data()?.email, pharmDoc.data()?.name);
+        await trackPaymentMetric(payment.amount || 0, new Date().toISOString(), paymentDoc.id);
         await updateDashboardStats();
       }
 

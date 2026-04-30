@@ -1,6 +1,7 @@
 import React, { useState, useEffect, Fragment } from 'react';
-import { Search, MapPin, Phone, MessageCircle, Star, Clock } from 'lucide-react';
+import { Search, MapPin, Phone, MessageCircle, Star, Clock, ChevronDown, ChevronUp, Navigation } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence } from 'motion/react';
 import { safeJsonFetch } from '../lib/api';
 import { clearCachedLocation } from '../lib/userCache';
 import { geocodeAddress } from '../lib/geocoding';
@@ -54,7 +55,9 @@ export default function Home() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
+  const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
   const [page, setPage] = useState(1);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
 
   // Sync internal state with hook location
@@ -80,9 +83,10 @@ export default function Home() {
     }
   }, [locationStatus, location, hasSearched, userCoords]);
 
-  const fetchPharmacies = async (searchCity: string, searchState: string, searchName: string, coords?: {lat: number, lng: number}, searchCep?: string, p: number = 1) => {
+  const fetchPharmacies = async (searchCity: string, searchState: string, searchName: string, coords?: {lat: number, lng: number}, searchCep?: string, p: number = 1, cursor?: string) => {
     if (p === 1) {
       setLoading(true);
+      setNextCursor(null);
     } else {
       setLoadingMore(true);
     }
@@ -97,13 +101,22 @@ export default function Home() {
       if (searchState) queryParams.state = searchState;
       if (searchName) queryParams.name = searchName;
       if (searchCep) queryParams.cep = searchCep;
+      if (cursor) queryParams.cursor = cursor;
       if (coords) {
         queryParams.lat = coords.lat;
         queryParams.lng = coords.lng;
       }
 
       const [pharmRes, highData] = await Promise.all([
-        safeJsonFetch<{ data: Pharmacy[], pagination: { total: number, page: number, pages: number } }>('/api/public/pharmacies', { query: queryParams }),
+        safeJsonFetch<{ 
+          data: Pharmacy[], 
+          pagination: { 
+            total: number, 
+            page: number, 
+            totalPages: number, 
+            nextCursor?: string | null 
+          } 
+        }>('/api/public/pharmacies', { query: queryParams }),
         p === 1 ? safeJsonFetch<Highlight[]>('/api/public/highlights', { query: queryParams }) : Promise.resolve([])
       ]);
 
@@ -128,8 +141,9 @@ export default function Home() {
         setPharmacies(prev => [...prev, ...finalPharmData]);
       }
 
-      setHasMore((pharmRes?.pagination?.pages || 0) > p);
+      setHasMore(!!pharmRes?.pagination?.nextCursor || (pharmRes?.pagination?.totalPages || 0) > p);
       setPage(p);
+      setNextCursor(pharmRes?.pagination?.nextCursor || null);
     } catch (error) {
       console.error('Error fetching data', error);
       setError('Ocorreu um erro ao buscar as farmácias. Por favor, tente novamente.');
@@ -144,7 +158,7 @@ export default function Home() {
   };
 
   const handleLoadMore = () => {
-    fetchPharmacies(city, state, name, userCoords ? { lat: userCoords.lat, lng: userCoords.lng } : undefined, cep, page + 1);
+    fetchPharmacies(city, state, name, userCoords ? { lat: userCoords.lat, lng: userCoords.lng } : undefined, cep, page + 1, nextCursor || undefined);
   };
 
   const handleCepSearch = async (e: React.FormEvent) => {
@@ -268,39 +282,41 @@ export default function Home() {
 
   const resultsSection = (
     <section id="results-section">
-      <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
-        <h2 className="text-2xl font-bold text-gray-900 border-l-4 border-emerald-500 pl-4">
-          {hasSearched ? 'Resultado da Pesquisa' : 'Todas as Farmácias'}
-        </h2>
+        <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
+          <h2 className="text-2xl font-bold text-gray-900 border-l-4 border-emerald-500 pl-4">
+            {hasSearched ? 'Resultado da Pesquisa' : 'Todas as Farmácias'}
+          </h2>
 
-        {locationStatus === 'detecting' && (
-          <span className="text-sm text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full flex items-center gap-2 animate-pulse">
-            <MapPin className="w-3 h-3" />
-            Detectando sua localização...
-          </span>
-        )}
-        
-        {cep && (
-          <span className="text-sm text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full flex items-center gap-2 border border-emerald-100">
-            <MapPin className="w-3 h-3" />
-            Restringindo à região do CEP: {cep.substring(0, 5)}
-          </span>
-        )}
-        
-        {!cep && userCoords && locationStatus === 'detected' && (
-          <span className="text-sm text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full flex items-center gap-2 border border-emerald-100">
-            <MapPin className="w-3 h-3" />
-            Mostrando resultados num raio de 20km
-          </span>
-        )}
+          <div className="flex flex-wrap gap-2">
+            {locationStatus === 'detecting' && (
+              <span className="text-xs sm:text-sm text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full flex items-center gap-2 animate-pulse border border-emerald-100">
+                <MapPin className="w-3 h-3" />
+                Detectando...
+              </span>
+            )}
+            
+            {cep && (
+              <span className="text-xs sm:text-sm text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full flex items-center gap-2 border border-emerald-100">
+                <MapPin className="w-3 h-3" />
+                Região do CEP: {cep.substring(0, 5)}
+              </span>
+            )}
+            
+            {!cep && userCoords && locationStatus === 'detected' && (
+              <span className="text-xs sm:text-sm text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full flex items-center gap-2 border border-emerald-100">
+                <MapPin className="w-3 h-3" />
+                Raio de 20km
+              </span>
+            )}
 
-        {locationStatus === 'failed' && (
-          <span className="text-sm text-amber-700 bg-amber-50 px-3 py-1 rounded-full flex items-center gap-2 border border-amber-100">
-            <MapPin className="w-3 h-3" />
-            Localização não detectada. Mostrando por cidade.
-          </span>
-        )}
-      </div>
+            {locationStatus === 'failed' && (
+              <span className="text-xs sm:text-sm text-amber-700 bg-amber-50 px-3 py-1 rounded-full flex items-center gap-2 border border-amber-100">
+                <MapPin className="w-3 h-3" />
+                Localização não detectada
+              </span>
+            )}
+          </div>
+        </div>
 
       {error && (
         <div className="mb-6">
@@ -376,69 +392,110 @@ export default function Home() {
           <h1 className="text-4xl font-bold mb-4">Encontre as Farmácias de Plantão</h1>
           <p className="text-emerald-100 mb-8 text-lg">Busque por farmácias abertas agora na sua cidade{city && state ? `: ${formatName(city)} - ${state.toUpperCase()}` : ''}</p>
           
-          <div className="flex flex-col gap-4">
-            <div className="bg-white p-2 rounded-lg shadow-lg">
-              <form onSubmit={handleSearch} className="flex flex-col sm:flex-row gap-2">
-                <div className="flex-1 flex items-center px-3 bg-gray-50 rounded-md border border-gray-200">
-                  <MapPin className="text-gray-400 w-5 h-5" />
-                  <input 
-                    type="text" 
-                    placeholder="Cidade" 
-                    className="w-full bg-transparent border-none focus:ring-0 text-gray-900 p-3 outline-none"
-                    value={formatName(city)}
-                    onChange={(e) => setCity(e.target.value)}
-                  />
-                </div>
-                <div className="flex-1 flex items-center px-3 bg-gray-50 rounded-md border border-gray-200">
-                  <Search className="text-gray-400 w-5 h-5" />
-                  <input 
-                    type="text" 
-                    placeholder="Nome da Farmácia (Opcional)" 
-                    className="w-full bg-transparent border-none focus:ring-0 text-gray-900 p-3 outline-none"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                  />
-                </div>
-                <div className="w-full sm:w-24 flex items-center px-3 bg-gray-50 rounded-md border border-gray-200">
-                  <input 
-                    type="text" 
-                    placeholder="UF" 
-                    maxLength={2}
-                    className="w-full bg-transparent border-none focus:ring-0 text-gray-900 p-3 outline-none uppercase"
-                    value={state}
-                    onChange={(e) => setState(e.target.value.toUpperCase())}
-                  />
-                </div>
-                <button 
-                  type="submit"
-                  className="bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-3 rounded-md font-bold flex items-center justify-center gap-2 transition-colors"
-                >
-                  <Search className="w-5 h-5" />
-                  Buscar
-                </button>
-              </form>
-            </div>
+          <div className="max-w-4xl mx-auto">
+            {/* Mobile Search Toggle */}
+            <button 
+              onClick={() => setIsMobileSearchOpen(!isMobileSearchOpen)}
+              className="sm:hidden w-full bg-white text-emerald-700 py-4 px-6 rounded-2xl font-bold mb-6 flex items-center justify-between shadow-lg active:scale-[0.98] transition-all"
+            >
+              <div className="flex items-center gap-3">
+                <Search className="w-5 h-5" />
+                <span>{isMobileSearchOpen ? 'Fechar Pesquisa' : 'Pesquisar Farmácia ou Cidade'}</span>
+              </div>
+              {isMobileSearchOpen ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+            </button>
 
-            <div className="bg-white p-2 rounded-lg shadow-lg">
-              <form onSubmit={handleCepSearch} className="flex gap-2">
-                <div className="flex-1 flex items-center px-3 bg-gray-50 rounded-md border border-gray-200">
-                  <MapPin className="text-gray-400 w-5 h-5" />
-                  <input 
-                    type="text" 
-                    placeholder="Buscar por CEP (ex: 01001-000)" 
-                    className="w-full bg-transparent border-none focus:ring-0 text-gray-900 p-3 outline-none"
-                    value={cep}
-                    onChange={(e) => setCep(e.target.value)}
-                  />
+            <div className={`${isMobileSearchOpen ? 'block' : 'hidden'} sm:block space-y-6`}>
+              <div className="bg-white p-2 sm:p-3 rounded-2xl shadow-xl overflow-hidden">
+                <div className="flex p-1 bg-gray-100 rounded-xl mb-3 sm:hidden">
+                  <button 
+                    onClick={() => setLocationStatus('idle')} // Just a dummy to switch view state if needed
+                    className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${!cep ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-500'}`}
+                    type="button"
+                  >
+                    Busca por Cidade
+                  </button>
+                  <button 
+                    onClick={() => {}} 
+                    className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${cep ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-500'}`}
+                    type="button"
+                  >
+                    Busca por CEP
+                  </button>
                 </div>
-                <button 
-                  type="submit"
-                  className="bg-emerald-700 hover:bg-emerald-800 text-white px-8 py-3 rounded-md font-bold flex items-center justify-center gap-2 transition-colors"
-                >
-                  <Search className="w-5 h-5" />
-                  CEP
-                </button>
-              </form>
+
+                <form onSubmit={handleSearch} className="space-y-3 sm:space-y-0 sm:flex sm:items-center sm:gap-2">
+                  <div className="flex-[1.5] flex items-center px-4 bg-gray-50 rounded-xl border border-gray-100 focus-within:border-emerald-300 focus-within:ring-2 focus-within:ring-emerald-100 transition-all">
+                    <MapPin className="text-emerald-500 w-5 h-5 shrink-0" />
+                    <input 
+                      type="text" 
+                      placeholder="Cidade" 
+                      className="w-full bg-transparent border-none focus:ring-0 text-gray-900 py-4 px-3 outline-none font-medium placeholder:text-gray-400"
+                      value={formatName(city)}
+                      onChange={(e) => setCity(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="flex-1 hidden sm:flex items-center px-4 bg-gray-50 rounded-xl border border-gray-100 focus-within:border-emerald-300 focus-within:ring-2 focus-within:ring-emerald-100 transition-all">
+                    <Search className="text-gray-400 w-5 h-5 shrink-0" />
+                    <input 
+                      type="text" 
+                      placeholder="Farmácia (Opcional)" 
+                      className="w-full bg-transparent border-none focus:ring-0 text-gray-900 py-4 px-3 outline-none font-medium placeholder:text-gray-400"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="w-full sm:w-24 flex items-center px-4 bg-gray-50 rounded-xl border border-gray-100 focus-within:border-emerald-300 focus-within:ring-2 focus-within:ring-emerald-100 transition-all">
+                    <input 
+                      type="text" 
+                      placeholder="UF" 
+                      maxLength={2}
+                      className="w-full bg-transparent border-none focus:ring-0 text-gray-900 py-4 outline-none uppercase font-bold text-center placeholder:font-normal"
+                      value={state}
+                      onChange={(e) => setState(e.target.value.toUpperCase())}
+                    />
+                  </div>
+
+                  <button 
+                    type="submit"
+                    className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white px-8 py-4 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg shadow-emerald-200 active:scale-95 transition-all"
+                  >
+                    <Search className="w-5 h-5" />
+                    <span>Buscar</span>
+                  </button>
+                </form>
+              </div>
+
+              <div className="flex items-center gap-4 py-2">
+                <div className="h-px bg-emerald-500/30 flex-1"></div>
+                <span className="text-emerald-100/60 text-xs font-bold uppercase tracking-widest">Ou busque por CEP</span>
+                <div className="h-px bg-emerald-500/30 flex-1"></div>
+              </div>
+
+              <div className="bg-emerald-500/20 backdrop-blur-sm p-1.5 rounded-2xl border border-emerald-400/30">
+                <form onSubmit={handleCepSearch} className="flex gap-2">
+                  <div className="flex-1 flex items-center px-4 bg-white/90 rounded-xl border border-white/20 focus-within:ring-2 focus-within:ring-white/50 transition-all">
+                    <div className="bg-emerald-100 p-1.5 rounded-lg mr-1 scale-90">
+                      <MapPin className="text-emerald-600 w-4 h-4" />
+                    </div>
+                    <input 
+                      type="text" 
+                      placeholder="01001-000" 
+                      className="w-full bg-transparent border-none focus:ring-0 text-gray-900 py-3 px-2 outline-none font-medium placeholder:text-gray-400 sm:text-base text-sm"
+                      value={cep}
+                      onChange={(e) => setCep(e.target.value)}
+                    />
+                  </div>
+                  <button 
+                    type="submit"
+                    className="bg-white text-emerald-700 hover:bg-emerald-50 px-6 py-3 rounded-xl font-bold transition-all shadow-md active:scale-95 text-sm sm:text-base"
+                  >
+                    Localizar
+                  </button>
+                </form>
+              </div>
             </div>
           </div>
 

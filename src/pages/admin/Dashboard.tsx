@@ -78,7 +78,16 @@ export default function AdminDashboard() {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [pharmacySearchTerm, setPharmacySearchTerm] = useState('');
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
   const [pharmacySortField, setPharmacySortField] = useState<'name' | 'city' | 'status' | null>(null);
+
+  // Debounce pharmacy search
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchTerm(pharmacySearchTerm);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [pharmacySearchTerm]);
   const [pharmacySortOrder, setPharmacySortOrder] = useState<'asc' | 'desc'>('asc');
 
   const TableSkeleton = ({ rows = 5, cols = 5 }: { rows?: number, cols?: number }) => (
@@ -150,127 +159,11 @@ export default function AdminDashboard() {
         });
       }
       setIsModalOpen(false);
-      fetchData();
+      fetchData(true);
       showToast(editingPharmacy ? 'Farmácia atualizada com sucesso!' : 'Farmácia criada com sucesso!', 'success');
     } catch (error: any) {
       console.error('Error saving pharmacy', error);
-      showToast('Erro ao salvar farmácia: ' + getFriendlyErrorMessage(error), 'error');
-    }
-  };
-
-  const getFriendlyErrorMessage = (error: any) => {
-    const message = error?.message || String(error);
-    if (message.includes('Quota exceeded')) {
-      return 'Limite de uso do banco de dados excedido (Quota). Por favor, tente novamente amanhã ou contate o suporte.';
-    }
-    if (message.includes('Rate exceeded') || message.includes('too-many-requests') || message.includes('429')) {
-      return 'Muitas solicitações em pouco tempo. Por favor, aguarde alguns segundos e tente novamente.';
-    }
-    if (message.includes('SERVER_OVERLOAD')) {
-      return 'O servidor está temporariamente sobrecarregado. Por favor, tente novamente em alguns instantes.';
-    }
-    if (message.includes('permission-denied') || message.includes('insufficient permissions')) {
-      return 'Acesso negado. Você não tem permissão para realizar esta operação.';
-    }
-    
-    // Try to parse if it's JSON from handleFirestoreError
-    try {
-      if (message.startsWith('{') && message.endsWith('}')) {
-        const parsed = JSON.parse(message);
-        return parsed.error || message;
-      }
-    } catch (e) {
-      // Not JSON, ignore
-    }
-    
-    return message;
-  };
-
-  const fetchData = async () => {
-    if (!stats) setLoading(true);
-    setLoadingTable(true);
-    try {
-      // Fetch specialized stats for dashboard totals (VERY FAST)
-      const statsData = await safeFetch('/api/admin/stats');
-      if (statsData && typeof statsData !== 'string') {
-        setStats(statsData);
-        setReports(statsData); // Reuse for reports view
-      }
-
-      // Fetch optimized pharmacies list (PAGINATED)
-      const pharmData = await safeFetch(`/api/admin/pharmacies?page=${pharmacyPage}&limit=${PHARMACIES_PER_PAGE}&search=${pharmacySearchTerm}`);
-      if (typeof pharmData === 'string') throw new Error('Falha ao obter lista de farmácias');
-      
-      const pArray = Array.isArray(pharmData) ? pharmData : (pharmData.data || []);
-      const pTotal = Array.isArray(pharmData) ? pharmData.length : (pharmData.total || 0);
-      
-      setPharmacies(pArray);
-      setTotalPharmacies(pTotal);
-      
-      // Fetch Config
-      const configData = await safeFetch('/api/admin/config');
-      if (configData && typeof configData !== 'string') {
-        const { mercadopago, general } = configData;
-        
-        if (mercadopago) {
-          setConfig({
-            public_key: mercadopago.public_key || '',
-            access_token: mercadopago.access_token || '',
-            test_mode: mercadopago.test_mode || false
-          });
-        }
-        
-        if (general) {
-          setGeneralConfig({
-            whatsapp_support: general.whatsapp_support || '5500000000000',
-            future_shifts_days: general.future_shifts_days || 7,
-            whatsapp_active: general.whatsapp_active ?? true,
-            email_support_active: general.email_support_active ?? true,
-            support_email: general.support_email || 'contato@farmaciasdeplantao.app.br',
-            support_phone: general.support_phone || '(00) 00000-0000'
-          });
-        }
-      }
-      
-      // Fetch Plans
-      const plansData = await safeFetch('/api/admin/subscription-plans');
-      if (typeof plansData !== 'string') {
-        setSubscriptionPlans(plansData);
-      }
-      
-      // Fetch Shifts optimized from backend
-      const shiftsData = await safeFetch('/api/admin/shifts');
-      if (typeof shiftsData === 'string') throw new Error('Falha ao obter plantões (resposta não-JSON)');
-      setAdminShifts(shiftsData);
-      
-      // Fetch Subscribers
-      const subsData = await safeFetch('/api/admin/subscriptions');
-      if (typeof subsData !== 'string') {
-        setAdminSubscribers(subsData);
-      }
-      
-      // Fetch Highlights from backend
-      const highData = await safeFetch('/api/admin/highlights');
-      if (typeof highData !== 'string') {
-        setAdminHighlights(highData);
-      }
-      
-      // Fetch Audit Logs if Master Admin
-      if (isAdminMaster) {
-        const logsData = await safeFetch('/api/admin/audit-logs');
-        if (typeof logsData !== 'string') {
-          setAuditLogs(logsData.data || []);
-        }
-      }
-      
-    } catch (error) {
-      console.error('Dashboard fetchData error:', error);
-      // We still log to console for debugging, but show a friendly message to user
-      const friendlyMsg = getFriendlyErrorMessage(error);
-      showToast('Erro ao carregar dados do painel: ' + translateError(friendlyMsg), 'error');
-    } finally {
-      setLoading(false);
-      setLoadingTable(false);
+      showToast('Erro ao salvar farmácia: ' + translateError(error), 'error');
     }
   };
 
@@ -281,9 +174,9 @@ export default function AdminDashboard() {
         method: 'POST'
       });
       showToast('Sistema sincronizado e otimizado com sucesso!', 'success');
-      fetchData();
+      fetchData(true);
     } catch (error: any) {
-      showToast(getFriendlyErrorMessage(error), 'error');
+      showToast(translateError(error), 'error');
     } finally {
       setIsSyncing(false);
     }
@@ -397,9 +290,153 @@ export default function AdminDashboard() {
     }
   };
 
+  const fetchStats = async () => {
+    try {
+      const statsData = await safeFetch('/api/admin/stats');
+      if (statsData && typeof statsData !== 'string') {
+        setStats(statsData);
+        setReports(statsData);
+      }
+    } catch (e) { console.error('Error fetching stats:', e); }
+  };
+
+  const fetchPharmacies = async () => {
+    setLoadingTable(true);
+    try {
+      const pharmData = await safeFetch(`/api/admin/pharmacies?page=${pharmacyPage}&limit=${PHARMACIES_PER_PAGE}&search=${debouncedSearchTerm}&sort=${pharmacySortField || ''}&order=${pharmacySortOrder}`);
+      if (typeof pharmData === 'string') throw new Error('Falha ao obter lista de farmácias');
+      
+      const pArray = Array.isArray(pharmData) ? pharmData : (pharmData.data || []);
+      const pTotal = Array.isArray(pharmData) ? pharmData.length : (pharmData.total || 0);
+      
+      setPharmacies(pArray);
+      setTotalPharmacies(pTotal);
+    } catch (e) { 
+      console.error('Error fetching pharmacies:', e);
+      showToast('Erro ao carregar farmácias', 'error');
+    } finally { setLoadingTable(false); }
+  };
+
+  const fetchShifts = async () => {
+    setLoadingTable(true);
+    try {
+      const shiftsData = await safeFetch('/api/admin/shifts');
+      if (typeof shiftsData !== 'string') setAdminShifts(shiftsData);
+    } finally { setLoadingTable(false); }
+  };
+
+  const fetchHighlights = async () => {
+    setLoadingTable(true);
+    try {
+      const highData = await safeFetch('/api/admin/highlights');
+      if (typeof highData !== 'string') setAdminHighlights(highData);
+    } finally { setLoadingTable(false); }
+  };
+
+  const fetchSubscribers = async () => {
+    setLoadingTable(true);
+    try {
+      const subsData = await safeFetch('/api/admin/subscriptions');
+      if (typeof subsData !== 'string') setAdminSubscribers(subsData);
+    } finally { setLoadingTable(false); }
+  };
+
+  const fetchPlans = async () => {
+    try {
+      const plansData = await safeFetch('/api/admin/subscription-plans');
+      if (typeof plansData !== 'string') setSubscriptionPlans(plansData);
+    } catch (e) { console.error('Error fetching plans:', e); }
+  };
+
+  const fetchConfig = async () => {
+    try {
+      const configData = await safeFetch('/api/admin/config');
+      if (configData && typeof configData !== 'string') {
+        const { mercadopago, general } = configData;
+        if (mercadopago) {
+          setConfig({
+            public_key: mercadopago.public_key || '',
+            access_token: mercadopago.access_token || '',
+            test_mode: mercadopago.test_mode || false
+          });
+        }
+        if (general) {
+          setGeneralConfig({
+            whatsapp_support: general.whatsapp_support || '5500000000000',
+            future_shifts_days: general.future_shifts_days || 7,
+            whatsapp_active: general.whatsapp_active ?? true,
+            email_support_active: general.email_support_active ?? true,
+            support_email: general.support_email || 'contato@farmaciasdeplantao.app.br',
+            support_phone: general.support_phone || '(00) 00000-0000'
+          });
+        }
+      }
+    } catch (e) { console.error('Error fetching config:', e); }
+  };
+
+  const fetchAuditLogs = async () => {
+    if (!isAdminMaster) return;
+    setLoadingTable(true);
+    try {
+      const logsData = await safeFetch('/api/admin/audit-logs');
+      if (typeof logsData !== 'string') setAuditLogs(logsData.data || []);
+    } finally { setLoadingTable(false); }
+  };
+
+  const fetchData = async (refreshTab = false) => {
+    if (!stats) setLoading(true);
+    try {
+      // Global critical data
+      await Promise.all([
+        fetchStats(),
+        fetchPlans(),
+        fetchConfig()
+      ]);
+
+      if (refreshTab) {
+        if (activeTab === 'pharmacies') fetchPharmacies();
+        if (activeTab === 'shifts') fetchShifts();
+        if (activeTab === 'highlights') fetchHighlights();
+        if (activeTab === 'subscribers') fetchSubscribers();
+        if (activeTab === 'audit') fetchAuditLogs();
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Initial Load - Critical global data once
   useEffect(() => {
     fetchData();
-  }, [pharmacyPage, pharmacySearchTerm, pharmacySortField, pharmacySortOrder]);
+  }, []);
+
+  // Sync tab specific data - Triggered on tab change or tab dependencies
+  useEffect(() => {
+    switch (activeTab) {
+      case 'pharmacies':
+        fetchPharmacies();
+        break;
+      case 'shifts':
+        fetchShifts();
+        break;
+      case 'highlights':
+        fetchHighlights();
+        break;
+      case 'subscribers':
+        fetchSubscribers();
+        break;
+      case 'audit':
+        if (isAdminMaster) fetchAuditLogs();
+        break;
+      case 'settings':
+        fetchConfig();
+        break;
+      case 'subscriptions':
+        fetchPlans();
+        break;
+      // 'reports' and 'finance' can use 'stats' which is globally fetched
+    }
+  }, [activeTab, pharmacyPage, debouncedSearchTerm, pharmacySortField, pharmacySortOrder]);
 
   const totalPages = Math.ceil(totalPharmacies / PHARMACIES_PER_PAGE);
 
@@ -463,9 +500,9 @@ export default function AdminDashboard() {
       
       showToast(editingShiftId ? 'Plantão atualizado com sucesso!' : 'Plantão cadastrado com sucesso!', 'success');
       setIsShiftModalOpen(false);
-      fetchData();
+      fetchData(true);
     } catch (error: any) {
-      showToast('Erro ao salvar plantão: ' + getFriendlyErrorMessage(error), 'error');
+      showToast('Erro ao salvar plantão: ' + translateError(error), 'error');
     }
   };
 
@@ -499,11 +536,11 @@ export default function AdminDashboard() {
       
       setIsDeleteConfirmOpen(false);
       setConfirmModalData(null);
-      fetchData();
+      fetchData(true);
       showToast(`Excluído com sucesso!`, 'success');
     } catch (error: any) {
       console.error(`Error deleting ${type}:`, error);
-      showToast(`Erro ao excluir ${itemLabel}: ` + getFriendlyErrorMessage(error), 'error');
+      showToast(`Erro ao excluir ${itemLabel}: ` + translateError(error), 'error');
     }
   };
 
@@ -517,10 +554,10 @@ export default function AdminDashboard() {
         method: 'POST'
       });
       showToast('Farmácia ativada com sucesso!', 'success');
-      fetchData();
+      fetchData(true);
     } catch (error: any) {
       console.error('Error activating', error);
-      showToast(getFriendlyErrorMessage(error) || 'Erro ao ativar farmácia.', 'error');
+      showToast(translateError(error) || 'Erro ao ativar farmácia.', 'error');
     }
   };
 
@@ -531,10 +568,10 @@ export default function AdminDashboard() {
         method: 'POST'
       });
       showToast('Farmácia desativada com sucesso.', 'info');
-      fetchData();
+      fetchData(true);
     } catch (error: any) {
       console.error('Error deactivating', error);
-      showToast(getFriendlyErrorMessage(error) || 'Erro ao desativar farmácia.', 'error');
+      showToast(translateError(error) || 'Erro ao desativar farmácia.', 'error');
     }
   };
 
@@ -545,10 +582,10 @@ export default function AdminDashboard() {
         method: 'DELETE'
       });
       showToast('Farmácia excluída permanentemente.', 'warning');
-      fetchData();
+      fetchData(true);
     } catch (error: any) {
       console.error('Error deleting', error);
-      showToast(getFriendlyErrorMessage(error) || 'Erro ao excluir farmácia.', 'error');
+      showToast(translateError(error) || 'Erro ao excluir farmácia.', 'error');
     }
   };
 
@@ -570,10 +607,10 @@ export default function AdminDashboard() {
       });
 
       showToast('Destaque configurado com sucesso!', 'success');
-      fetchData();
+      fetchData(true);
     } catch (error: any) {
       console.error('Erro ao destacar:', error);
-      showToast(getFriendlyErrorMessage(error) || 'Erro ao ativar destaque.', 'error');
+      showToast(translateError(error) || 'Erro ao ativar destaque.', 'error');
     }
   };
 
@@ -587,7 +624,7 @@ export default function AdminDashboard() {
       });
       showToast('Planos de assinatura atualizados com sucesso!', 'success');
     } catch (error: any) {
-      showToast(getFriendlyErrorMessage(error), 'error');
+      showToast(translateError(error), 'error');
     } finally {
       setSavingPlans(false);
     }
@@ -606,10 +643,10 @@ export default function AdminDashboard() {
         })
       });
       setIsSubModalOpen(false);
-      fetchData();
+      fetchData(true);
       showToast('Assinatura atualizada com sucesso!', 'success');
     } catch (error: any) {
-      showToast(getFriendlyErrorMessage(error), 'error');
+      showToast(translateError(error), 'error');
     }
   };
 
@@ -621,9 +658,9 @@ export default function AdminDashboard() {
         body: JSON.stringify({ status: 'cancelled' })
       });
       showToast('Assinatura inativada com sucesso.', 'info');
-      fetchData();
+      fetchData(true);
     } catch (error: any) {
-      showToast(getFriendlyErrorMessage(error), 'error');
+      showToast(translateError(error), 'error');
     }
   };
 
@@ -634,9 +671,9 @@ export default function AdminDashboard() {
         method: 'DELETE'
       });
       showToast('Assinatura excluída permanentemente.', 'warning');
-      fetchData();
+      fetchData(true);
     } catch (error: any) {
-      showToast(getFriendlyErrorMessage(error), 'error');
+      showToast(translateError(error), 'error');
     }
   };
 
@@ -656,7 +693,7 @@ export default function AdminDashboard() {
       if (!res.ok) throw new Error('Erro ao salvar configurações');
       showToast('Configurações salvas com sucesso!', 'success');
     } catch (error: any) {
-      showToast(getFriendlyErrorMessage(error), 'error');
+      showToast(translateError(error), 'error');
     } finally {
       setSavingConfig(false);
     }
@@ -678,7 +715,7 @@ export default function AdminDashboard() {
       if (!res.ok) throw new Error('Erro ao salvar configurações gerais');
       showToast('Configurações gerais salvas com sucesso!', 'success');
     } catch (error: any) {
-      showToast(getFriendlyErrorMessage(error), 'error');
+      showToast(translateError(error), 'error');
     } finally {
       setSavingConfig(false);
     }
@@ -708,7 +745,7 @@ export default function AdminDashboard() {
         setTestResult({ success: false, message: data.details || data.error || 'Erro desconhecido' });
       }
     } catch (error: any) {
-      setTestResult({ success: false, message: 'Falha na comunicação com o servidor: ' + getFriendlyErrorMessage(error) });
+      setTestResult({ success: false, message: 'Falha na comunicação com o servidor: ' + translateError(error) });
     } finally {
       setTestingMP(false);
     }

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Search, MapPin, Phone, MessageCircle, Clock, Navigation } from 'lucide-react';
+import { Search, MapPin, Phone, MessageCircle, Clock, Navigation, ChevronDown, ChevronUp } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { safeJsonFetch } from '../lib/api';
 import { useSearchParams, useParams, useNavigate } from 'react-router-dom';
 import { clearCachedLocation } from '../lib/userCache';
@@ -43,6 +44,7 @@ export default function OnCall() {
   const [city, setCity] = useState('');
   const [state, setState] = useState('');
   const [cep, setCep] = useState('');
+  const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
   const [pharmacies, setPharmacies] = useState<Pharmacy[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -246,65 +248,78 @@ export default function OnCall() {
           )}
           <p className="text-emerald-100 mb-8 text-lg">Veja as farmácias que estão de plantão hoje na sua região{city && state ? `: ${formatName(city)} - ${state.toUpperCase()}` : ''}</p>
           
-          <div className="flex flex-col gap-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Search by City/State */}
-              <form onSubmit={handleSearch} className="bg-white p-2 rounded-lg shadow-lg flex flex-col sm:flex-row gap-2">
-                <div className="flex-1 flex items-center px-3 bg-gray-50 rounded-md border border-gray-200">
-                  <MapPin className="text-gray-400 w-5 h-5" />
-                  <input 
-                    type="text" 
-                    placeholder="Cidade" 
-                    className="w-full bg-transparent border-none focus:ring-0 text-gray-900 p-3 outline-none"
-                    value={formatName(city)}
-                    onChange={(e) => setCity(e.target.value)}
-                  />
-                </div>
-                <div className="w-full sm:w-24 flex items-center px-3 bg-gray-50 rounded-md border border-gray-200">
-                  <input 
-                    type="text" 
-                    placeholder="UF" 
-                    maxLength={2}
-                    className="w-full bg-transparent border-none focus:ring-0 text-gray-900 p-3 outline-none uppercase"
-                    value={state}
-                    onChange={(e) => setState(e.target.value.toUpperCase())}
-                  />
-                </div>
-                <button 
-                  type="submit"
-                  className="bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-3 rounded-md font-medium flex items-center justify-center gap-2 transition-colors"
-                >
-                  <Search className="w-5 h-5" />
-                  Buscar
-                </button>
-              </form>
+          <div className="max-w-4xl mx-auto flex flex-col gap-6">
+            {/* Mobile Search Toggle */}
+            <button 
+              onClick={() => setIsMobileSearchOpen(!isMobileSearchOpen)}
+              className="sm:hidden w-full bg-white text-emerald-700 py-4 px-6 rounded-2xl font-bold mb-2 flex items-center justify-between shadow-lg active:scale-[0.98] transition-all"
+            >
+              <div className="flex items-center gap-3">
+                <Search className="w-5 h-5" />
+                <span>{isMobileSearchOpen ? 'Fechar Pesquisa' : 'Mudar Cidade ou CEP'}</span>
+              </div>
+              {isMobileSearchOpen ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+            </button>
 
-              {/* Search by CEP */}
-              <form onSubmit={handleCepSearch} className="bg-white p-2 rounded-lg shadow-lg flex gap-2">
-                <div className="flex-1 flex items-center px-3 bg-gray-50 rounded-md border border-gray-200">
-                  <MapPin className="text-gray-400 w-5 h-5" />
-                  <input 
-                    type="text" 
-                    placeholder="Buscar por CEP (ex: 01001-000)" 
-                    className="w-full bg-transparent border-none focus:ring-0 text-gray-900 p-3 outline-none"
-                    value={cep}
-                    onChange={(e) => setCep(e.target.value)}
-                  />
-                </div>
-                <button 
-                  type="submit"
-                  className="bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-3 rounded-md font-medium flex items-center justify-center gap-2 transition-colors"
-                >
-                  <Search className="w-5 h-5" />
-                  CEP
-                </button>
-              </form>
+            <div className={`${isMobileSearchOpen ? 'block' : 'hidden'} sm:block space-y-4`}>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Search by City/State */}
+                <form onSubmit={handleSearch} className="bg-white p-2 rounded-xl shadow-lg flex flex-col sm:flex-row gap-2">
+                  <div className="flex-1 flex items-center px-3 bg-gray-50 rounded-lg border border-gray-100 focus-within:border-emerald-200 transition-all">
+                    <MapPin className="text-gray-400 w-5 h-5" />
+                    <input 
+                      type="text" 
+                      placeholder="Cidade" 
+                      className="w-full bg-transparent border-none focus:ring-0 text-gray-900 p-3 outline-none font-medium"
+                      value={formatName(city)}
+                      onChange={(e) => setCity(e.target.value)}
+                    />
+                  </div>
+                  <div className="w-full sm:w-24 flex items-center px-3 bg-gray-50 rounded-lg border border-gray-100 focus-within:border-emerald-200 transition-all">
+                    <input 
+                      type="text" 
+                      placeholder="UF" 
+                      maxLength={2}
+                      className="w-full bg-transparent border-none focus:ring-0 text-gray-900 p-3 outline-none uppercase font-bold text-center"
+                      value={state}
+                      onChange={(e) => setState(e.target.value.toUpperCase())}
+                    />
+                  </div>
+                  <button 
+                    type="submit"
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-all shadow-md active:scale-95"
+                  >
+                    <Search className="w-5 h-5" />
+                    Buscar
+                  </button>
+                </form>
+
+                {/* Search by CEP */}
+                <form onSubmit={handleCepSearch} className="bg-white p-2 rounded-xl shadow-lg flex gap-2">
+                  <div className="flex-1 flex items-center px-3 bg-gray-50 rounded-lg border border-gray-100 focus-within:border-emerald-200 transition-all">
+                    <MapPin className="text-gray-400 w-5 h-5" />
+                    <input 
+                      type="text" 
+                      placeholder="Busca por CEP (ex: 01001-000)" 
+                      className="w-full bg-transparent border-none focus:ring-0 text-gray-900 p-3 outline-none font-medium"
+                      value={cep}
+                      onChange={(e) => setCep(e.target.value)}
+                    />
+                  </div>
+                  <button 
+                    type="submit"
+                    className="bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-all shadow-md active:scale-95"
+                  >
+                    Localizar
+                  </button>
+                </form>
+              </div>
             </div>
 
             <button 
               onClick={detectLocation}
               disabled={detecting}
-              className="flex items-center justify-center gap-2 text-emerald-100 hover:text-white transition-colors text-sm font-medium self-center bg-emerald-700/30 px-4 py-2 rounded-full border border-emerald-500/30"
+              className="flex items-center justify-center gap-2 text-emerald-100 hover:text-white transition-colors text-sm font-medium self-center bg-emerald-700/30 px-6 py-3 rounded-full border border-emerald-500/30 hover:bg-emerald-700/50 active:scale-95"
             >
               <Navigation className={`w-4 h-4 ${detecting ? 'animate-pulse' : ''}`} />
               {detecting ? 'Detectando sua localização...' : 'Usar minha localização atual'}
@@ -315,36 +330,38 @@ export default function OnCall() {
 
       <div className="w-full max-w-[90%] mx-auto px-4 sm:px-6 lg:px-8 mt-12">
         <FreshnessBanner lastUpdated={lastSync} />
-        <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
-          <h2 className="text-2xl font-bold text-gray-900">Farmácias de Plantão</h2>
+        <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
+          <h2 className="text-2xl font-bold text-gray-900 border-l-4 border-emerald-500 pl-4">Farmácias de Plantão</h2>
           
-          {locationStatus === 'detecting' && (
-            <span className="text-sm text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full flex items-center gap-2 animate-pulse">
-              <Navigation className="w-3 h-3" />
-              Detectando sua localização...
-            </span>
-          )}
-          
-          {cep && (
-            <span className="text-sm text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full flex items-center gap-2 border border-emerald-100">
-              <MapPin className="w-3 h-3" />
-              Restringindo à região do CEP: {cep.substring(0, 5)}
-            </span>
-          )}
+          <div className="flex flex-wrap gap-2">
+            {locationStatus === 'detecting' && (
+              <span className="text-xs sm:text-sm text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full flex items-center gap-2 animate-pulse border border-emerald-100">
+                <Navigation className="w-3 h-3" />
+                Detectando...
+              </span>
+            )}
+            
+            {cep && (
+              <span className="text-xs sm:text-sm text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full flex items-center gap-2 border border-emerald-100">
+                <MapPin className="w-3 h-3" />
+                Região do CEP: {cep.substring(0, 5)}
+              </span>
+            )}
 
-          {!cep && userCoords && locationStatus === 'detected' && (
-            <span className="text-sm text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full flex items-center gap-2 border border-emerald-100">
-              <MapPin className="w-3 h-3" />
-              Mostrando resultados num raio de 20km
-            </span>
-          )}
+            {!cep && userCoords && locationStatus === 'detected' && (
+              <span className="text-xs sm:text-sm text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full flex items-center gap-2 border border-emerald-100">
+                <MapPin className="w-3 h-3" />
+                Raio de 20km
+              </span>
+            )}
 
-          {locationStatus === 'failed' && (
-            <span className="text-sm text-amber-700 bg-amber-50 px-3 py-1 rounded-full flex items-center gap-2 border border-amber-100">
-              <MapPin className="w-3 h-3" />
-              Localização não detectada. Mostrando por cidade.
-            </span>
-          )}
+            {locationStatus === 'failed' && (
+              <span className="text-xs sm:text-sm text-amber-700 bg-amber-50 px-3 py-1 rounded-full flex items-center gap-2 border border-amber-100">
+                <MapPin className="w-3 h-3" />
+                Localização não detectada
+              </span>
+            )}
+          </div>
         </div>
 
         {error && (

@@ -1,6 +1,7 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
 import { AlertTriangle, WifiOff, Lock } from 'lucide-react';
 import type { FirestoreErrorInfo } from '../lib/firebaseError';
+import { translateError } from '../lib/errorTranslations';
 
 interface Props {
   children: ReactNode;
@@ -107,7 +108,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
             </div>
             <h1 className="text-2xl font-bold text-gray-900 mb-2">Ops! Algo deu errado.</h1>
             <p className="text-gray-600 mb-6">
-              Ocorreu um erro inesperado na aplicação.
+              {translateError(error)}
             </p>
             <details className="text-left bg-gray-100 p-3 rounded text-xs text-gray-500 overflow-auto mb-6 cursor-pointer">
               <summary className="font-bold mb-2">Detalhes do Erro</summary>
