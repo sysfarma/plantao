@@ -3,11 +3,13 @@ import { Outlet, Link, useNavigate } from 'react-router-dom';
 import { Store, LogOut, Home, Menu, X, User, Clock, LayoutDashboard, Download, CreditCard, Calendar, Share2 } from 'lucide-react';
 import MobileBottomNav from '../components/MobileBottomNav';
 import { usePWA } from '../hooks/usePWA';
+import { useToast } from '../components/Toast';
 
 export default function PharmacyLayout() {
   const navigate = useNavigate();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const { canInstall, promptInstall } = usePWA();
+  const { showToast } = useToast();
 
   useEffect(() => {
     const userStr = localStorage.getItem('user');
@@ -39,7 +41,7 @@ export default function PharmacyLayout() {
         await navigator.share(shareData);
       } else {
         await navigator.clipboard.writeText(shareData.url);
-        alert('Link do aplicativo copiado!');
+        showToast('Link do aplicativo copiado!', 'success');
       }
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {

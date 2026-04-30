@@ -1,12 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Fragment } from 'react';
 import { Search, MapPin, Phone, MessageCircle, Star, Clock } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { safeJsonFetch } from '../lib/api';
-import { collection, query, where, getDocs, doc, getDoc, addDoc, writeBatch, increment } from 'firebase/firestore';
-import { db } from '../lib/firebase';
-import { getCachedLocation, setCachedLocation, clearCachedLocation } from '../lib/userCache';
-import { geocodeAddress, reverseGeocode } from '../lib/geocoding';
-import { handleFirestoreError, OperationType } from '../lib/firebaseError';
+import { clearCachedLocation } from '../lib/userCache';
+import { geocodeAddress } from '../lib/geocoding';
+import { useLocation } from '../hooks/useLocation';
+import { getDistance, formatName } from '../lib/utils';
+import SEOHandler from '../components/SEOHandler';
+import PharmacySchema from '../components/PharmacySchema';
+import { PharmacyCardSkeleton } from '../components/PharmacyCardSkeleton';
+import { Alert } from '../components/ui/Alert';
 
 interface Pharmacy {
   id: string;
@@ -23,18 +26,6 @@ interface Pharmacy {
   lng?: number;
 }
 
-function getDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
-  const R = 6371; // Radius of the earth in km
-  const dLat = (lat2 - lat1) * (Math.PI / 180);
-  const dLon = (lon2 - lon1) * (Math.PI / 180);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
-    Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c; // Distance in km
-}
-
 interface Highlight extends Pharmacy {
   type: 'day' | 'week' | 'month';
   date_start?: string;
@@ -42,6 +33,17 @@ interface Highlight extends Pharmacy {
 }
 
 export default function Home() {
+  const navigate = useNavigate();
+  const { 
+    status: locationStatus, 
+    location, 
+    coords: userCoords, 
+    detectLocation, 
+    setLocation, 
+    setCoords: setUserCoords, 
+    setStatus: setLocationStatus 
+  } = useLocation();
+
   const [city, setCity] = useState('');
   const [state, setState] = useState('');
   const [cep, setCep] = useState('');
@@ -49,72 +51,100 @@ export default function Home() {
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [pharmacies, setPharmacies] = useState<Pharmacy[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
-  const [userCoords, setUserCoords] = useState<{lat: number, lng: number} | null>(null);
-  const [locationStatus, setLocationStatus] = useState<'detecting' | 'detected' | 'failed' | 'idle'>('idle');
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
 
-  const fetchPharmacies = async (searchCity: string, searchState: string, searchName: string, coords?: {lat: number, lng: number}, searchCep?: string) => {
-    setLoading(true);
+  // Sync internal state with hook location
+  useEffect(() => {
+    if (location) {
+      setCity(location.city);
+      setState(location.state);
+      setCep(location.cep || '');
+    }
+  }, [location]);
+
+  useEffect(() => {
+    detectLocation();
+  }, [detectLocation]);
+
+  useEffect(() => {
+    if (locationStatus === 'detected' && location && !hasSearched) {
+      setHasSearched(true);
+      fetchPharmacies(location.city, location.state, name, userCoords ? { lat: userCoords.lat, lng: userCoords.lng } : undefined, location.cep);
+    } else if (locationStatus === 'failed' && !hasSearched) {
+      setHasSearched(true);
+      fetchPharmacies('', '', '');
+    }
+  }, [locationStatus, location, hasSearched, userCoords]);
+
+  const fetchPharmacies = async (searchCity: string, searchState: string, searchName: string, coords?: {lat: number, lng: number}, searchCep?: string, p: number = 1) => {
+    if (p === 1) {
+      setLoading(true);
+    } else {
+      setLoadingMore(true);
+    }
+    setError(null);
+
     try {
-      let pQuery: any = query(collection(db, 'pharmacies'), where('is_active', '==', 1));
-      if (searchCity && searchState && !searchCep) {
-        pQuery = query(pQuery, where('city', '==', searchCity), where('state', '==', searchState));
-      }
-      
-      const pSnap = await getDocs(pQuery);
-      let pharmData = pSnap.docs.map(doc => ({ id: doc.id, ...(doc.data() as any) }) as Pharmacy);
-      
-      if (searchName) {
-        pharmData = pharmData.filter(p => p.name.toLowerCase().includes(searchName.toLowerCase()));
-      }
-      if (searchCep) {
-        const cleanCep = searchCep.replace(/\D/g, '').substring(0, 5);
-        pharmData = pharmData.filter((p: any) => {
-          const pharmCep = (p.cep || p.zip || '').replace(/\D/g, '').substring(0, 5);
-          return pharmCep === cleanCep;
-        });
+      const queryParams: any = {
+        page: p,
+        limit: 12
+      };
+      if (searchCity) queryParams.city = searchCity;
+      if (searchState) queryParams.state = searchState;
+      if (searchName) queryParams.name = searchName;
+      if (searchCep) queryParams.cep = searchCep;
+      if (coords) {
+        queryParams.lat = coords.lat;
+        queryParams.lng = coords.lng;
       }
 
-      const now = new Date().toISOString();
-      const hQuery = query(collection(db, 'highlights'), where('date_start', '<=', now));
-      const hSnap = await getDocs(hQuery);
+      const [pharmRes, highData] = await Promise.all([
+        safeJsonFetch<{ data: Pharmacy[], pagination: { total: number, page: number, pages: number } }>('/api/public/pharmacies', { query: queryParams }),
+        p === 1 ? safeJsonFetch<Highlight[]>('/api/public/highlights', { query: queryParams }) : Promise.resolve([])
+      ]);
+
+      let finalPharmData = pharmRes?.data || [];
       
-      let highDataRaw = hSnap.docs.map(doc => ({ id: doc.id, ...(doc.data() as any) } as Highlight))
-        .filter(h => h.date_end && h.date_end >= now);
-        
-      if (searchCity && searchState && !searchCep) {
-        highDataRaw = highDataRaw.filter(h => h.city.toLowerCase() === searchCity.toLowerCase() && h.state.toLowerCase() === searchState.toLowerCase());
-      }
-      
-      highDataRaw = highDataRaw.map(h => {
-        const p = pharmData.find(p => p.id === (h as any).pharmacy_id);
-        if (p) {
-          return { ...h, name: p.name, phone: p.phone, whatsapp: p.whatsapp, street: p.street, number: p.number, neighborhood: p.neighborhood, city: p.city, state: p.state };
-        }
-        return null;
-      }).filter(Boolean) as Highlight[];
-      
-      // Filter by distance if coords are available and no city or CEP search is active
-      if (coords && !searchCity && !searchCep) {
-        pharmData = pharmData.filter((p: any) => {
-          if (p.lat && p.lng) {
+      // If we have coords and results, the server already filtered/sorted, 
+      // but we add distance property for UI if missing
+      if (coords) {
+        finalPharmData = finalPharmData.map((p: any) => {
+          if (p.lat && p.lng && !p.distance) {
             const dist = getDistance(coords.lat, coords.lng, Number(p.lat), Number(p.lng));
-            return dist <= 20; // 20km radius
+            return { ...p, distance: dist };
           }
-          return false;
+          return p;
         });
       }
       
-      setHighlights(highDataRaw);
-      setPharmacies(pharmData);
+      if (p === 1) {
+        setHighlights(highData || []);
+        setPharmacies(finalPharmData);
+      } else {
+        setPharmacies(prev => [...prev, ...finalPharmData]);
+      }
+
+      setHasMore((pharmRes?.pagination?.pages || 0) > p);
+      setPage(p);
     } catch (error) {
       console.error('Error fetching data', error);
-      handleFirestoreError(error, OperationType.GET, 'public/data');
-      setHighlights([]);
-      setPharmacies([]);
+      setError('Ocorreu um erro ao buscar as farmácias. Por favor, tente novamente.');
+      if (p === 1) {
+        setHighlights([]);
+        setPharmacies([]);
+      }
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
+  };
+
+  const handleLoadMore = () => {
+    fetchPharmacies(city, state, name, userCoords ? { lat: userCoords.lat, lng: userCoords.lng } : undefined, cep, page + 1);
   };
 
   const handleCepSearch = async (e: React.FormEvent) => {
@@ -128,24 +158,26 @@ export default function Home() {
       const res = await fetch(`https://viacep.com.br/ws/${cleanCep}/json/`);
       const data = await res.json();
       if (!data.erro) {
-        setCity(data.localidade);
-        setState(data.uf);
+        const detectedCity = data.localidade;
+        const detectedState = data.uf;
+        setCity(detectedCity);
+        setState(detectedState);
         setHasSearched(true);
         
         // Geocode CEP to get coords
-        const geoData = await geocodeAddress(data.logradouro, data.localidade, data.uf);
+        const geoData = await geocodeAddress(data.logradouro, detectedCity, detectedState);
         
         if (geoData) {
-          const coords = { lat: geoData.lat, lng: geoData.lng };
-          setUserCoords(coords);
+          const newCoords = { lat: geoData.lat, lng: geoData.lng };
+          setUserCoords(newCoords);
           setLocationStatus('detected');
-          setCachedLocation({ city: data.localidade, state: data.uf, cep: cleanCep, lat: coords.lat, lng: coords.lng, type: 'manual' });
-          fetchPharmacies(data.localidade, data.uf, name, coords, cleanCep);
+          setLocation({ city: detectedCity, state: detectedState, cep: cleanCep, lat: newCoords.lat, lng: newCoords.lng, type: 'manual' });
+          fetchPharmacies(detectedCity, detectedState, name, newCoords, cleanCep);
         } else {
           setUserCoords(null);
           setLocationStatus('idle');
-          setCachedLocation({ city: data.localidade, state: data.uf, cep: cleanCep, type: 'manual' });
-          fetchPharmacies(data.localidade, data.uf, name, undefined, cleanCep);
+          setLocation({ city: detectedCity, state: detectedState, cep: cleanCep, type: 'manual' });
+          fetchPharmacies(detectedCity, detectedState, name, undefined, cleanCep);
         }
       }
     } catch (err) {
@@ -154,143 +186,18 @@ export default function Home() {
     }
   };
 
-  useEffect(() => {
-    const init = async () => {
-      const cached = getCachedLocation();
-      if (cached && cached.city && cached.state) {
-        setCity(cached.city);
-        setState(cached.state);
-        let coords: {lat: number, lng: number} | undefined = undefined;
-        if (cached.lat && cached.lng) {
-          coords = { lat: cached.lat, lng: cached.lng };
-          setUserCoords(coords);
-          setLocationStatus('detected');
-        } else {
-          setLocationStatus('idle');
-        }
-        
-        if (cached.cep) setCep(cached.cep);
-        fetchPharmacies(cached.city, cached.state, '', coords, cached.cep);
-        return;
-      }
-
-      setLocationStatus('detecting');
-      // Try Browser Geolocation first
-      if ("geolocation" in navigator) {
-        navigator.geolocation.getCurrentPosition(
-          async (position) => {
-            const coords = { lat: position.coords.latitude, lng: position.coords.longitude };
-            setUserCoords(coords);
-            setLocationStatus('detected');
-            
-            // Try to get city/state/cep from coords
-            try {
-              const data = await reverseGeocode(coords.lat, coords.lng);
-              if (data && data.address) {
-                const detectedCity = data.address.city || data.address.town || data.address.village || data.address.suburb || data.address.municipality || '';
-                let detectedState = data.address.state_code || '';
-                const detectedCep = data.address.postcode || '';
-                
-                // Robust state/UF detection
-                if (!detectedState && data.address['ISO3166-2-lvl4']) {
-                  const parts = data.address['ISO3166-2-lvl4'].split('-');
-                  detectedState = parts.length > 1 ? parts[1] : parts[0];
-                }
-                
-                if (!detectedState) {
-                  const stateCandidate = data.address.state || data.address.region || data.address.province;
-                  if (stateCandidate) {
-                    const stateMap: Record<string, string> = {
-                      'acre': 'AC', 'alagoas': 'AL', 'amapa': 'AP', 'amazonas': 'AM',
-                      'bahia': 'BA', 'ceara': 'CE', 'distrito federal': 'DF', 'espirito santo': 'ES',
-                      'goias': 'GO', 'maranhao': 'MA', 'mato grosso': 'MT', 'mato grosso do sul': 'MS',
-                      'minas gerais': 'MG', 'para': 'PA', 'paraiba': 'PB', 'parana': 'PR',
-                      'pernambuco': 'PE', 'piaui': 'PI', 'rio de janeiro': 'RJ', 'rio grande do norte': 'RN',
-                      'rio grande do sul': 'RS', 'rondonia': 'RO', 'roraima': 'RR', 'santa catarina': 'SC',
-                      'sao paulo': 'SP', 'sergipe': 'SE', 'tocantins': 'TO'
-                    };
-                    const normalized = stateCandidate.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-                    detectedState = stateMap[normalized] || stateCandidate.substring(0, 2).toUpperCase();
-                  }
-                }
-                
-                // Final sanitize
-                if (detectedState && detectedState.length > 2) {
-                  detectedState = detectedState.substring(0, 2).toUpperCase();
-                }
-                
-                setCity(detectedCity);
-                setState(detectedState || '');
-                if (detectedCep) setCep(detectedCep);
-
-                setCachedLocation({ 
-                  city: detectedCity, 
-                  state: detectedState || '', 
-                  cep: detectedCep,
-                  lat: coords.lat, 
-                  lng: coords.lng, 
-                  type: 'gps' 
-                });
-                fetchPharmacies(detectedCity, detectedState || '', '', coords, detectedCep);
-              } else {
-                fetchPharmacies('', '', '', coords);
-              }
-            } catch (e) {
-              fetchPharmacies('', '', '', coords);
-            }
-          },
-          async () => {
-            // Fallback to IP if denied or error
-            fallbackToIp();
-          }
-        );
-      } else {
-        fallbackToIp();
-      }
-    };
-
-    const fallbackToIp = async () => {
-      try {
-        const res = await fetch('https://ipwho.is/');
-        const data = await res.json();
-        if (data.success && data.city && data.region_code) {
-          const detectedCep = data.postal || '';
-          setCity(data.city);
-          setState(data.region_code);
-          if (detectedCep) setCep(detectedCep);
-          const coords = { lat: data.latitude, lng: data.longitude };
-          setUserCoords(coords);
-          setLocationStatus('detected');
-          setCachedLocation({ 
-            city: data.city, 
-            state: data.region_code, 
-            cep: detectedCep,
-            lat: coords.lat, 
-            lng: coords.lng, 
-            type: 'ip' 
-          });
-          fetchPharmacies(data.city, data.region_code, '', coords, detectedCep);
-        } else {
-          setLocationStatus('failed');
-          fetchPharmacies('', '', '');
-        }
-      } catch (error) {
-        console.error('Error detecting location', error);
-        setLocationStatus('failed');
-        fetchPharmacies('', '', '');
-      }
-    };
-
-    init();
-  }, []);
-
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    setHasSearched(true);
-    setUserCoords(null);
-    setLocationStatus('idle');
-    setCachedLocation({ city, state, cep: '', type: 'manual' });
-    fetchPharmacies(city, state, name, undefined, '');
+    if (city && state && !name) {
+      const citySlug = city.toLowerCase().trim().replace(/\s+/g, '-');
+      navigate(`/plantao/${state.toLowerCase()}/${citySlug}`);
+    } else {
+      setHasSearched(true);
+      setUserCoords(null);
+      setLocationStatus('idle');
+      setLocation({ city, state, cep: '', type: 'manual' });
+      fetchPharmacies(city, state, name, undefined, '');
+    }
   };
 
   const handleTrackClick = async (id: string, type: 'whatsapp' | 'map') => {
@@ -321,11 +228,11 @@ export default function Home() {
             <Star className="w-5 h-5 text-yellow-500 fill-yellow-500" />
             Destaques do Dia
           </h2>
-          <div className="flex flex-col gap-4">
-            {dayHighlights.map(pharmacy => (
-              <PharmacyCard key={pharmacy.id} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
-            ))}
-          </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {dayHighlights.map(pharmacy => (
+          <PharmacyCard key={pharmacy.id} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
+        ))}
+      </div>
         </section>
       )}
 
@@ -335,11 +242,11 @@ export default function Home() {
             <Star className="w-5 h-5 text-emerald-500 fill-emerald-500" />
             Destaques da Semana
           </h2>
-          <div className="flex flex-col gap-4">
-            {weekHighlights.map(pharmacy => (
-              <PharmacyCard key={pharmacy.id} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
-            ))}
-          </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {weekHighlights.map(pharmacy => (
+          <PharmacyCard key={pharmacy.id} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
+        ))}
+      </div>
         </section>
       )}
 
@@ -349,20 +256,20 @@ export default function Home() {
             <Star className="w-5 h-5 text-blue-500 fill-blue-500" />
             Destaques do Mês
           </h2>
-          <div className="flex flex-col gap-4">
-            {monthHighlights.map(pharmacy => (
-              <PharmacyCard key={pharmacy.id} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
-            ))}
-          </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {monthHighlights.map(pharmacy => (
+          <PharmacyCard key={pharmacy.id} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
+        ))}
+      </div>
         </section>
       )}
     </div>
   );
 
   const resultsSection = (
-    <section>
+    <section id="results-section">
       <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
-        <h2 className="text-2xl font-bold text-gray-900">
+        <h2 className="text-2xl font-bold text-gray-900 border-l-4 border-emerald-500 pl-4">
           {hasSearched ? 'Resultado da Pesquisa' : 'Todas as Farmácias'}
         </h2>
 
@@ -395,20 +302,42 @@ export default function Home() {
         )}
       </div>
 
-      {loading || locationStatus === 'detecting' ? (
-        <div className="text-center py-20 text-gray-500 flex flex-col items-center gap-4">
-          <div className="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin"></div>
-          <p className="font-medium">
-            {locationStatus === 'detecting' ? 'Detectando sua localização...' : 'Buscando farmácias...'}
-          </p>
-          <p className="text-sm text-gray-400">Isso pode levar alguns segundos</p>
+      {error && (
+        <div className="mb-6">
+          <Alert 
+            message={error} 
+            onClose={() => setError(null)} 
+          />
         </div>
-      ) : pharmacies.length > 0 ? (
-        <div className="flex flex-col gap-6">
-          {pharmacies.map(pharmacy => (
-            <PharmacyCard key={pharmacy.id} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
+      )}
+
+      {loading || locationStatus === 'detecting' ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {[1, 2, 3, 4, 5, 6].map(i => (
+            <PharmacyCardSkeleton key={i} />
           ))}
         </div>
+      ) : pharmacies.length > 0 ? (
+        <Fragment>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {pharmacies.map(pharmacy => (
+              <PharmacyCard key={pharmacy.id} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
+            ))}
+          </div>
+
+          {hasMore && (
+            <div className="flex justify-center mt-12">
+              <button
+                onClick={handleLoadMore}
+                disabled={loadingMore}
+                className="bg-white text-emerald-700 border-2 border-emerald-600 px-10 py-4 rounded-full font-bold hover:bg-emerald-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-3 shadow-md hover:shadow-lg"
+              >
+                {loadingMore && <div className="w-5 h-5 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin"></div>}
+                {loadingMore ? 'Carregando...' : 'Carregar Mais Farmácias'}
+              </button>
+            </div>
+          )}
+        </Fragment>
       ) : (
         <div className="text-center py-20 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200 text-gray-500">
           <div className="bg-gray-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -440,11 +369,12 @@ export default function Home() {
 
   return (
     <div className="pb-12">
+      <SEOHandler />
       {/* Hero Search Section */}
       <section className="bg-emerald-600 text-white pt-4 pb-16 px-4">
         <div className="w-full max-w-[90%] mx-auto text-center">
           <h1 className="text-4xl font-bold mb-4">Encontre as Farmácias de Plantão</h1>
-          <p className="text-emerald-100 mb-8 text-lg">Busque por farmácias abertas agora na sua cidade</p>
+          <p className="text-emerald-100 mb-8 text-lg">Busque por farmácias abertas agora na sua cidade{city && state ? `: ${formatName(city)} - ${state.toUpperCase()}` : ''}</p>
           
           <div className="flex flex-col gap-4">
             <div className="bg-white p-2 rounded-lg shadow-lg">
@@ -455,7 +385,7 @@ export default function Home() {
                     type="text" 
                     placeholder="Cidade" 
                     className="w-full bg-transparent border-none focus:ring-0 text-gray-900 p-3 outline-none"
-                    value={city}
+                    value={formatName(city)}
                     onChange={(e) => setCity(e.target.value)}
                   />
                 </div>
@@ -515,7 +445,10 @@ export default function Home() {
           <div className="flex flex-col items-center gap-3 mt-8">
             <p className="text-emerald-100 text-sm font-medium">Ou use o acesso rápido:</p>
             <Link 
-              to={`/plantao${userCoords ? `?lat=${userCoords.lat}&lng=${userCoords.lng}&city=${encodeURIComponent(city)}&state=${encodeURIComponent(state)}` : ''}`}
+              to={city && state 
+                ? `/plantao/${state.toLowerCase()}/${city.toLowerCase().trim().replace(/\s+/g, '-')}`
+                : `/plantao${userCoords ? `?lat=${userCoords.lat}&lng=${userCoords.lng}&city=${encodeURIComponent(formatName(city))}&state=${encodeURIComponent(state)}` : ''}`
+              }
               className="bg-white text-emerald-700 hover:bg-emerald-50 px-8 py-4 rounded-full font-bold flex items-center justify-center gap-3 transition-all shadow-xl hover:scale-105 active:scale-95 border-2 border-[#b9b9b9]"
             >
               <Clock className="w-6 h-6 animate-pulse" />
@@ -551,24 +484,50 @@ export default function Home() {
 
 function PharmacyCard({ pharmacy, onTrackClick }: { pharmacy: Pharmacy; onTrackClick: (id: string, type: 'whatsapp' | 'map') => void; key?: React.Key }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-5 shadow-sm hover:shadow-md transition-shadow w-full">
-      <h3 className="text-lg font-bold text-gray-900 mb-1">{pharmacy.name}</h3>
-      <p className="text-sm text-gray-500 mb-4 line-clamp-2">
-        {pharmacy.street}, {pharmacy.number} - {pharmacy.neighborhood}<br/>
-        {pharmacy.city}/{pharmacy.state}
-      </p>
-      <div className="flex gap-2">
-        <a href={`tel:${pharmacy.phone}`} className="flex-1 flex items-center justify-center gap-2 bg-gray-100 text-gray-700 px-3 py-2 rounded-md hover:bg-gray-200 text-sm font-medium transition-colors">
-          <Phone className="w-4 h-4" />
-          Ligar
+    <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm hover:shadow-xl transition-all duration-300 w-full flex flex-col h-full group">
+      <PharmacySchema pharmacy={pharmacy} />
+      <div className="flex-1">
+        <div className="flex justify-between items-start mb-2">
+          <h3 className="text-xl font-bold text-gray-900 group-hover:text-emerald-600 transition-colors">{pharmacy.name}</h3>
+          {(pharmacy as any).distance !== undefined && (
+             <span className="text-xs font-bold bg-emerald-100 text-emerald-700 px-2 py-1 rounded-md">
+               {Number((pharmacy as any).distance).toFixed(1)} km
+             </span>
+          )}
+        </div>
+        <p className="text-sm text-gray-500 mb-6 leading-relaxed">
+          <span className="block font-medium text-gray-700">{pharmacy.street}, {pharmacy.number}</span>
+          {pharmacy.neighborhood} - {pharmacy.city}/{pharmacy.state}
+        </p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-row">
+        <a 
+          href={`tel:${pharmacy.phone}`} 
+          className="flex items-center justify-center gap-2 bg-gray-50 text-gray-700 p-3 rounded-xl hover:bg-gray-100 text-xs font-bold transition-all sm:flex-1"
+        >
+          <Phone className="w-4 h-4 text-emerald-600" />
+          LIGAR
         </a>
-        <a onClick={() => onTrackClick(pharmacy.id, 'whatsapp')} href={`https://wa.me/55${pharmacy.whatsapp.replace(/\D/g, '')}`} target="_blank" rel="noreferrer" className="flex-1 flex items-center justify-center gap-2 bg-green-50 text-green-700 px-3 py-2 rounded-md hover:bg-green-100 text-sm font-medium transition-colors">
-          <MessageCircle className="w-4 h-4" />
-          WhatsApp
+        <a 
+          onClick={() => onTrackClick(pharmacy.id, 'whatsapp')} 
+          href={`https://wa.me/55${pharmacy.whatsapp.replace(/\D/g, '')}`} 
+          target="_blank" 
+          rel="noreferrer" 
+          className="flex items-center justify-center gap-2 bg-emerald-50 text-emerald-700 p-3 rounded-xl hover:bg-emerald-100 text-xs font-bold transition-all sm:flex-1"
+        >
+          <MessageCircle className="w-4 h-4 text-emerald-500" />
+          WHATSAPP
         </a>
-        <a onClick={() => onTrackClick(pharmacy.id, 'map')} href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(pharmacy.street + ', ' + pharmacy.number + ' - ' + pharmacy.city)}`} target="_blank" rel="noreferrer" className="flex-1 flex items-center justify-center gap-2 bg-blue-50 text-blue-700 px-3 py-2 rounded-md hover:bg-blue-100 text-sm font-medium transition-colors border border-[#4281ff]">
-          <MapPin className="w-4 h-4" />
-          Mapa
+        <a 
+          onClick={() => onTrackClick(pharmacy.id, 'map')} 
+          href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(pharmacy.street + ', ' + pharmacy.number + ' - ' + pharmacy.city)}`} 
+          target="_blank" 
+          rel="noreferrer" 
+          className="col-span-2 flex items-center justify-center gap-2 bg-blue-50 text-blue-700 p-3 rounded-xl hover:bg-blue-100 text-xs font-bold transition-all sm:flex-1 border border-blue-100 shadow-sm"
+        >
+          <MapPin className="w-4 h-4 text-blue-500" />
+          MAPA
         </a>
       </div>
     </div>

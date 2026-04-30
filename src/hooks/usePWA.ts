@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useToast } from '../components/Toast';
 
 // Define the interface for the BeforeInstallPromptEvent
 interface BeforeInstallPromptEvent extends Event {
@@ -14,6 +15,7 @@ export function usePWA() {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [isInstalled, setIsInstalled] = useState(false);
   const [isIosSafari, setIsIosSafari] = useState(false);
+  const { showToast } = useToast();
 
   useEffect(() => {
     // Check if the app is already installed
@@ -54,7 +56,7 @@ export function usePWA() {
   const promptInstall = async () => {
     if (isIosSafari) {
       // Since iOS doesn't support programmatic install, alert the instructions
-      alert('Para instalar no iOS: toque no botão de Compartilhar e selecione "Adicionar à Tela de Início".');
+      showToast('Para instalar no iOS: toque no botão de Compartilhar e selecione "Adicionar à Tela de Início".', 'info');
       return;
     }
 

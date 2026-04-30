@@ -3,25 +3,23 @@ import { Link } from 'react-router-dom';
 import { Pill, ArrowLeft } from 'lucide-react';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import { auth } from '../lib/firebase';
+import { useToast } from '../components/Toast';
 
 export default function ForgotPassword() {
   const [email, setEmail] = useState('');
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const { showToast } = useToast();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
-    setMessage('');
     setLoading(true);
 
     try {
       await sendPasswordResetEmail(auth, email);
-      setMessage('Se o e-mail existir em nossa base, você receberá um link de recuperação em instantes.');
+      showToast('E-mail de recuperação enviado!', 'success');
     } catch (err: any) {
       // Don't expose whether the email exists or not for security reasons
-      setMessage('Se o e-mail existir em nossa base, você receberá um link de recuperação em instantes.');
+      showToast('E-mail de recuperação enviado!', 'success');
     } finally {
       setLoading(false);
     }
@@ -39,17 +37,6 @@ export default function ForgotPassword() {
         </div>
         
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
-          {error && (
-            <div className="bg-red-50 text-red-700 p-3 rounded-md text-sm">
-              {error}
-            </div>
-          )}
-          {message && (
-            <div className="bg-emerald-50 text-emerald-700 p-3 rounded-md text-sm">
-              {message}
-            </div>
-          )}
-          
           <div>
             <label className="block text-sm font-medium text-gray-700">E-mail</label>
             <input

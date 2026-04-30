@@ -1,4 +1,5 @@
 import { auth } from './firebase';
+import { translateError } from './errorTranslations';
 
 export enum OperationType {
   CREATE = 'create',
@@ -11,6 +12,7 @@ export enum OperationType {
 
 export interface FirestoreErrorInfo {
   error: string;
+  userMessage: string;
   operationType: OperationType;
   path: string | null;
   authInfo: {
@@ -30,9 +32,14 @@ export interface FirestoreErrorInfo {
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
   const currentUser = auth.currentUser;
+  const originalError = error instanceof Error ? error.message : String(error);
+  const userMessage = translateError(originalError);
   
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: originalError,
+    userMessage,
+    operationType,
+    path,
     authInfo: {
       userId: currentUser?.uid,
       email: currentUser?.email,
@@ -45,9 +52,7 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
         email: provider.email,
         photoUrl: provider.photoURL
       })) || []
-    },
-    operationType,
-    path
+    }
   };
   
   console.error('Firestore Error: ', JSON.stringify(errInfo));

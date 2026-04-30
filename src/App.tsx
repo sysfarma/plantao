@@ -4,8 +4,11 @@
  */
 
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { HelmetProvider } from 'react-helmet-async';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { FirebaseProvider } from './components/FirebaseProvider';
+import { ToastProvider } from './components/Toast';
+import { StabilityToast } from './components/StabilityToast';
 import PublicLayout from './layouts/PublicLayout';
 import AdminLayout from './layouts/AdminLayout';
 import PharmacyLayout from './layouts/PharmacyLayout';
@@ -30,13 +33,17 @@ export default function App() {
   return (
     <ErrorBoundary>
       <FirebaseProvider>
-        <Router>
-          <Routes>
-            {/* Public Routes */}
-        <Route element={<PublicLayout />}>
-          <Route path="/" element={<Home />} />
-          <Route path="/plantao" element={<OnCall />} />
-          <Route path="/login" element={<Login />} />
+        <ToastProvider>
+          <StabilityToast />
+          <HelmetProvider>
+            <Router>
+            <Routes>
+              {/* Public Routes */}
+              <Route element={<PublicLayout />}>
+                <Route path="/" element={<Home />} />
+                <Route path="/plantao" element={<OnCall />} />
+                <Route path="/plantao/:uf/:city" element={<OnCall />} />
+                <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
@@ -60,7 +67,9 @@ export default function App() {
         </Route>
       </Routes>
     </Router>
-      </FirebaseProvider>
+        </HelmetProvider>
+      </ToastProvider>
+    </FirebaseProvider>
     </ErrorBoundary>
   );
 }

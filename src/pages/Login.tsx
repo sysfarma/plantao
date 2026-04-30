@@ -5,21 +5,23 @@ import { signInWithEmailAndPassword, getIdToken } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import GoogleLoginButton from '../components/GoogleLoginButton';
+import { useToast } from '../components/Toast';
+import { translateError } from '../lib/errorTranslations';
 
 export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const { showToast } = useToast();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
     setLoading(true);
 
     try {
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      showToast('Login realizado com sucesso!', 'success');
       const token = await getIdToken(userCredential.user);
 
       // Get role from Firestore
@@ -50,13 +52,7 @@ export default function Login() {
       }
     } catch (err: any) {
       console.error('Login error:', err);
-      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
-        setError('E-mail ou senha inválidos');
-      } else if (err.code === 'auth/invalid-credential') {
-        setError('Credenciais inválidas');
-      } else {
-        setError(err.message || 'Erro ao fazer login');
-      }
+      showToast(translateError(err), 'error');
     } finally {
       setLoading(false);
     }
@@ -92,11 +88,6 @@ export default function Login() {
         </div>
 
         <form className="mt-6 space-y-6" onSubmit={handleLogin}>
-          {error && (
-            <div className="bg-red-50 text-red-700 p-3 rounded-md text-sm">
-              {error}
-            </div>
-          )}
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700">E-mail</label>

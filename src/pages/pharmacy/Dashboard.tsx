@@ -9,17 +9,25 @@ import { isShiftPast, formatToBRDate } from '../../lib/dateUtils';
 import { safeJsonFetch } from '../../lib/api';
 import { getAuthToken } from '../../lib/firebase';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { collection, doc, addDoc, updateDoc, deleteDoc, query, where, onSnapshot } from 'firebase/firestore';
+import { collection, doc, addDoc, updateDoc, deleteDoc, query, where, onSnapshot, orderBy, limit } from 'firebase/firestore';
 import { db, auth } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firebaseError';
+import { useToast } from '../../components/Toast';
+import { translateError } from '../../lib/errorTranslations';
 
 export default function PharmacyDashboard() {
   const { user: firebaseUser } = useFirebase();
+  const { showToast } = useToast();
   const [profile, setProfile] = useState<any>(null);
   const [highlights, setHighlights] = useState<any[]>([]);
   const [payments, setPayments] = useState<any[]>([]);
   const [shifts, setShifts] = useState<any[]>([]);
   const [reports, setReports] = useState<any>(null);
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [auditTotal, setAuditTotal] = useState(0);
+  const [auditPage, setAuditPage] = useState(1);
+  const [loadingLogs, setLoadingLogs] = useState(false);
+  const [loadingReports, setLoadingReports] = useState(false);
   const [loading, setLoading] = useState(true);
   const [searchParams] = useSearchParams();
   const initialTab = searchParams.get('tab') || 'overview';
@@ -60,13 +68,14 @@ export default function PharmacyDashboard() {
       });
 
       if (result.success) {
+        showToast('Cartão atualizado com sucesso!', 'success');
         setCardUpdateSuccess(true);
         setTimeout(() => setIsUpdateCardModalOpen(false), 3000);
       } else {
         throw new Error(result.error || 'Erro ao atualizar o cartão');
       }
     } catch (err: any) {
-      alert(err.message || 'Erro ao processar atualização do cartão');
+      showToast(translateError(err), 'error');
     } finally {
       setUpdatingCard(false);
     }
@@ -105,76 +114,100 @@ export default function PharmacyDashboard() {
 
     if (!userId) return;
 
-    // We filter by user_id to be rule-safe and performant, then filter by pharmacy in js.
-    // Sensitive data listeners
-    const unsubSubs = onSnapshot(query(collection(db, 'subscriptions'), where('user_id', '==', userId)), (snapshot) => {
-      const subs = snapshot.docs.map(d => d.data()).filter(d => d.pharmacy_id === pharmacyId);
-      if (subs.length > 0) {
-        subs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-        setProfile((prev: any) => ({ ...prev, subscription: subs[0] }));
+    fetchPharmacyData();
+    fetchPharmacyReports();
+    fetchAuditLogs(1);
+
+  }, [profile?.id, firebaseUser]);
+
+  const fetchPharmacyData = async () => {
+    try {
+      const token = await getAuthToken();
+      const headers = { 'Authorization': `Bearer ${token}` };
+
+      // Fetch all needed data in parallel
+      const [subsRes, highRes, payRes, shiftsRes] = await Promise.all([
+        fetch('/api/pharmacy/profile', { headers }),
+        fetch('/api/pharmacy/highlights', { headers }),
+        fetch('/api/pharmacy/payments', { headers }),
+        fetch('/api/pharmacy/shifts', { headers })
+      ]);
+
+      if (subsRes.ok) {
+        const fullProfile = await subsRes.json();
+        setProfile((prev: any) => ({ ...prev, ...fullProfile }));
       }
-    });
+      if (highRes.ok) setHighlights(await highRes.json());
+      if (payRes.ok) setPayments(await payRes.json());
+      if (shiftsRes.ok) setShifts(await shiftsRes.json());
 
-    const unsubHigh = onSnapshot(query(collection(db, 'highlights'), where('user_id', '==', userId)), (snapshot) => {
-      setHighlights(snapshot.docs.map(d => ({ id: d.id, ...d.data() })).filter((d: any) => d.pharmacy_id === pharmacyId));
-    });
+    } catch (error) {
+      console.error('Error fetching pharmacy data:', error);
+    }
+  };
 
-    const unsubPay = onSnapshot(query(collection(db, 'payments'), where('user_id', '==', userId)), (snapshot) => {
-      setPayments(snapshot.docs.map(d => ({ id: d.id, ...d.data() })).filter((d: any) => d.pharmacy_id === pharmacyId));
-    });
-
-    const unsubShifts = onSnapshot(query(collection(db, 'shifts'), where('user_id', '==', userId)), (snapshot) => {
-      setShifts(snapshot.docs.map(d => ({ id: d.id, ...d.data() })).filter((d: any) => d.pharmacy_id === pharmacyId));
-    });
-
-    const unsubClicks = onSnapshot(query(
-      collection(db, 'clicks'), 
-      where('user_id', '==', userId)
-    ), (snapshot) => {
-      const dailyClicks: Record<string, { date: string, whatsapp: number, map: number }> = {};
-      snapshot.forEach(doc => {
-        const click = doc.data();
-        if (click.pharmacy_id !== pharmacyId) return;
-        const date = new Date(click.created_at).toLocaleDateString('pt-BR');
-        if (!dailyClicks[date]) {
-          dailyClicks[date] = { date, whatsapp: 0, map: 0 };
-        }
-        if (click.type === 'whatsapp') dailyClicks[date].whatsapp++;
-        if (click.type === 'map') dailyClicks[date].map++;
+  const fetchPharmacyReports = async () => {
+    setLoadingReports(true);
+    try {
+      const token = await getAuthToken();
+      const res = await fetch('/api/pharmacy/reports', {
+        headers: { 'Authorization': `Bearer ${token}` }
       });
-      setReports({ dailyClicks: Object.values(dailyClicks) });
+      if (!res.ok) throw new Error('Erro ao carregar relatórios');
+      const data = await res.json();
+      setReports(data);
+    } catch (error) {
+      console.error('Error fetching reports:', error);
+    } finally {
+      setLoadingReports(false);
       setLoading(false);
-    }, (error) => {
-      console.error('Error in clicks listener', error);
-      // Fallback for permissions if not master
-      if (!isAdminMaster) {
-        setReports({ dailyClicks: [] });
-      }
-      setLoading(false);
-    });
+    }
+  };
 
-    return () => {
-      unsubSubs();
-      unsubHigh();
-      unsubPay();
-      unsubShifts();
-      unsubClicks();
-    };
-  }, [profile?.id]);
+  const fetchAuditLogs = async (page: number) => {
+    setLoadingLogs(true);
+    try {
+      const token = await getAuthToken();
+      const res = await fetch(`/api/pharmacy/audit-logs?page=${page}&limit=10`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error('Erro ao carregar logs de auditoria');
+      const data = await res.json();
+      setAuditLogs(data.data);
+      setAuditTotal(data.total);
+      setAuditPage(page);
+    } catch (error) {
+      console.error('Error fetching audit logs:', error);
+    } finally {
+      setLoadingLogs(false);
+    }
+  };
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
     try {
-      const { name, phone, whatsapp, street, number, neighborhood, city, state } = editForm;
-      await updateDoc(doc(db, 'pharmacies', profile.id), {
-        name, phone, whatsapp, street, number, neighborhood, city, state,
-        updated_at: new Date().toISOString()
+      const token = await getAuthToken();
+      const res = await fetch('/api/pharmacy/profile', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(editForm)
       });
-      alert('Perfil atualizado com sucesso!');
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `pharmacies/${profile.id}`);
-      alert('Erro ao salvar perfil.');
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || 'Erro ao salvar perfil');
+      }
+
+      const updatedProfile = await res.json();
+      setProfile(updatedProfile);
+      showToast('Perfil atualizado com sucesso!', 'success');
+    } catch (error: any) {
+      console.error('Error saving profile:', error);
+      showToast(translateError(error), 'error');
     } finally {
       setSaving(false);
     }
@@ -183,44 +216,70 @@ export default function PharmacyDashboard() {
   const handleSaveShift = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const userId = firebaseUser?.uid;
-      if (!userId) throw new Error('Usuário não autenticado');
+      const token = await getAuthToken();
+      const headers = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      };
 
       const shiftData = {
-        pharmacy_id: profile.id,
-        user_id: userId, // Include owner_id for optimized security rules
         date: shiftForm.date,
         start_time: shiftForm.is_24h ? '00:00' : shiftForm.start_time,
         end_time: shiftForm.is_24h ? '23:59' : shiftForm.end_time,
-        is_24h: shiftForm.is_24h ? 1 : 0,
-        updated_at: new Date().toISOString()
+        is_24h: shiftForm.is_24h
       };
       
+      let res;
       if (editingShiftId) {
-        await updateDoc(doc(db, 'shifts', editingShiftId), {
-          ...shiftData,
-          updated_at: new Date().toISOString()
+        res = await fetch(`/api/pharmacy/shifts/${editingShiftId}`, {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify(shiftData)
         });
       } else {
-        await addDoc(collection(db, 'shifts'), {
-          ...shiftData,
-          created_at: new Date().toISOString()
+        res = await fetch('/api/pharmacy/shifts', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(shiftData)
         });
       }
       
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || 'Erro ao salvar plantão');
+      }
+
       setIsShiftModalOpen(false);
-    } catch (error) {
-      handleFirestoreError(error, editingShiftId ? OperationType.UPDATE : OperationType.CREATE, `shifts/${editingShiftId || ''}`);
-      alert('Erro ao salvar plantão.');
+      // Refresh list
+      const shiftsRes = await fetch('/api/pharmacy/shifts', { headers: { 'Authorization': `Bearer ${token}` } });
+      if (shiftsRes.ok) setShifts(await shiftsRes.json());
+      showToast('Plantão salvo com sucesso!', 'success');
+    } catch (error: any) {
+      console.error('Error saving shift:', error);
+      showToast(translateError(error), 'error');
     }
   };
 
   const handleDeleteShift = async (id: string) => {
     if (!window.confirm('Tem certeza que deseja excluir este plantão?')) return;
     try {
-      await deleteDoc(doc(db, 'shifts', id));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `shifts/${id}`);
+      const token = await getAuthToken();
+      const res = await fetch(`/api/pharmacy/shifts/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || 'Erro ao excluir plantão');
+      }
+
+      // Update local state
+      setShifts(prev => prev.filter(s => s.id !== id));
+      showToast('Plantão excluído!', 'success');
+    } catch (error: any) {
+      console.error('Error deleting shift:', error);
+      showToast(translateError(error), 'error');
     }
   };
 
@@ -256,8 +315,7 @@ export default function PharmacyDashboard() {
       {/* Tabs */}
       <div className="border-b border-gray-200 mb-8">
         <nav className="-mb-px flex space-x-8 overflow-x-auto">
-          {['overview', 'metrics', 'edit', 'shifts', 'highlights', 'history']
-            .filter(tab => tab !== 'metrics' || isAdminMaster)
+          {['overview', 'metrics', 'edit', 'shifts', 'highlights', 'history', 'audit']
             .map((tab) => (
             <button
               key={tab}
@@ -274,6 +332,7 @@ export default function PharmacyDashboard() {
               {tab === 'shifts' && 'Cadastro de Plantões'}
               {tab === 'highlights' && 'Meus Destaques'}
               {tab === 'history' && 'Histórico de Pagamentos'}
+              {tab === 'audit' && 'Auditoria'}
             </button>
           ))}
         </nav>
@@ -435,26 +494,42 @@ export default function PharmacyDashboard() {
         </div>
       )}
 
-      {activeTab === 'metrics' && isAdminMaster && reports?.dailyClicks && (
+      {activeTab === 'metrics' && reports?.dailyClicks && (
         <div className="space-y-6">
           <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-            <div className="flex items-center gap-2 mb-6">
-              <TrendingUp className="w-6 h-6 text-emerald-600" />
-              <h2 className="text-lg font-semibold text-gray-900">Engajamento de Clientes (Últimos 30 dias)</h2>
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="w-6 h-6 text-emerald-600" />
+                <h2 className="text-lg font-semibold text-gray-900">Engajamento de Clientes (Últimos 30 dias)</h2>
+              </div>
+              <button 
+                onClick={fetchPharmacyReports}
+                className="text-gray-500 hover:text-emerald-600 flex items-center gap-1 text-sm font-medium transition-colors"
+                disabled={loadingReports}
+              >
+                <RefreshCw className={`w-4 h-4 ${loadingReports ? 'animate-spin' : ''}`} />
+                Atualizar
+              </button>
             </div>
-            <div className="h-80">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={reports.dailyClicks} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="date" axisLine={false} tickLine={false} />
-                  <YAxis axisLine={false} tickLine={false} allowDecimals={false} />
-                  <Tooltip cursor={{ fill: '#f3f4f6' }} />
-                  <Legend />
-                  <Bar dataKey="whatsapp" name="Cliques no WhatsApp" fill="#10b981" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="map" name="Cliques no Mapa" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            {loadingReports ? (
+              <div className="h-80 flex items-center justify-center bg-gray-50 rounded-lg">
+                <RefreshCw className="w-8 h-8 text-emerald-500 animate-spin" />
+              </div>
+            ) : (
+              <div className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={reports.dailyClicks} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="date" axisLine={false} tickLine={false} />
+                    <YAxis axisLine={false} tickLine={false} allowDecimals={false} />
+                    <Tooltip cursor={{ fill: '#f3f4f6' }} />
+                    <Legend />
+                    <Bar dataKey="whatsapp" name="Cliques no WhatsApp" fill="#10b981" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="map" name="Cliques no Mapa" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -669,6 +744,92 @@ export default function PharmacyDashboard() {
                   </span>
                 </div>
               ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'audit' && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-lg font-semibold">Histórico de Operações (Auditoria)</h2>
+            <button 
+              onClick={() => fetchAuditLogs(auditPage)}
+              className="text-emerald-600 hover:text-emerald-700 flex items-center gap-1 text-sm font-medium"
+              disabled={loadingLogs}
+            >
+              <RefreshCw className={`w-4 h-4 ${loadingLogs ? 'animate-spin' : ''}`} />
+              Sincronizar
+            </button>
+          </div>
+
+          {loadingLogs ? (
+            <div className="space-y-3">
+              {[...Array(5)].map((_, i) => (
+                <div key={i} className="h-16 bg-gray-100 animate-pulse rounded-lg" />
+              ))}
+            </div>
+          ) : auditLogs.length === 0 ? (
+            <div className="p-8 text-center text-gray-500 bg-gray-50 rounded-lg">
+              Nenhuma operação administrativa registrada para esta farmácia.
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50 text-xs text-gray-500 uppercase font-medium">
+                    <tr>
+                      <th className="px-4 py-3 text-left">Data/Hora</th>
+                      <th className="px-4 py-3 text-left">Ação</th>
+                      <th className="px-4 py-3 text-left">Detalhes</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 text-sm">
+                    {auditLogs.map((log) => (
+                      <tr key={log.id} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-4 py-3 whitespace-nowrap text-gray-600">
+                          {new Date(log.timestamp).toLocaleString('pt-BR')}
+                        </td>
+                        <td className="px-4 py-3 font-medium">
+                          <span className={`px-2 py-1 rounded-full text-xs font-bold ${
+                            log.action?.includes('activate') ? 'bg-emerald-100 text-emerald-700' :
+                            log.action?.includes('deactivate') ? 'bg-amber-100 text-amber-700' :
+                            'bg-blue-100 text-blue-700'
+                          }`}>
+                            {log.action}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-gray-500 max-w-md truncate">
+                          {log.details ? JSON.stringify(log.details) : '-'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Pagination */}
+              <div className="flex items-center justify-between pt-4 border-t border-gray-100">
+                <p className="text-sm text-gray-500">
+                  Mostrando <span className="font-medium text-gray-900">{auditLogs.length}</span> de <span className="font-medium text-gray-900">{auditTotal}</span> registros
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    disabled={auditPage === 1 || loadingLogs}
+                    onClick={() => fetchAuditLogs(auditPage - 1)}
+                    className="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    Anterior
+                  </button>
+                  <button
+                    disabled={auditPage * 10 >= auditTotal || loadingLogs}
+                    onClick={() => fetchAuditLogs(auditPage + 1)}
+                    className="px-3 py-1 border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    Próximo
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>

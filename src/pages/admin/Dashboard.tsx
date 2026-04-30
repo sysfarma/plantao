@@ -1,14 +1,15 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { CheckCircle, XCircle, Star, Trash2, Ban, Edit, Plus, X, Calendar, Search, Filter, History, DollarSign, FileText, RefreshCw, ShieldCheck, AlertCircle, CheckCircle2, Download, ArrowUp, ArrowDown } from 'lucide-react';
+import { CheckCircle, XCircle, Star, Trash2, Ban, Edit, Plus, X, Calendar, Search, Filter, History, DollarSign, FileText, RefreshCw, ShieldCheck, AlertCircle, CheckCircle2, Download, ArrowUp, ArrowDown, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { safeJsonFetch } from '../../lib/api';
 import { useFirebase } from '../../components/FirebaseProvider';
 import { calculateHighlightEnd, isShiftPast, formatToBRDate } from '../../lib/dateUtils';
+import { normalizeString } from '../../lib/utils';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
-import { collection, getDocs, doc, getDoc, addDoc, updateDoc, deleteDoc, query, where, setDoc } from 'firebase/firestore';
-import { db, auth, getAuthToken } from '../../lib/firebase';
-import { handleFirestoreError, OperationType } from '../../lib/firebaseError';
+import { getAuthToken } from '../../lib/firebase';
+import { useToast } from '../../components/Toast';
+import { translateError } from '../../lib/errorTranslations';
 
 interface Pharmacy {
   id: string;
@@ -28,12 +29,19 @@ interface Pharmacy {
 
 export default function AdminDashboard() {
   const { user: firebaseUser } = useFirebase();
+  const { showToast } = useToast();
   const [pharmacies, setPharmacies] = useState<Pharmacy[]>([]);
+  const [totalPharmacies, setTotalPharmacies] = useState(0);
+  const [pharmacyPage, setPharmacyPage] = useState(1);
+  const PHARMACIES_PER_PAGE = 20;
+
   const [reports, setReports] = useState<any>(null);
   const [adminShifts, setAdminShifts] = useState<any[]>([]);
   const [adminHighlights, setAdminHighlights] = useState<any[]>([]);
   const [adminSubscribers, setAdminSubscribers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState<any>(null);
+  const [loadingTable, setLoadingTable] = useState(false);
   const [searchParams] = useSearchParams();
   const initialTab = searchParams.get('tab') || 'pharmacies';
   const [activeTab, setActiveTab] = useState(initialTab);
@@ -73,9 +81,25 @@ export default function AdminDashboard() {
   const [pharmacySortField, setPharmacySortField] = useState<'name' | 'city' | 'status' | null>(null);
   const [pharmacySortOrder, setPharmacySortOrder] = useState<'asc' | 'desc'>('asc');
 
+  const TableSkeleton = ({ rows = 5, cols = 5 }: { rows?: number, cols?: number }) => (
+    <div className="animate-pulse">
+      <div className="h-10 bg-gray-100 rounded mb-4 w-full"></div>
+      {[...Array(rows)].map((_, i) => (
+        <div key={i} className="flex gap-4 mb-3">
+          {[...Array(cols)].map((_, j) => (
+            <div key={j} className="h-12 bg-gray-50 rounded flex-1"></div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+
   const rawAdmin = import.meta.env.VITE_ADMIN_EMAIL;
   const adminEmail = rawAdmin ? rawAdmin.replace(/['"]/g, '').trim() : 'sys.farmaciasdeplantao@gmail.com';
-  const isAdminMaster = firebaseUser?.email === 'sys.farmaciasdeplantao@gmail.com' || (adminEmail && firebaseUser?.email === adminEmail);
+  
+  const isAdminMaster = useMemo(() => {
+    return firebaseUser?.email === 'sys.farmaciasdeplantao@gmail.com' || (adminEmail && firebaseUser?.email === adminEmail);
+  }, [firebaseUser, adminEmail]);
 
   const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
@@ -83,6 +107,18 @@ export default function AdminDashboard() {
   const [shiftForm, setShiftForm] = useState({ pharmacy_id: '', date: '', start_time: '07:00', end_time: '22:00', is_24h: false });
   const [editingShiftId, setEditingShiftId] = useState<string | null>(null);
   const [pharmacyShiftSearch, setPharmacyShiftSearch] = useState('');
+
+  const safeFetch = async (url: string, options: any = {}) => {
+    const token = await getAuthToken();
+    if (!token) throw new Error('Não autenticado');
+    return safeJsonFetch(url, {
+      ...options,
+      headers: {
+        ...options.headers,
+        'Authorization': `Bearer ${token}`
+      }
+    });
+  };
 
   const openCreateModal = () => {
     setEditingPharmacy(null);
@@ -102,84 +138,98 @@ export default function AdminDashboard() {
   const handleSavePharmacy = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const token = await getAuthToken();
       if (editingPharmacy) {
-        const res = await fetch(`/api/admin/pharmacies/${editingPharmacy.id}`, {
+        await safeFetch(`/api/admin/pharmacies/${editingPharmacy.id}`, {
           method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
           body: JSON.stringify(formData)
         });
-        if (!res.ok) {
-          const data = await res.json();
-          throw new Error(data.error || 'Erro ao atualizar farmácia');
-        }
       } else {
-        const res = await fetch('/api/admin/pharmacies', {
+        await safeFetch('/api/admin/pharmacies', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
           body: JSON.stringify(formData)
         });
-        if (!res.ok) {
-          const data = await res.json();
-          throw new Error(data.error || 'Erro ao criar farmácia');
-        }
       }
       setIsModalOpen(false);
       fetchData();
+      showToast(editingPharmacy ? 'Farmácia atualizada com sucesso!' : 'Farmácia criada com sucesso!', 'success');
     } catch (error: any) {
       console.error('Error saving pharmacy', error);
-      alert(error.message || 'Erro ao salvar farmácia');
+      showToast('Erro ao salvar farmácia: ' + getFriendlyErrorMessage(error), 'error');
     }
   };
 
-  const fetchData = async () => {
-    setLoading(true);
+  const getFriendlyErrorMessage = (error: any) => {
+    const message = error?.message || String(error);
+    if (message.includes('Quota exceeded')) {
+      return 'Limite de uso do banco de dados excedido (Quota). Por favor, tente novamente amanhã ou contate o suporte.';
+    }
+    if (message.includes('Rate exceeded') || message.includes('too-many-requests') || message.includes('429')) {
+      return 'Muitas solicitações em pouco tempo. Por favor, aguarde alguns segundos e tente novamente.';
+    }
+    if (message.includes('SERVER_OVERLOAD')) {
+      return 'O servidor está temporariamente sobrecarregado. Por favor, tente novamente em alguns instantes.';
+    }
+    if (message.includes('permission-denied') || message.includes('insufficient permissions')) {
+      return 'Acesso negado. Você não tem permissão para realizar esta operação.';
+    }
+    
+    // Try to parse if it's JSON from handleFirestoreError
     try {
-      const token = await getAuthToken();
+      if (message.startsWith('{') && message.endsWith('}')) {
+        const parsed = JSON.parse(message);
+        return parsed.error || message;
+      }
+    } catch (e) {
+      // Not JSON, ignore
+    }
+    
+    return message;
+  };
 
-      if (!token) {
-        window.location.href = '/login';
-        return;
+  const fetchData = async () => {
+    if (!stats) setLoading(true);
+    setLoadingTable(true);
+    try {
+      // Fetch specialized stats for dashboard totals (VERY FAST)
+      const statsData = await safeFetch('/api/admin/stats');
+      if (statsData && typeof statsData !== 'string') {
+        setStats(statsData);
+        setReports(statsData); // Reuse for reports view
       }
 
-      const safeFetch = async (url: string) => {
-        return safeJsonFetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
-      };
-
-      // Fetch optimized pharmacies list
-      const pharmData = await safeFetch('/api/admin/pharmacies');
-      if (typeof pharmData === 'string') throw new Error('Falha ao obter lista de farmácias (resposta não-JSON)');
-      setPharmacies(pharmData);
+      // Fetch optimized pharmacies list (PAGINATED)
+      const pharmData = await safeFetch(`/api/admin/pharmacies?page=${pharmacyPage}&limit=${PHARMACIES_PER_PAGE}&search=${pharmacySearchTerm}`);
+      if (typeof pharmData === 'string') throw new Error('Falha ao obter lista de farmácias');
+      
+      const pArray = Array.isArray(pharmData) ? pharmData : (pharmData.data || []);
+      const pTotal = Array.isArray(pharmData) ? pharmData.length : (pharmData.total || 0);
+      
+      setPharmacies(pArray);
+      setTotalPharmacies(pTotal);
       
       // Fetch Config
-      const configDoc = await getDoc(doc(db, 'config', 'mercadopago'));
-      if (configDoc.exists()) {
-        const data = configDoc.data();
-        setConfig({
-          public_key: data?.public_key || '',
-          access_token: data?.access_token || '',
-          test_mode: data?.test_mode || false
-        });
-      }
-
-      // Fetch General Config
-      const generalDoc = await getDoc(doc(db, 'config', 'general'));
-      if (generalDoc.exists()) {
-        const data = generalDoc.data();
-        setGeneralConfig({
-          whatsapp_support: data?.whatsapp_support || '5500000000000',
-          future_shifts_days: data?.future_shifts_days || 7,
-          whatsapp_active: data?.whatsapp_active ?? true,
-          email_support_active: data?.email_support_active ?? true,
-          support_email: data?.support_email || 'contato@farmaciasdeplantao.app.br',
-          support_phone: data?.support_phone || '(00) 00000-0000'
-        });
+      const configData = await safeFetch('/api/admin/config');
+      if (configData && typeof configData !== 'string') {
+        const { mercadopago, general } = configData;
+        
+        if (mercadopago) {
+          setConfig({
+            public_key: mercadopago.public_key || '',
+            access_token: mercadopago.access_token || '',
+            test_mode: mercadopago.test_mode || false
+          });
+        }
+        
+        if (general) {
+          setGeneralConfig({
+            whatsapp_support: general.whatsapp_support || '5500000000000',
+            future_shifts_days: general.future_shifts_days || 7,
+            whatsapp_active: general.whatsapp_active ?? true,
+            email_support_active: general.email_support_active ?? true,
+            support_email: general.support_email || 'contato@farmaciasdeplantao.app.br',
+            support_phone: general.support_phone || '(00) 00000-0000'
+          });
+        }
       }
       
       // Fetch Plans
@@ -199,55 +249,41 @@ export default function AdminDashboard() {
         setAdminSubscribers(subsData);
       }
       
-      // Fetch Highlights (using pharmData to avoid N+1)
-      const highSnapshot = await getDocs(collection(db, 'highlights'));
-      const highData = highSnapshot.docs.map(hDoc => {
-        const h = hDoc.data();
-        const pharm = pharmData.find((p: any) => p.id === h.pharmacy_id);
-        return {
-          id: hDoc.id,
-          ...h,
-          pharmacy_name: pharm ? pharm.name : 'Desconhecida'
-        };
-      });
-      setAdminHighlights(highData);
+      // Fetch Highlights from backend
+      const highData = await safeFetch('/api/admin/highlights');
+      if (typeof highData !== 'string') {
+        setAdminHighlights(highData);
+      }
       
-      // Fetch Reports optimized from backend
-      const reportsData = await safeFetch('/api/admin/reports');
-      if (typeof reportsData === 'string') throw new Error('Falha ao obter relatórios (resposta não-JSON)');
-      setReports(reportsData);
-
       // Fetch Audit Logs if Master Admin
       if (isAdminMaster) {
-        const auditLogSnapshot = await getDocs(collection(db, 'audit_logs'));
-        const logs = auditLogSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        // Sort newest first
-        logs.sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-        setAuditLogs(logs);
+        const logsData = await safeFetch('/api/admin/audit-logs');
+        if (typeof logsData !== 'string') {
+          setAuditLogs(logsData.data || []);
+        }
       }
       
     } catch (error) {
       console.error('Dashboard fetchData error:', error);
-      handleFirestoreError(error, OperationType.GET, 'multiple');
-      alert('Erro ao carregar dados do painel: ' + (error as Error).message);
+      // We still log to console for debugging, but show a friendly message to user
+      const friendlyMsg = getFriendlyErrorMessage(error);
+      showToast('Erro ao carregar dados do painel: ' + translateError(friendlyMsg), 'error');
     } finally {
       setLoading(false);
+      setLoadingTable(false);
     }
   };
 
   const handleSyncData = async () => {
     setIsSyncing(true);
     try {
-      const token = await getAuthToken();
-      const res = await fetch('/api/admin/sync-data', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
+      await safeFetch('/api/admin/sync-data', {
+        method: 'POST'
       });
-      if (!res.ok) throw new Error('Erro ao sincronizar dados');
-      alert('Sistema sincronizado e otimizado com sucesso!');
+      showToast('Sistema sincronizado e otimizado com sucesso!', 'success');
       fetchData();
     } catch (error: any) {
-      alert(error.message);
+      showToast(getFriendlyErrorMessage(error), 'error');
     } finally {
       setIsSyncing(false);
     }
@@ -258,9 +294,9 @@ export default function AdminDashboard() {
     if (!slug) return;
     
     // Quick validation for slug
-    const cleanSlug = slug.toLowerCase().trim().replace(/\s+/g, '_').normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const cleanSlug = normalizeString(slug).replace(/\s+/g, '_');
     if (subscriptionPlans[cleanSlug]) {
-      alert('Este identificador já existe!');
+      showToast('Este identificador já existe!', 'warning');
       return;
     }
 
@@ -276,40 +312,6 @@ export default function AdminDashboard() {
       }
     });
   };
-
-  const filteredAndSortedPharmacies = useMemo(() => {
-    let result = pharmacies;
-    if (pharmacySearchTerm) {
-      const lowerSearch = pharmacySearchTerm.toLowerCase();
-      result = result.filter(p => 
-        p.name?.toLowerCase().includes(lowerSearch) || 
-        p.city?.toLowerCase().includes(lowerSearch) ||
-        p.state?.toLowerCase().includes(lowerSearch)
-      );
-    }
-
-    if (pharmacySortField) {
-      result = [...result].sort((a, b) => {
-        let valA: string | number = '';
-        let valB: string | number = '';
-        if (pharmacySortField === 'name') {
-          valA = a.name?.toLowerCase() || '';
-          valB = b.name?.toLowerCase() || '';
-        } else if (pharmacySortField === 'city') {
-          valA = a.city?.toLowerCase() || '';
-          valB = b.city?.toLowerCase() || '';
-        } else if (pharmacySortField === 'status') {
-          valA = a.is_active;
-          valB = b.is_active;
-        }
-
-        if (valA < valB) return pharmacySortOrder === 'asc' ? -1 : 1;
-        if (valA > valB) return pharmacySortOrder === 'asc' ? 1 : -1;
-        return 0;
-      });
-    }
-    return result;
-  }, [pharmacies, pharmacySearchTerm, pharmacySortField, pharmacySortOrder]);
 
   const togglePharmacySort = (field: 'name' | 'city' | 'status') => {
     if (pharmacySortField === field) {
@@ -389,7 +391,7 @@ export default function AdminDashboard() {
       setSubPayments(data || []);
     } catch (error) {
       console.error('Error fetching payments:', error);
-      alert('Erro ao carregar histórico de pagamentos');
+      showToast('Erro ao carregar histórico de pagamentos', 'error');
     } finally {
       setLoadingHistory(false);
     }
@@ -397,7 +399,11 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [pharmacyPage, pharmacySearchTerm, pharmacySortField, pharmacySortOrder]);
+
+  const totalPages = Math.ceil(totalPharmacies / PHARMACIES_PER_PAGE);
+
+  const filteredAndSortedPharmacies = pharmacies; // Now handled server-side mostly or already sorted in fetch
 
   const openNewShiftModal = () => {
     setEditingShiftId(null);
@@ -455,10 +461,11 @@ export default function AdminDashboard() {
         throw new Error('Erro na resposta do servidor: ' + result);
       }
       
+      showToast(editingShiftId ? 'Plantão atualizado com sucesso!' : 'Plantão cadastrado com sucesso!', 'success');
       setIsShiftModalOpen(false);
       fetchData();
     } catch (error: any) {
-      alert('Erro ao salvar plantão: ' + error.message);
+      showToast('Erro ao salvar plantão: ' + getFriendlyErrorMessage(error), 'error');
     }
   };
 
@@ -493,9 +500,10 @@ export default function AdminDashboard() {
       setIsDeleteConfirmOpen(false);
       setConfirmModalData(null);
       fetchData();
+      showToast(`Excluído com sucesso!`, 'success');
     } catch (error: any) {
       console.error(`Error deleting ${type}:`, error);
-      alert(`Erro ao excluir ${itemLabel}: ` + (error.message || 'Erro desconhecido'));
+      showToast(`Erro ao excluir ${itemLabel}: ` + getFriendlyErrorMessage(error), 'error');
     }
   };
 
@@ -505,70 +513,67 @@ export default function AdminDashboard() {
 
   const handleActivate = async (id: string) => {
     try {
-      const token = await getAuthToken();
-      await safeJsonFetch(`/api/admin/pharmacies/${id}/activate`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
+      await safeFetch(`/api/admin/pharmacies/${id}/activate`, {
+        method: 'POST'
       });
+      showToast('Farmácia ativada com sucesso!', 'success');
       fetchData();
     } catch (error: any) {
       console.error('Error activating', error);
-      alert(error.message || 'Erro ao ativar farmácia.');
+      showToast(getFriendlyErrorMessage(error) || 'Erro ao ativar farmácia.', 'error');
     }
   };
 
   const handleDeactivate = async (id: string) => {
     if (!window.confirm('Tem certeza que deseja desativar esta farmácia?')) return;
     try {
-      const token = await getAuthToken();
-      await safeJsonFetch(`/api/admin/pharmacies/${id}/deactivate`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
+      await safeFetch(`/api/admin/pharmacies/${id}/deactivate`, {
+        method: 'POST'
       });
+      showToast('Farmácia desativada com sucesso.', 'info');
       fetchData();
     } catch (error: any) {
       console.error('Error deactivating', error);
-      alert(error.message || 'Erro ao desativar farmácia.');
+      showToast(getFriendlyErrorMessage(error) || 'Erro ao desativar farmácia.', 'error');
     }
   };
 
   const handleDelete = async (id: string) => {
     if (!window.confirm('Tem certeza que deseja EXCLUIR esta farmácia permanentemente?')) return;
     try {
-      const token = await getAuthToken();
-      await safeJsonFetch(`/api/admin/pharmacies/${id}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
+      await safeFetch(`/api/admin/pharmacies/${id}`, {
+        method: 'DELETE'
       });
+      showToast('Farmácia excluída permanentemente.', 'warning');
       fetchData();
     } catch (error: any) {
       console.error('Error deleting', error);
-      alert(error.message || 'Erro ao excluir farmácia.');
+      showToast(getFriendlyErrorMessage(error) || 'Erro ao excluir farmácia.', 'error');
     }
   };
 
   const handleSetHighlight = async (id: string, type: 'day' | 'week' | 'month', city: string, state: string) => {
     try {
-      const pharm = pharmacies.find(p => p.id === id);
       const now = new Date();
       const end = calculateHighlightEnd(type);
 
-      await addDoc(collection(db, 'highlights'), {
-        pharmacy_id: id,
-        user_id: pharm?.user_id || '',
-        type,
-        date_start: now.toISOString(),
-        date_end: end.toISOString(),
-        city,
-        state,
-        created_at: now.toISOString(),
-        updated_at: now.toISOString()
+      await safeFetch('/api/admin/highlights', {
+        method: 'POST',
+        body: JSON.stringify({
+          pharmacy_id: id,
+          type,
+          date_start: now.toISOString(),
+          date_end: end.toISOString(),
+          city,
+          state
+        })
       });
 
-      alert('Destaque configurado com sucesso!');
+      showToast('Destaque configurado com sucesso!', 'success');
+      fetchData();
     } catch (error: any) {
-      handleFirestoreError(error, OperationType.CREATE, 'highlights');
-      alert(error.message);
+      console.error('Erro ao destacar:', error);
+      showToast(getFriendlyErrorMessage(error) || 'Erro ao ativar destaque.', 'error');
     }
   };
 
@@ -576,19 +581,13 @@ export default function AdminDashboard() {
     e.preventDefault();
     setSavingPlans(true);
     try {
-      const token = await getAuthToken();
-      const res = await fetch('/api/admin/subscription-plans', {
+      await safeFetch('/api/admin/subscription-plans', {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
         body: JSON.stringify(subscriptionPlans)
       });
-      if (!res.ok) throw new Error('Erro ao salvar planos');
-      alert('Planos de assinatura atualizados com sucesso!');
+      showToast('Planos de assinatura atualizados com sucesso!', 'success');
     } catch (error: any) {
-      alert(error.message);
+      showToast(getFriendlyErrorMessage(error), 'error');
     } finally {
       setSavingPlans(false);
     }
@@ -597,13 +596,8 @@ export default function AdminDashboard() {
   const handleSaveSub = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const token = await getAuthToken();
-      const res = await fetch(`/api/admin/subscriptions/${editingSub.id}`, {
+      await safeFetch(`/api/admin/subscriptions/${editingSub.id}`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
         body: JSON.stringify({
           status: subFormData.status,
           plan_type: subFormData.plan_type,
@@ -611,44 +605,38 @@ export default function AdminDashboard() {
           expires_at: subFormData.expires_at || null
         })
       });
-      if (!res.ok) throw new Error('Erro ao salvar assinatura');
       setIsSubModalOpen(false);
       fetchData();
-      alert('Assinatura atualizada com sucesso!');
+      showToast('Assinatura atualizada com sucesso!', 'success');
     } catch (error: any) {
-      alert(error.message);
+      showToast(getFriendlyErrorMessage(error), 'error');
     }
   };
 
   const handleDeactivateSub = async (id: string) => {
     if (!window.confirm('Tem certeza que deseja inativar (cancelar) esta assinatura? A farmácia perderá acesso se expirar.')) return;
     try {
-      const token = await getAuthToken();
-      await fetch(`/api/admin/subscriptions/${id}`, {
+      await safeFetch(`/api/admin/subscriptions/${id}`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
         body: JSON.stringify({ status: 'cancelled' })
       });
+      showToast('Assinatura inativada com sucesso.', 'info');
       fetchData();
     } catch (error: any) {
-      alert(error.message);
+      showToast(getFriendlyErrorMessage(error), 'error');
     }
   };
 
   const handleDeleteSub = async (id: string) => {
     if (!window.confirm('CUIDADO: Tem certeza que deseja excluir esta assinatura PERMANENTEMENTE? A farmácia será desativada do app.')) return;
     try {
-      const token = await getAuthToken();
-      await fetch(`/api/admin/subscriptions/${id}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
+      await safeFetch(`/api/admin/subscriptions/${id}`, {
+        method: 'DELETE'
       });
+      showToast('Assinatura excluída permanentemente.', 'warning');
       fetchData();
     } catch (error: any) {
-      alert(error.message);
+      showToast(getFriendlyErrorMessage(error), 'error');
     }
   };
 
@@ -663,12 +651,12 @@ export default function AdminDashboard() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify(config)
+        body: JSON.stringify({ mercadopago: config })
       });
       if (!res.ok) throw new Error('Erro ao salvar configurações');
-      alert('Configurações salvas com sucesso!');
+      showToast('Configurações salvas com sucesso!', 'success');
     } catch (error: any) {
-      alert(error.message);
+      showToast(getFriendlyErrorMessage(error), 'error');
     } finally {
       setSavingConfig(false);
     }
@@ -678,13 +666,19 @@ export default function AdminDashboard() {
     e.preventDefault();
     setSavingConfig(true);
     try {
-      await setDoc(doc(db, 'config', 'general'), {
-        ...generalConfig,
-        updated_at: new Date().toISOString()
-      }, { merge: true });
-      alert('Configurações gerais salvas com sucesso!');
+      const token = await getAuthToken();
+      const res = await fetch('/api/admin/config', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ general: generalConfig })
+      });
+      if (!res.ok) throw new Error('Erro ao salvar configurações gerais');
+      showToast('Configurações gerais salvas com sucesso!', 'success');
     } catch (error: any) {
-      alert(error.message);
+      showToast(getFriendlyErrorMessage(error), 'error');
     } finally {
       setSavingConfig(false);
     }
@@ -692,7 +686,7 @@ export default function AdminDashboard() {
 
   const handleTestMP = async () => {
     if (!config.access_token) {
-      alert('Por favor, insira o Access Token primeiro.');
+      showToast('Por favor, insira o Access Token primeiro.', 'warning');
       return;
     }
     setTestingMP(true);
@@ -714,11 +708,22 @@ export default function AdminDashboard() {
         setTestResult({ success: false, message: data.details || data.error || 'Erro desconhecido' });
       }
     } catch (error: any) {
-      setTestResult({ success: false, message: 'Falha na comunicação com o servidor: ' + error.message });
+      setTestResult({ success: false, message: 'Falha na comunicação com o servidor: ' + getFriendlyErrorMessage(error) });
     } finally {
       setTestingMP(false);
     }
   };
+
+  if (loading && !stats) {
+    return (
+      <div className="p-8 flex items-center justify-center min-h-[60vh]">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="w-12 h-12 text-emerald-600 animate-spin" />
+          <p className="text-gray-500 font-medium">Carregando painel administrativo...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-8">
@@ -750,24 +755,80 @@ export default function AdminDashboard() {
         </nav>
       </div>
 
+      {/* Stats Cards */}
+      {stats && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="p-2 bg-emerald-50 rounded-lg">
+                <ShieldCheck className="w-6 h-6 text-emerald-600" />
+              </div>
+              <h3 className="text-gray-500 text-sm font-medium">Farmácias Totais</h3>
+            </div>
+            <p className="text-2xl font-bold text-gray-900">{stats.totalPharmacies || 0}</p>
+          </div>
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="p-2 bg-blue-50 rounded-lg">
+                <CheckCircle2 className="w-6 h-6 text-blue-600" />
+              </div>
+              <h3 className="text-gray-500 text-sm font-medium">Ativas Agora</h3>
+            </div>
+            <p className="text-2xl font-bold text-gray-900">{stats.activePharmacies || 0}</p>
+          </div>
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="p-2 bg-amber-50 rounded-lg">
+                <DollarSign className="w-6 h-6 text-amber-600" />
+              </div>
+              <h3 className="text-gray-500 text-sm font-medium">Receita Bruta</h3>
+            </div>
+            <p className="text-2xl font-bold text-gray-900">R$ {(stats.totalRevenue || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+          </div>
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="p-2 bg-purple-50 rounded-lg">
+                <History className="w-6 h-6 text-purple-600" />
+              </div>
+              <h3 className="text-gray-500 text-sm font-medium">Última Atualização</h3>
+            </div>
+            <p className="text-sm font-medium text-gray-900">{stats.lastUpdate ? new Date(stats.lastUpdate).toLocaleString('pt-BR') : 'Agora'}</p>
+          </div>
+        </div>
+      )}
+
       {activeTab === 'pharmacies' && (
         <div className="space-y-4">
-          <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+          <div className="flex flex-col md:flex-row justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-200 gap-4">
             <div className="relative w-full max-w-sm">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
               <input
                 type="text"
-                placeholder="Buscar por nome ou cidade..."
+                placeholder="Buscar por nome, cidade ou e-mail..."
                 value={pharmacySearchTerm}
-                onChange={(e) => setPharmacySearchTerm(e.target.value)}
+                onChange={(e) => {
+                  setPharmacySearchTerm(e.target.value);
+                  setPharmacyPage(1); // Reset to first page on search
+                }}
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
               />
             </div>
-            <button onClick={openCreateModal} className="bg-emerald-600 text-white px-4 py-2 rounded-md font-medium hover:bg-emerald-700 flex items-center gap-2">
-              <Plus className="w-5 h-5" /> Nova Farmácia
-            </button>
+            <div className="flex items-center gap-3 w-full md:w-auto">
+              <button 
+                onClick={handleSyncData} 
+                disabled={isSyncing}
+                className="p-2 text-gray-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors border border-gray-200"
+                title="Recalcular métricas e sincronizar dados"
+              >
+                <RefreshCw className={`w-5 h-5 ${isSyncing ? 'animate-spin' : ''}`} />
+              </button>
+              <button onClick={openCreateModal} className="flex-1 md:flex-none bg-emerald-600 text-white px-4 py-2 rounded-md font-medium hover:bg-emerald-700 flex items-center justify-center gap-2">
+                <Plus className="w-5 h-5" /> Nova Farmácia
+              </button>
+            </div>
           </div>
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
@@ -809,7 +870,13 @@ export default function AdminDashboard() {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {filteredAndSortedPharmacies.map((pharmacy) => (
+              {loadingTable ? (
+                <tr>
+                  <td colSpan={5} className="px-6 py-4">
+                    <TableSkeleton rows={5} cols={5} />
+                  </td>
+                </tr>
+              ) : filteredAndSortedPharmacies.map((pharmacy) => (
                 <tr key={pharmacy.id}>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="text-sm font-medium text-gray-900">{pharmacy.name}</div>
@@ -880,7 +947,73 @@ export default function AdminDashboard() {
               ))}
             </tbody>
           </table>
-        </div>
+            
+            {/* Pagination Controls */}
+            <div className="bg-gray-50 px-6 py-4 flex items-center justify-between border-t border-gray-200">
+              <div className="flex-1 flex justify-between sm:hidden">
+                <button
+                  onClick={() => setPharmacyPage(Math.max(1, pharmacyPage - 1))}
+                  disabled={pharmacyPage === 1}
+                  className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+                >
+                  Anterior
+                </button>
+                <button
+                  onClick={() => setPharmacyPage(Math.min(totalPages, pharmacyPage + 1))}
+                  disabled={pharmacyPage === totalPages}
+                  className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+                >
+                  Próxima
+                </button>
+              </div>
+              <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm text-gray-700">
+                    Mostrando <span className="font-medium">{(pharmacyPage - 1) * PHARMACIES_PER_PAGE + 1}</span> até <span className="font-medium">{Math.min(pharmacyPage * PHARMACIES_PER_PAGE, totalPharmacies)}</span> de{' '}
+                    <span className="font-medium">{totalPharmacies}</span> farmácias
+                  </p>
+                </div>
+                <div>
+                  <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
+                    <button
+                      onClick={() => setPharmacyPage(Math.max(1, pharmacyPage - 1))}
+                      disabled={pharmacyPage === 1}
+                      className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      <span className="sr-only">Anterior</span>
+                      <ArrowUp className="w-5 h-5 -rotate-90" />
+                    </button>
+                    {[...Array(Math.min(5, totalPages))].map((_, i) => {
+                      let pageNum = pharmacyPage - 2 + i;
+                      if (pageNum <= 0) pageNum = i + 1;
+                      if (pageNum > totalPages) return null;
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => setPharmacyPage(pageNum)}
+                          className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
+                            pharmacyPage === pageNum
+                              ? 'z-10 bg-emerald-50 border-emerald-500 text-emerald-600'
+                              : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'
+                          }`}
+                        >
+                          {pageNum}
+                        </button>
+                      );
+                    })}
+                    <button
+                      onClick={() => setPharmacyPage(Math.min(totalPages, pharmacyPage + 1))}
+                      disabled={pharmacyPage === totalPages}
+                      className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      <span className="sr-only">Próxima</span>
+                      <ArrowDown className="w-5 h-5 -rotate-90" />
+                    </button>
+                  </nav>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -911,7 +1044,13 @@ export default function AdminDashboard() {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {adminShifts.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((shift) => {
+                  {loadingTable ? (
+                    <tr>
+                      <td colSpan={5} className="px-6 py-4">
+                        <TableSkeleton rows={5} cols={5} />
+                      </td>
+                    </tr>
+                  ) : adminShifts.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((shift) => {
                     const isPast = isShiftPast(shift.date);
                     return (
                       <tr key={shift.id} className={isPast ? 'bg-gray-50' : ''}>
@@ -976,7 +1115,13 @@ export default function AdminDashboard() {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {adminHighlights.map((high) => {
+                {loadingTable ? (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-4">
+                      <TableSkeleton rows={3} cols={6} />
+                    </td>
+                  </tr>
+                ) : adminHighlights.map((high) => {
                   const isExpired = new Date(high.date_end) < new Date();
                   return (
                     <tr key={high.id}>
@@ -1159,7 +1304,13 @@ export default function AdminDashboard() {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {filteredSubscribers.length === 0 ? (
+                  {loadingTable ? (
+                    <tr>
+                      <td colSpan={5} className="px-6 py-4">
+                        <TableSkeleton rows={5} cols={5} />
+                      </td>
+                    </tr>
+                  ) : filteredSubscribers.length === 0 ? (
                     <tr>
                       <td colSpan={5} className="px-6 py-8 text-center text-gray-500">
                         {subSearchTerm || subStatusFilter !== 'all' 
@@ -1740,7 +1891,13 @@ export default function AdminDashboard() {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {auditLogs.length === 0 ? (
+                  {loadingTable ? (
+                    <tr>
+                      <td colSpan={4} className="px-6 py-4">
+                        <TableSkeleton rows={5} cols={4} />
+                      </td>
+                    </tr>
+                  ) : auditLogs.length === 0 ? (
                      <tr>
                        <td colSpan={4} className="px-6 py-8 text-center text-gray-500">Nenhum registro de auditoria encontrado.</td>
                      </tr>

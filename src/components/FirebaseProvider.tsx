@@ -3,6 +3,7 @@ import { onAuthStateChanged, onIdTokenChanged, User } from 'firebase/auth';
 import { doc, getDocFromServer } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { handleFirestoreError, OperationType } from '../lib/firebaseError';
+import { syncWithServer } from '../lib/dateUtils';
 
 interface FirebaseContextType {
   user: User | null;
@@ -63,6 +64,7 @@ export function FirebaseProvider({ children }: Props) {
     };
 
     testConnection();
+    syncWithServer();
 
     // 2. Listen to Auth State and ID Token changes
     const unsubscribe = onIdTokenChanged(auth, async (currentUser) => {

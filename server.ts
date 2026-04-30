@@ -12,6 +12,8 @@ import { MercadoPagoConfig, Payment, Customer, PreApproval, PreApprovalPlan } fr
 import { addYears, addMonths, addDays } from 'date-fns';
 import crypto from 'crypto';
 import cron from 'node-cron';
+import { rateLimit } from 'express-rate-limit';
+import { z } from 'zod';
 import { emailService } from './emailService.ts';
 
 // Helper for next billing date calculation
@@ -76,8 +78,23 @@ interface SubscriptionData {
   user_id?: string;
 }
 
-const db = getFirestore(firebaseConfig.firestoreDatabaseId);
-const auth = getAuth();
+const db = getFirestore(admin.apps[0], firebaseConfig.firestoreDatabaseId);
+const auth = getAuth(admin.apps[0]);
+
+const normalize = (str: string) => str.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+
+// Haversine distance formula
+function getDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371; // Earth radius in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
 
 // --- Admin Audit Logger Helper ---
 async function logAdminAction(adminId: string, resourceType: string, resourceId: string, action: string, details?: any) {
@@ -194,47 +211,155 @@ async function cancelExistingSubscriptions(pharmacyId: string, exceptSubId?: str
   }
 }
 
-// Optimization: Global stats updater
-async function updateDashboardStats() {
-  const pharmaciesSnapshot = await db.collection('pharmacies').get();
-  const activeCount = pharmaciesSnapshot.docs.filter(d => d.data().is_active === 1).length;
-  
-  const paymentsSnapshot = await db.collection('payments').where('status', '==', 'approved').get();
-  const totalRevenue = paymentsSnapshot.docs.reduce((acc, doc) => acc + (doc.data().amount || 0), 0);
+// --- Dashboard Stats Aggregator ---
+let lastStatsUpdate = 0;
+const STATS_UPDATE_COOLDOWN = 5 * 60 * 1000; // 5 minute cache/throttle
 
-  // Stats by month
-  const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
-  const revenueByMonth = months.map((month, index) => {
-    const monthPayments = paymentsSnapshot.docs.filter(doc => {
-      const d = new Date(doc.data().created_at);
-      return d.getMonth() === index && d.getFullYear() === new Date().getFullYear();
+async function updateDashboardStats(force = false) {
+  const now = Date.now();
+  if (!force && lastStatsUpdate && (now - lastStatsUpdate < STATS_UPDATE_COOLDOWN)) {
+    console.log('[Stats] Skipping dashboard update (throttled)');
+    return; // Skip if updated recently
+  }
+  lastStatsUpdate = now;
+
+  try {
+    const pharmaCount = (await db.collection('pharmacies').count().get()).data().count;
+    const activePharmaCount = (await db.collection('pharmacies').where('is_active', 'in', [1, true]).count().get()).data().count;
+    
+    // Total Revenue using aggregation
+    const totalRevenueResult = await db.collection('payments')
+      .where('status', '==', 'approved')
+      .aggregate({
+        total: admin.firestore.AggregateField.sum('amount')
+      })
+      .get();
+    
+    const totalRevenue = totalRevenueResult.data().total || 0;
+
+    // stats by month - we can fetch just the payments for the current year to categorize by month
+    // This is still much better than fetching ALL payments ever made
+    const currentYear = new Date().getFullYear();
+    const startOfYear = new Date(currentYear, 0, 1).toISOString();
+    const yearPaymentsSnapshot = await db.collection('payments')
+      .where('status', '==', 'approved')
+      .where('created_at', '>=', startOfYear)
+      .select('amount', 'created_at')
+      .get();
+
+    const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    const revenueByMonth = months.map((month, index) => {
+      const monthPayments = yearPaymentsSnapshot.docs.filter(doc => {
+        const d = new Date(doc.data().created_at);
+        return d.getMonth() === index && d.getFullYear() === currentYear;
+      });
+      return {
+        name: month,
+        total: monthPayments.reduce((acc, doc) => acc + (doc.data().amount || 0), 0)
+      };
     });
-    return {
-      name: month,
-      total: monthPayments.reduce((acc, doc) => acc + (doc.data().amount || 0), 0)
-    };
-  });
 
-  await db.collection('config').doc('stats').set({
-    totalPharmacies: pharmaciesSnapshot.size,
-    activePharmacies: activeCount,
-    totalRevenue,
-    revenueByMonth,
-    pharmacyStatus: [
-      { name: 'Ativas', value: activeCount },
-      { name: 'Inativas', value: pharmaciesSnapshot.size - activeCount }
-    ],
-    lastUpdate: new Date().toISOString()
-  });
+    await db.collection('config').doc('stats').set({
+      totalPharmacies: pharmaCount,
+      activePharmacies: activePharmaCount,
+      totalRevenue,
+      revenueByMonth,
+      pharmacyStatus: [
+        { name: 'Ativas', value: activePharmaCount },
+        { name: 'Inativas', value: pharmaCount - activePharmaCount }
+      ],
+      lastUpdate: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error updating dashboard stats:', err);
+  }
 }
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  // Trust proxy for express-rate-limit behind Cloud Run
+  app.set('trust proxy', 1);
+
   app.use(cors());
   app.use(express.json());
 
+  // --- Rate Limiters ---
+  const publicLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // limit each IP to 100 requests per windowMs
+    message: 'Too many requests from this IP, please try again after 15 minutes',
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
+  const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 20, // stricter for auth
+    message: 'Too many authentication attempts, please try again later',
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
+  const webhookLimiter = rateLimit({
+    windowMs: 1 * 60 * 1000, // 1 minute
+    max: 30,
+    message: 'Too many webhook events',
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  // ---------------------
+
+  // --- Validation Middleware ---
+  const validate = (schema: z.ZodSchema) => (req: any, res: any, next: any) => {
+    try {
+      const result = schema.parse({
+        query: req.query,
+        params: req.params,
+        body: req.body
+      });
+      // Optionally replace with parsed data for type safety
+      // req.validatedData = result;
+      next();
+    } catch (err: any) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({
+          error: 'Dados inválidos',
+          details: err.issues.map(e => ({
+            field: e.path.join('.'),
+            message: e.message
+          }))
+        });
+      }
+      next(err);
+    }
+  };
+
+  // Schemas
+  const publicSearchSchema = z.object({
+    query: z.object({
+      city: z.string().optional(),
+      state: z.string().max(2).optional(),
+      name: z.string().optional(),
+      cep: z.string().regex(/^\d{5}-?\d{3}$|^\d{8}$/).optional().or(z.string().length(0).optional()),
+      lat: z.coerce.number().optional(),
+      lng: z.coerce.number().optional(),
+      page: z.coerce.number().int().min(1).default(1),
+      limit: z.coerce.number().int().min(1).max(100).default(50),
+    }).passthrough()
+  });
+
+  const onCallSchema = z.object({
+    query: z.object({
+      city: z.string().optional(),
+      state: z.string().max(2).optional(),
+      cep: z.string().optional(),
+      lat: z.coerce.number().optional(),
+      lng: z.coerce.number().optional(),
+    }).passthrough()
+  });
+  // ----------------------------
 
   // Auth Middleware
   const authenticateToken = async (req: any, res: any, next: any) => {
@@ -312,7 +437,7 @@ async function startServer() {
 
   // Rate limiting handled via Firestore 
   // Forgot Password
-  app.post('/api/auth/forgot-password', async (req, res) => {
+  app.post('/api/auth/forgot-password', authLimiter, async (req, res) => {
     const ip = req.ip || req.connection?.remoteAddress || 'unknown';
     const nowMs = Date.now();
     
@@ -383,7 +508,7 @@ async function startServer() {
   });
 
   // Reset Password
-  app.post('/api/auth/reset-password', async (req, res) => {
+  app.post('/api/auth/reset-password', authLimiter, async (req, res) => {
     const { token, password } = req.body;
     try {
       const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
@@ -420,7 +545,7 @@ async function startServer() {
 
 
   // Google OAuth Login/Register (Profile Sync)
-  app.post('/api/auth/google-sync', authenticateToken, async (req: any, res) => {
+  app.post('/api/auth/google-sync', authLimiter, authenticateToken, async (req: any, res) => {
     const { name } = req.body;
     try {
       const userDoc = await db.collection('users').doc(req.user.id).get();
@@ -428,7 +553,7 @@ async function startServer() {
       if (!userDoc.exists) {
         // Create new user profile
         // Role is securely validated and provided by the authenticateToken middleware
-        const role = req.user.role === 'admin' ? 'admin' : 'client';
+        const role = req.user.role;
         const now = new Date().toISOString();
         
         await db.collection('users').doc(req.user.id).set({
@@ -502,7 +627,7 @@ async function startServer() {
   });
 
   // Register Pharmacy
-  app.post('/api/auth/register', authenticateToken, async (req: any, res) => {
+  app.post('/api/auth/register', authLimiter, authenticateToken, async (req: any, res) => {
     const { pharmacyData } = req.body;
     
     try {
@@ -602,55 +727,148 @@ async function startServer() {
     updated_at: data.updated_at
   });
 
+  // Public: Sitemap
+  app.get('/sitemap.xml', publicLimiter, async (req, res) => {
+    try {
+      const snapshot = await db.collection('pharmacies').where('is_active', 'in', [1, true]).get();
+      const cities = new Set<string>();
+      
+      snapshot.docs.forEach((doc: any) => {
+        const data = doc.data();
+        if (data.city && data.state) {
+          const slug = `${data.state.toLowerCase()}/${data.city.toLowerCase().trim().replace(/\s+/g, '-')}`;
+          cities.add(slug);
+        }
+      });
+
+      const frontendUrl = process.env.VITE_APP_URL || 'https://farmaciasdeplantao.app.br';
+      let xml = '<?xml version="1.0" encoding="UTF-8"?>';
+      xml += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">';
+      
+      // Home
+      xml += `<url><loc>${frontendUrl}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>`;
+      // Main On-Call page
+      xml += `<url><loc>${frontendUrl}/plantao</loc><changefreq>hourly</changefreq><priority>0.9</priority></url>`;
+      
+      // Dynamic Cities
+      cities.forEach(slug => {
+        xml += `<url><loc>${frontendUrl}/plantao/${slug}</loc><changefreq>daily</changefreq><priority>0.8</priority></url>`;
+      });
+
+      xml += '</urlset>';
+
+      res.header('Content-Type', 'application/xml');
+      res.send(xml);
+    } catch (err) {
+      console.error('Sitemap error:', err);
+      res.status(500).end();
+    }
+  });
+
   // Public: Get Pharmacies by City/State
-  app.get('/api/public/pharmacies', async (req, res) => {
+  app.get('/api/public/pharmacies', publicLimiter, validate(publicSearchSchema), async (req, res) => {
     const city = ensureString(req.query.city);
     const state = ensureString(req.query.state);
     const name = ensureString(req.query.name);
     const cep = ensureString(req.query.cep);
+    const lat = req.query.lat ? Number(req.query.lat) : null;
+    const lng = req.query.lng ? Number(req.query.lng) : null;
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 50;
     
     try {
-      let pharmaciesQuery = db.collection('pharmacies').where('is_active', '==', 1);
+      let pharmaciesQuery: any = db.collection('pharmacies').where('is_active', 'in', [1, true]);
 
-      if (city && state) {
-        pharmaciesQuery = pharmaciesQuery.where('city', '==', city).where('state', '==', state);
+      // 1. Native Firestore Filters (reduces RUs and memory)
+      if (state) {
+        pharmaciesQuery = pharmaciesQuery.where('state', '==', state.toUpperCase());
       }
       
-      // Limit to 100 to prevent Denial of Wallet and OOM
-      pharmaciesQuery = pharmaciesQuery.limit(100);
+      // If city is provided and no coordinates, we can use it as a native filter
+      // Note: This requires an index (state, city) or (city)
+      if (city && lat === null && lng === null) {
+        pharmaciesQuery = pharmaciesQuery.where('city', '==', city);
+      }
       
-      const snapshot = await pharmaciesQuery.get();
+      const snapshot = await pharmaciesQuery.limit(2000).get();
       let pharmacies = snapshot.docs.map((doc: any) => sanitizePublicPharmacy(doc.id, doc.data()));
 
-      
-      if (name) {
-        pharmacies = pharmacies.filter((p: any) => 
-          p.name && p.name.toLowerCase().includes(name.toLowerCase())
-        );
-      }
-
-      if (cep) {
-        const cleanSearchCep = cep.replace(/\D/g, '').substring(0, 5);
+      // 2. Distance Filtering (Memory fallback for radius search)
+      if (lat !== null && lng !== null) {
         pharmacies = pharmacies.filter((p: any) => {
-          const pharmCep = (p.cep || p.zip || '').replace(/\D/g, '').substring(0, 5);
-          return pharmCep === cleanSearchCep;
+          const pLat = p.lat || p.latitude;
+          const pLng = p.lng || p.longitude;
+          if (pLat && pLng) {
+            const dist = getDistance(lat, lng, Number(pLat), Number(pLng));
+            (p as any).distance = dist;
+            return dist <= 20; // 20km radius
+          }
+          // If search has city, don't filter out pharmacies without coords
+          if (city) {
+            return normalize(p.city || '') === normalize(city);
+          }
+          return false;
+        }).sort((a, b) => {
+          // Sort by distance if both have it, otherwise distance-less at the end
+          if ((a as any).distance !== undefined && (b as any).distance !== undefined) {
+             return (a as any).distance - (b as any).distance;
+          }
+          if ((a as any).distance !== undefined) return -1;
+          if ((b as any).distance !== undefined) return 1;
+          return 0;
         });
       }
 
-      res.json(pharmacies);
+      // 3. Additional In-Memory Filters (Name search etc)
+      if (cep) {
+        const cleanSearchCep = cep.replace(/\D/g, '').substring(0, 5);
+        if (cleanSearchCep.length >= 2) { // Minimum 2 digits for prefix
+          pharmacies = pharmacies.filter((p: any) => {
+            const pharmCep = (p.cep || p.zip || '').replace(/\D/g, '').substring(0, 5);
+            return pharmCep.startsWith(cleanSearchCep) || cleanSearchCep.startsWith(pharmCep.substring(0, 5));
+          });
+        }
+      }
+
+      // 3. City Filtering
+      if (city && !(lat !== null && lng !== null)) {
+        pharmacies = pharmacies.filter((p: any) => normalize(p.city || '') === normalize(city));
+      }
+      
+      // 4. Name Filtering
+      if (name) {
+        pharmacies = pharmacies.filter((p: any) => 
+          normalize(p.name || '').includes(normalize(name))
+        );
+      }
+
+      const total = pharmacies.length;
+      const startIndex = (page - 1) * limit;
+      const paginatedData = pharmacies.slice(startIndex, startIndex + limit);
+
+      res.json({
+        data: paginatedData,
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit)
+        }
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
   // Public: Get On-Call Pharmacies (Plantões de Hoje)
-  app.get('/api/public/on-call', async (req, res) => {
+  app.get('/api/public/on-call', publicLimiter, validate(onCallSchema), async (req, res) => {
     const city = ensureString(req.query.city);
     const state = ensureString(req.query.state);
     const cep = ensureString(req.query.cep);
+    const lat = req.query.lat ? Number(req.query.lat) : null;
+    const lng = req.query.lng ? Number(req.query.lng) : null;
     
     try {
-      // Robust date generation for Brazil (YYYY-MM-DD)
       const today = new Intl.DateTimeFormat('sv-SE', {
         timeZone: 'America/Sao_Paulo',
         year: 'numeric',
@@ -658,58 +876,104 @@ async function startServer() {
         day: '2-digit'
       }).format(new Date());
       
-      console.log(`[API] On-call request: today=${today}, city=${city}, state=${state}, cep=${cep}`);
+      console.log(`[API] On-call request: today=${today}, city=${city}, state=${state}, cep=${cep}, lat=${lat}, lng=${lng}`);
 
-      // 1. Extract active shifts for today first
-      // We limit to 300 to prevent Denial of Wallet/OOM but it's a much more targeted limit than 100 random pharmacies
-      const shiftsSnapshot = await db.collection('shifts').where('date', '==', today).limit(300).get();
+      // 1. Fetch pharmacy IDs for the specific state first to filter early
+      let allowedPharmacyIds: string[] | null = null;
+      if (state) {
+        let pQuery: any = db.collection('pharmacies').where('state', '==', state.toUpperCase()).where('is_active', 'in', [1, true]);
+        const pSnapshot = await pQuery.select('city', 'lat', 'lng', 'latitude', 'longitude').get();
+        
+        let docs = pSnapshot.docs;
+        
+        // If we have coordinates, preferred filtering is by distance
+        if (lat !== null && lng !== null) {
+          docs = docs.filter(doc => {
+            const data = doc.data();
+            const pLat = data.lat || data.latitude;
+            const pLng = data.lng || data.longitude;
+            if (pLat && pLng) {
+               return getDistance(lat, lng, Number(pLat), Number(pLng)) <= 20;
+            }
+            // Fallback: If no coords but city matches, keep it
+            if (city) {
+              return normalize(data.city || '') === normalize(city);
+            }
+            return false;
+          });
+        } else if (city) {
+          // Optimization: Check for exact city match in firestore if possible
+          // But here we already have the state snapshot, so memory filtering is okay for now
+          // unless results are huge.
+          docs = docs.filter(doc => normalize(doc.data().city || '') === normalize(city));
+        }
+        
+        allowedPharmacyIds = docs.map(doc => doc.id);
+        
+        if (allowedPharmacyIds.length === 0) {
+          return res.json([]);
+        }
+      }
+
+      // 2. Extract active shifts for today
+      const shiftsSnapshot = await db.collection('shifts').where('date', '==', today).limit(500).get();
       
       if (shiftsSnapshot.empty) {
         return res.json([]);
       }
 
-      const pharmacyIds = [...new Set(shiftsSnapshot.docs.map(doc => doc.data().pharmacy_id))];
+      let pharmacyIds = [...new Set(shiftsSnapshot.docs.map(doc => (doc.data() as any).pharmacy_id))];
+      
+      if (allowedPharmacyIds) {
+        pharmacyIds = pharmacyIds.filter(id => allowedPharmacyIds!.includes(id));
+      }
 
-      // 2. Load the corresponding pharmacy documents
+      if (pharmacyIds.length === 0) {
+        return res.json([]);
+      }
+
+      // 3. Load the corresponding pharmacy documents (PARALLELIZED)
       const pharmaciesMap = new Map();
-      // Chunking for whereIn limit of 30
+      const chunks = [];
       for (let i = 0; i < pharmacyIds.length; i += 30) {
-        const chunk = pharmacyIds.slice(i, i + 30);
-        const pharmaciesSnapshot = await db.collection('pharmacies')
+        chunks.push(pharmacyIds.slice(i, i + 30));
+      }
+
+      await Promise.all(chunks.map(async (chunk) => {
+        const pharmacysSnapshot = await db.collection('pharmacies')
           .where(admin.firestore.FieldPath.documentId(), 'in', chunk)
-          .where('is_active', '==', 1)
+          .where('is_active', 'in', [1, true])
           .get();
         
-        pharmaciesSnapshot.docs.forEach(doc => {
+        pharmacysSnapshot.docs.forEach(doc => {
           pharmaciesMap.set(doc.id, doc.data());
         });
-      }
+      }));
 
       const onCallPharmacies = [];
       const cleanSearchCep = cep ? cep.replace(/\D/g, '').substring(0, 5) : null;
 
       for (const shiftDoc of shiftsSnapshot.docs) {
-        const shift = shiftDoc.data();
-        const pharmacy = pharmaciesMap.get(shift.pharmacy_id) as any;
+        const shift = shiftDoc.data() as any;
+        const pharmacy = pharmaciesMap.get(shift.pharmacy_id);
         
         if (pharmacy) {
-          // If we didn't filter by city/state in query (e.g. searching by name or CEP), filter here
-          if (city && state && !cep) { 
-             const pCity = pharmacy.city || '';
-             const pState = pharmacy.state || '';
-             if (pCity.toLowerCase() !== city.toLowerCase() || 
-                 pState.toLowerCase() !== state.toLowerCase()) {
-               continue;
-             }
-          }
-
-          if (cleanSearchCep) {
+          // If we have coords, we already filtered by distance in step 1 if state was provided.
+          // Otherwise, if we have CEP, we filter by prefix.
+          if (cleanSearchCep && lat === null) {
             const pharmCep = (pharmacy.cep || pharmacy.zip || '').replace(/\D/g, '').substring(0, 5);
-            if (pharmCep !== cleanSearchCep) continue;
+            if (!pharmCep.startsWith(cleanSearchCep) && !cleanSearchCep.startsWith(pharmCep.substring(0, 5))) {
+              continue;
+            }
           }
           
+          const sanitized = sanitizePublicPharmacy(shift.pharmacy_id, pharmacy);
+          if (lat !== null && lng !== null) {
+            (sanitized as any).distance = getDistance(lat, lng, Number(sanitized.lat), Number(sanitized.lng));
+          }
+
           onCallPharmacies.push({
-            ...sanitizePublicPharmacy(shift.pharmacy_id, pharmacy),
+            ...sanitized,
             shift: {
               start_time: shift.start_time,
               end_time: shift.end_time,
@@ -719,7 +983,12 @@ async function startServer() {
         }
       }
 
-      res.setHeader('Cache-Control', 'public, max-age=60'); // Cache for 1 minute
+      // Sort by distance if available
+      if (lat !== null && lng !== null) {
+        onCallPharmacies.sort((a, b) => ((a as any).distance || 0) - ((b as any).distance || 0));
+      }
+
+      res.setHeader('Cache-Control', 'public, max-age=60');
       res.json(onCallPharmacies);
     } catch (err: any) {
       console.error('[API Error] On-call fetch failure:', err);
@@ -728,56 +997,90 @@ async function startServer() {
   });
 
   // Public: Get Highlights
-  app.get('/api/public/highlights', async (req, res) => {
+  app.get('/api/public/highlights', publicLimiter, validate(publicSearchSchema), async (req, res) => {
     const city = ensureString(req.query.city);
     const state = ensureString(req.query.state);
     const cep = ensureString(req.query.cep);
     const now = new Date().toISOString();
     
     try {
-      const [highlightsSnapshot, pharmaciesSnapshot] = await Promise.all([
-        db.collection('highlights').where('date_start', '<=', now).get(),
-        db.collection('pharmacies').where('is_active', '==', 1).get()
-      ]);
+      // 1. Fetch highlights active now (Native filter by state/city if provided)
+      let highlightsQuery: any = db.collection('highlights').where('date_start', '<=', now);
+      if (state) {
+        highlightsQuery = highlightsQuery.where('state', '==', state.toUpperCase());
+      }
+      if (city && state) {
+        highlightsQuery = highlightsQuery.where('city', '==', city);
+      }
 
-      const pharmaciesMap = new Map(pharmaciesSnapshot.docs.map(doc => [doc.id, doc.data()]));
-      const highlights = highlightsSnapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }))
+      const highlightsSnapshot = await highlightsQuery.get();
+
+      let highlights = highlightsSnapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }))
         .filter((h: any) => h.date_end >= now);
       
-      const cleanSearchCep = cep ? cep.replace(/\D/g, '').substring(0, 5) : null;
+      if (highlights.length === 0) {
+        return res.json([]);
+      }
 
+      // 2. Fetch only the pharmacies referenced by highlights (PARALLELIZED)
+      const pharmacyIds = [...new Set(highlights.map(h => h.pharmacy_id))];
+      const pharmaciesMap = new Map();
+      
+      const chunks = [];
+      for (let i = 0; i < pharmacyIds.length; i += 30) {
+        chunks.push(pharmacyIds.slice(i, i + 30));
+      }
+
+      await Promise.all(chunks.map(async (chunk) => {
+        const pharmacysSnapshot = await db.collection('pharmacies')
+          .where(admin.firestore.FieldPath.documentId(), 'in', chunk)
+          .where('is_active', 'in', [1, true])
+          .get();
+        
+        pharmacysSnapshot.docs.forEach(doc => {
+          pharmaciesMap.set(doc.id, doc.data());
+        });
+      }));
+
+      const cleanSearchCep = cep ? cep.replace(/\D/g, '').substring(0, 5) : null;
       const result = [];
+
       for (const h of highlights) {
+        const p = pharmaciesMap.get(h.pharmacy_id);
+        if (!p) continue;
+
+        // Filtering by city/state
         if (city && state && !cep) {
-          if (h.city.toLowerCase() !== city.toLowerCase() || 
-              h.state.toLowerCase() !== state.toLowerCase()) {
+          if ((p.city || '').toLowerCase() !== city.toLowerCase() || 
+              (p.state || '').toLowerCase() !== state.toLowerCase()) {
             continue;
           }
         }
 
-        const p = pharmaciesMap.get(h.pharmacy_id);
-        
-        if (p) {
-          if (cleanSearchCep) {
-             const pharmCep = (p.cep || (p as any).zip || '').replace(/\D/g, '').substring(0, 5);
-             if (pharmCep !== cleanSearchCep) continue;
-          }
-
-          result.push({ 
-            ...h, 
-            pharmacy: sanitizePublicPharmacy(h.pharmacy_id, p)
-          });
+        if (cleanSearchCep) {
+           const pharmCep = (p.cep || p.zip || '').replace(/\D/g, '').substring(0, 5);
+           if (pharmCep !== cleanSearchCep) continue;
         }
+
+        const sanitizedPharmacy = sanitizePublicPharmacy(h.pharmacy_id, p);
+        
+        result.push({
+          id: h.id,
+          date_start: h.date_start,
+          date_end: h.date_end,
+          ...sanitizedPharmacy
+        });
       }
 
       res.json(result);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API Error] Highlights fetch failure:', err);
+      res.status(500).json({ error: err.message || 'Internal Server Error' });
     }
   });
 
   // Public: Register Click
-  app.post('/api/public/pharmacies/:id/click', async (req, res) => {
+  app.post('/api/public/pharmacies/:id/click', publicLimiter, async (req, res) => {
     const { id } = req.params;
     const { type } = req.body; // 'whatsapp' or 'map'
     
@@ -839,8 +1142,25 @@ async function startServer() {
     }
   });
 
+  // Public: Get Server Time (for on-call sync)
+  app.get('/api/status/time', (req, res) => {
+    const now = new Date();
+    const serverDate = new Intl.DateTimeFormat('sv-SE', {
+      timeZone: 'America/Sao_Paulo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(now);
+    
+    res.json({
+      date: serverDate,
+      timestamp: now.toISOString(),
+      timezone: 'America/Sao_Paulo'
+    });
+  });
+
   // Public: Get Mercado Pago Config (Public Key)
-  app.get('/api/public/mercadopago-config', async (req, res) => {
+  app.get('/api/public/mercadopago-config', publicLimiter, async (req, res) => {
     try {
       const configDoc = await db.collection('config').doc('mercadopago').get();
       const config = configDoc.data();
@@ -853,7 +1173,7 @@ async function startServer() {
   });
 
   // Public: Get Subscription Plans
-  app.get('/api/public/subscription-plans', async (req, res) => {
+  app.get('/api/public/subscription-plans', publicLimiter, async (req, res) => {
     try {
       const plansDoc = await db.collection('config').doc('subscription_plans').get();
       if (!plansDoc.exists) {
@@ -941,28 +1261,49 @@ async function startServer() {
       if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
       
       const pharmacyId = pharmacySnapshot.docs[0].id;
-      const paymentsSnapshot = await db.collection('payments').where('pharmacy_id', '==', pharmacyId).get();
+      
+      // Filter: Show all payments but limit for safety or performance if needed. 
+      // For now, let's just make it a standard fetch but we could add pagination if it grows too large.
+      const paymentsSnapshot = await db.collection('payments')
+        .where('pharmacy_id', '==', pharmacyId)
+        .orderBy('created_at', 'desc')
+        .limit(100) // Show last 100 payments
+        .get();
+        
       const payments = paymentsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       res.json(payments);
     } catch (err: any) {
+      console.error('Pharmacy payments error:', err);
       res.status(500).json({ error: err.message });
     }
   });
 
   // Pharmacy: Get Reports
   app.get('/api/pharmacy/reports', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'pharmacy' && req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
     
     try {
       const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
       if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
       
       const pharmacyId = pharmacySnapshot.docs[0].id;
-      const clicksSnapshot = await db.collection('clicks').where('pharmacy_id', '==', pharmacyId).get();
+
+      // Filter temporal padrão: Últimos 30 dias
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      const startDate = thirtyDaysAgo.toISOString();
+
+      const clicksSnapshot = await db.collection('clicks')
+        .where('pharmacy_id', '==', pharmacyId)
+        .where('created_at', '>=', startDate)
+        .orderBy('created_at', 'desc')
+        .limit(2000)
+        .get();
+        
       const clicks = clicksSnapshot.docs.map(doc => doc.data());
       
-      // Aggregate clicks by day for the last 30 days
-      const last30Days = [...Array(30)].map((_, i) => {
+      // Aggregate clicks by day
+      const last30Days = [...Array(31)].map((_, i) => {
         const d = new Date();
         d.setDate(d.getDate() - i);
         return d.toISOString().split('T')[0];
@@ -979,6 +1320,47 @@ async function startServer() {
 
       res.json({ dailyClicks });
     } catch (err: any) {
+      console.error('Pharmacy reports error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/pharmacy/audit-logs', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'pharmacy' && req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    
+    const page = Number(req.query.page) || 1;
+    const pageSize = Number(req.query.limit) || 20;
+
+    try {
+      // First find the pharmacy ID for this user
+      const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
+      if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
+      const pharmacyId = pharmacySnapshot.docs[0].id;
+
+      // Fetch logs related to this pharmacy resource
+      const snapshot = await db.collection('audit_logs')
+        .where('resource_type', '==', 'pharmacy')
+        .where('resource_id', '==', pharmacyId)
+        .orderBy('timestamp', 'desc')
+        .limit(pageSize * 10) // Reasonable limit for paginated view
+        .get();
+
+      const logs = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
+      const total = logs.length;
+      const paginatedLogs = logs.slice((page - 1) * pageSize, page * pageSize);
+
+      res.json({
+        data: paginatedLogs,
+        total,
+        page,
+        limit: pageSize
+      });
+    } catch (err: any) {
+      console.error('Pharmacy audit logs error:', err);
       res.status(500).json({ error: err.message });
     }
   });
@@ -992,10 +1374,23 @@ async function startServer() {
       if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
       
       const pharmacyId = pharmacySnapshot.docs[0].id;
-      const shiftsSnapshot = await db.collection('shifts').where('pharmacy_id', '==', pharmacyId).get();
+      
+      // Filter: Show shifts from the last 30 days and all future shifts
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      const startDate = thirtyDaysAgo.toISOString().split('T')[0];
+
+      const shiftsSnapshot = await db.collection('shifts')
+        .where('pharmacy_id', '==', pharmacyId)
+        .where('date', '>=', startDate)
+        .orderBy('date', 'desc')
+        .limit(500)
+        .get();
+        
       const shifts = shiftsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       res.json(shifts);
     } catch (err: any) {
+      console.error('Pharmacy shifts error:', err);
       res.status(500).json({ error: err.message });
     }
   });
@@ -1623,7 +2018,7 @@ async function startServer() {
   });
 
   // Webhook: Receive Mercado Pago Notifications
-  app.post('/webhooks', express.json(), async (req, res) => {
+  app.post('/webhooks', webhookLimiter, express.json(), async (req, res) => {
     // 1. Signature Validation (Security)
     const xSignature = req.headers['x-signature'] as string;
     const xRequestId = req.headers['x-request-id'] as string;
@@ -2017,18 +2412,88 @@ async function startServer() {
     }
   });
 
-  // Admin: Get all pharmacies
+  // Admin: Get Dashboard Stats
+  // Admin: Get Dashboard Stats
+  app.get('/api/admin/stats', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    try {
+      const statsDoc = await db.collection('config').doc('stats').get();
+      let data = statsDoc.data();
+      
+      // Forçar atualização se não existir ou estiver muito antigo (ex: 1 hora)
+      const oneHourAgo = new Date(Date.now() - 3600000).toISOString();
+      if (!data || !data.lastUpdate || data.lastUpdate < oneHourAgo) {
+        await updateDashboardStats();
+        const updatedDoc = await db.collection('config').doc('stats').get();
+        data = updatedDoc.data();
+      }
+      
+      res.json(data);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Get all pharmacies (PAGINAÇÃO NATIVA QUANDO POSSÍVEL)
   app.get('/api/admin/pharmacies', authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
     
+    const page = Number(req.query.page) || 1;
+    const limitNum = Number(req.query.limit) || 20;
+    const search = ensureString(req.query.search);
+    const sortBy = ensureString(req.query.sortBy) || 'created_at';
+    const sortOrder = ensureString(req.query.sortOrder) === 'asc' ? 'asc' : 'desc';
+    
     try {
-      const pharmaciesSnapshot = await db.collection('pharmacies').get();
-      const result = pharmaciesSnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      res.json(result);
+      let result = [];
+      let total = 0;
+
+      if (!search) {
+        // 1. Paginação Nativa (Sem busca) - Muito mais performante
+        total = (await db.collection('pharmacies').count().get()).data().count;
+        const pQuery = db.collection('pharmacies')
+          .orderBy(sortBy === 'name' ? 'name' : sortBy, sortOrder)
+          .offset((page - 1) * limitNum)
+          .limit(limitNum);
+          
+        const snapshot = await pQuery.get();
+        result = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      } else {
+        // 2. Busca em Memória (Com busca) - Firestore não suporta busca textual nativa eficiente
+        // Limitamos a busca aos primeiros 1000 para evitar estouro de memória/cota
+        const normSearch = normalize(search);
+        const snapshot = await db.collection('pharmacies').limit(2000).get();
+        let allPharma = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        
+        result = allPharma.filter((p: any) => 
+          normalize(p.name || '').includes(normSearch) ||
+          normalize(p.city || '').includes(normSearch) ||
+          normalize(p.email || '').includes(normSearch) ||
+          normalize(p.user_email || '').includes(normSearch)
+        );
+        
+        total = result.length;
+        
+        // Ordenação manual para o resultado filtrado
+        result.sort((a: any, b: any) => {
+          const valA = a[sortBy] || '';
+          const valB = b[sortBy] || '';
+          if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
+          if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
+          return 0;
+        });
+        
+        result = result.slice((page - 1) * limitNum, page * limitNum);
+      }
+
+      res.json({
+        data: result,
+        total,
+        page,
+        limit: limitNum
+      });
     } catch (err: any) {
+      console.error('Admin pharmacies query error:', err);
       res.status(500).json({ error: err.message });
     }
   });
@@ -2040,6 +2505,7 @@ async function startServer() {
       const snapshot = await db.collection('payments')
         .where('pharmacy_id', '==', req.params.id)
         .orderBy('created_at', 'desc')
+        .limit(200) // Limite de segurança
         .get();
       
       const payments = snapshot.docs.map(doc => ({
@@ -2206,7 +2672,7 @@ async function startServer() {
   });
 
   // Admin: Update Pharmacy
-  app.put('/api/admin/pharmacies/:id', authenticateToken, async (req: any, res) => {
+  app.put('/api/admin/pharmacies/:id', authLimiter, authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
     const { id } = req.params;
     const { email, password, name, phone, whatsapp, street, number, neighborhood, city, state, cep } = req.body;
@@ -2219,7 +2685,7 @@ async function startServer() {
       const pharmacyData = pharmacyDoc.data()!;
       let currentUserId = pharmacyData.user_id;
 
-      // Update Auth User if email or password provided
+      // 1. Handle Auth updates FIRST
       if (email || password) {
         try {
           const updateData: any = {};
@@ -2229,61 +2695,48 @@ async function startServer() {
           if (currentUserId && !currentUserId.startsWith('dummy_')) {
             await auth.updateUser(currentUserId, updateData);
           } else if (email && password) {
-            // Create real user if it was a dummy
+            // Upgrade dummy to real user
             const userRecord = await auth.createUser({ email, password });
-            const now = new Date().toISOString();
             currentUserId = userRecord.uid;
+            
+            // Create user document immediately
+            const now = new Date().toISOString();
             await db.collection('users').doc(currentUserId).set({
               email,
               role: 'pharmacy',
               created_at: now,
               updated_at: now
             });
-            await db.collection('pharmacies').doc(id).update({ 
-              user_id: currentUserId,
-              updated_at: now
-            });
+            
+            // Note: we update currentUserId here so it's used in the pharmacy update below
           }
         } catch (authError: any) {
-          if (authError.code === 'auth/email-already-exists') {
-            // Re-link to the existing user instead of failing
-            const existingUser = await auth.getUserByEmail(email);
-            currentUserId = existingUser.uid;
-            if (password) {
-              try {
-                await auth.updateUser(currentUserId, { password });
-              } catch (pwdErr) {
-                // ignore
-              }
-            }
-            await db.collection('pharmacies').doc(id).update({ 
-              user_id: currentUserId,
-              updated_at: new Date().toISOString()
-            });
-            // Update email in users collection as well implicitly since they own it
-          } else {
-            console.error('Error updating Auth user:', authError);
-            // Continue updating Firestore even if Auth fails (for non-critical errors)
-          }
+          console.error('Auth update failed:', authError);
+          // If email exists, we might want to link it, but let's be strict for atomicity
+          // unless it's the 'email-already-exists' which we handle specifically if needed
+          return res.status(400).json({ 
+            error: 'Falha na atualização de autenticação', 
+            details: authError.message 
+          });
         }
       }
 
+      // 2. If Auth succeeded (or wasn't needed), update Firestore
+      const now = new Date().toISOString();
       const updatedData: any = {
         name, phone, whatsapp, street, number, neighborhood, city, state, cep,
-        updated_at: new Date().toISOString()
+        user_id: currentUserId,
+        updated_at: now
       };
       if (email) updatedData.email = email;
       
       await db.collection('pharmacies').doc(id).update(updatedData);
       
-      // Also update user doc if exists
+      // 3. Sync User Doc
       if (currentUserId && !currentUserId.startsWith('dummy_')) {
-        const userUpdate: any = { updated_at: new Date().toISOString() };
+        const userUpdate: any = { updated_at: now };
         if (email) userUpdate.email = email;
         if (cep) userUpdate.cep = cep;
-        if (street) userUpdate.street = street;
-        if (number) userUpdate.number = number;
-        if (neighborhood) userUpdate.neighborhood = neighborhood;
         if (city) userUpdate.city = city;
         if (state) userUpdate.state = state;
         
@@ -2293,8 +2746,10 @@ async function startServer() {
       await logAdminAction(req.user.id, 'pharmacy', id, 'update', { 
         updated_fields: Object.keys(updatedData)
       });
+      
       res.json({ id, ...pharmacyData, ...updatedData });
     } catch (err: any) {
+      console.error('Admin update failure:', err);
       res.status(500).json({ error: err.message });
     }
   });
@@ -2379,16 +2834,34 @@ async function startServer() {
     }
   });
 
-  // Admin: Get All Shifts
+  // Admin: Get All Shifts (PAGINATED)
   app.get('/api/admin/shifts', authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    
+    const limitDays = Number(req.query.days) || 30; // Default to last 30 days of shifts
+    const today = new Date();
+    const pastDate = new Date();
+    pastDate.setDate(today.getDate() - limitDays);
+    
     try {
-      const [shiftsSnapshot, pharmaciesSnapshot] = await Promise.all([
-        db.collection('shifts').get(),
-        db.collection('pharmacies').get()
-      ]);
+      // In a real app, pagination is key. Here we'll limit by date range to keep it manageable.
+      const shiftsSnapshot = await db.collection('shifts')
+        .where('date', '>=', pastDate.toISOString().split('T')[0])
+        .orderBy('date', 'desc')
+        .limit(1000)
+        .get();
 
-      const pharmaciesMap = new Map(pharmaciesSnapshot.docs.map(doc => [doc.id, doc.data()]));
+      // We only fetch pharmacies that are in these shifts to save reads
+      const pharmacyIds = [...new Set(shiftsSnapshot.docs.map(d => d.data().pharmacy_id))];
+      const pharmaciesMap = new Map();
+      
+      // Fetch pharmacies in chunks of 30
+      for (let i = 0; i < pharmacyIds.length; i += 30) {
+        const chunk = pharmacyIds.slice(i, i + 30);
+        const pSnap = await db.collection('pharmacies').where(admin.firestore.FieldPath.documentId(), 'in', chunk).get();
+        pSnap.forEach(doc => pharmaciesMap.set(doc.id, doc.data()));
+      }
+
       const shifts = shiftsSnapshot.docs.map(sDoc => {
         const s = sDoc.data();
         const pharmacy = pharmaciesMap.get(s.pharmacy_id);
@@ -2528,6 +3001,40 @@ async function startServer() {
   });
 
   // Admin: Set Highlight
+  // Admin: Get Highlights (with pharmacy names)
+  app.get('/api/admin/highlights', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    try {
+      const snapshot = await db.collection('highlights').orderBy('created_at', 'desc').limit(200).get();
+      
+      // Pegar todos os pharmacy_ids únicos para buscar nomes em lote
+      const pharmacyIds = [...new Set(snapshot.docs.map(doc => doc.data().pharmacy_id))];
+      const pharmaciesMap = new Map();
+      
+      if (pharmacyIds.length > 0) {
+        // Fracionar em chunks de 30 para evitar limites do Firestore 'in'
+        for (let i = 0; i < pharmacyIds.length; i += 30) {
+          const chunk = pharmacyIds.slice(i, i + 30);
+          const pSnap = await db.collection('pharmacies').where(admin.firestore.FieldPath.documentId(), 'in', chunk).get();
+          pSnap.forEach(doc => pharmaciesMap.set(doc.id, doc.data().name));
+        }
+      }
+
+      const highlights = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          pharmacy_name: pharmaciesMap.get(data.pharmacy_id) || 'ID: ' + data.pharmacy_id
+        };
+      });
+
+      res.json(highlights);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.post('/api/admin/highlights', authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
     const { pharmacy_id, type, date_start, date_end, city, state } = req.body;
@@ -2565,12 +3072,19 @@ async function startServer() {
     }
   });
 
-  // Admin: Get Config
+  // Admin: Get Config (MercadoPago + General)
   app.get('/api/admin/config', authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
     try {
-      const configDoc = await db.collection('config').doc('mercadopago').get();
-      res.json(configDoc.data() || {});
+      const [mpDoc, genDoc] = await Promise.all([
+        db.collection('config').doc('mercadopago').get(),
+        db.collection('config').doc('general').get()
+      ]);
+      
+      res.json({
+        mercadopago: mpDoc.data() || {},
+        general: genDoc.data() || {}
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -2580,13 +3094,26 @@ async function startServer() {
   app.post('/api/admin/config', authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
     try {
-      const { public_key, access_token } = req.body;
+      const { mercadopago, general } = req.body;
       const now = new Date().toISOString();
-      await db.collection('config').doc('mercadopago').set({
-        public_key,
-        access_token,
-        updated_at: now
-      });
+      
+      const batch = db.batch();
+      
+      if (mercadopago) {
+        batch.set(db.collection('config').doc('mercadopago'), {
+          ...mercadopago,
+          updated_at: now
+        }, { merge: true });
+      }
+      
+      if (general) {
+        batch.set(db.collection('config').doc('general'), {
+          ...general,
+          updated_at: now
+        }, { merge: true });
+      }
+
+      await batch.commit();
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -2594,6 +3121,33 @@ async function startServer() {
   });
 
   // Admin: Get Subscription Plans
+  // Admin: Get Audit Logs
+  app.get('/api/admin/audit-logs', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    const limitDays = Number(req.query.days) || 7;
+    const page = Number(req.query.page) || 1;
+    const pageSize = Number(req.query.limit) || 50;
+
+    try {
+      const snapshot = await db.collection('audit_logs')
+        .orderBy('timestamp', 'desc')
+        .limit(pageSize * 10) // Limit to keep it reasonable
+        .get();
+
+      const logs = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
+      res.json({
+        data: logs.slice((page - 1) * pageSize, page * pageSize),
+        total: logs.length
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get('/api/admin/subscription-plans', authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
     try {
@@ -2610,15 +3164,25 @@ async function startServer() {
     }
   });
 
-  // Admin: Get Subscriptions (Subscribers)
+  // Admin: Get Subscriptions (Subscribers - PAGINATED)
   app.get('/api/admin/subscriptions', authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
     try {
-      const subsSnapshot = await db.collection('subscriptions').get();
-      const pharmaciesSnapshot = await db.collection('pharmacies').get();
+      const subsSnapshot = await db.collection('subscriptions').orderBy('created_at', 'desc').limit(1000).get();
       
+      // Optimization: Instead of fetching ALL pharmacies, fetch only those needed (PARALLELIZED)
+      const pharmacyIds = [...new Set(subsSnapshot.docs.map(d => d.data().pharmacy_id))];
       const pharmMap = new Map();
-      pharmaciesSnapshot.forEach(doc => pharmMap.set(doc.id, doc.data()));
+      
+      const chunks = [];
+      for (let i = 0; i < pharmacyIds.length; i += 30) {
+        chunks.push(pharmacyIds.slice(i, i + 30));
+      }
+
+      await Promise.all(chunks.map(async (chunk) => {
+        const pSnap = await db.collection('pharmacies').where(admin.firestore.FieldPath.documentId(), 'in', chunk).get();
+        pSnap.forEach(doc => pharmMap.set(doc.id, doc.data()));
+      }));
 
       const subs = subsSnapshot.docs.map(doc => {
         const data = doc.data();

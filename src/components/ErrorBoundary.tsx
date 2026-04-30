@@ -57,7 +57,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
               </div>
               <h1 className="text-2xl font-bold text-gray-900 mb-2">Sem Conexão</h1>
               <p className="text-gray-600 mb-6">
-                Não foi possível conectar ao banco de dados. Verifique sua conexão com a internet ou a configuração do Firebase.
+                {firestoreErrorInfo?.userMessage || "Não foi possível conectar ao banco de dados. Verifique sua conexão com a internet ou a configuração do Firebase."}
               </p>
               <button 
                 onClick={() => window.location.reload()}
@@ -79,7 +79,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
               </div>
               <h1 className="text-2xl font-bold text-gray-900 mb-2">Acesso Negado</h1>
               <p className="text-gray-600 mb-6">
-                Você não tem permissão para acessar ou modificar estes dados.
+                {firestoreErrorInfo?.userMessage || "Você não tem permissão para acessar ou modificar estes dados."}
               </p>
               {firestoreErrorInfo && (
                 <div className="text-left bg-gray-100 p-3 rounded text-xs text-gray-500 overflow-auto mb-6">

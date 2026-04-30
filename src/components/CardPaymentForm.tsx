@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { CreditCard, Shield, Lock, AlertCircle, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { safeJsonFetch } from '../lib/api';
 
 interface CardPaymentFormProps {
   amount: number;
@@ -29,8 +30,7 @@ export default function CardPaymentForm({ amount, onSuccess, loading: externalLo
   useEffect(() => {
     const initMP = async () => {
       try {
-        const res = await fetch('/api/public/mercadopago-config');
-        const data = await res.json();
+        const data = await safeJsonFetch('/api/public/mercadopago-config');
         const publicKey = data.public_key;
         
         if (window.MercadoPago && publicKey) {

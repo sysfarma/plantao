@@ -3,12 +3,14 @@ import { Outlet, Link, useNavigate } from 'react-router-dom';
 import { Pill, Menu, X, Home, User, LogOut, Clock, Download, CreditCard, Calendar, Share2 } from 'lucide-react';
 import MobileBottomNav from '../components/MobileBottomNav';
 import { usePWA } from '../hooks/usePWA';
+import { useToast } from '../components/Toast';
 
 export default function PublicLayout() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [user, setUser] = useState<any>(null);
   const navigate = useNavigate();
   const { canInstall, promptInstall } = usePWA();
+  const { showToast } = useToast();
 
   useEffect(() => {
     const userStr = localStorage.getItem('user');
@@ -39,7 +41,7 @@ export default function PublicLayout() {
         await navigator.share(shareData);
       } else {
         await navigator.clipboard.writeText(shareData.url);
-        alert('Link do aplicativo copiado!');
+        showToast('Link do aplicativo copiado!', 'success');
       }
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {

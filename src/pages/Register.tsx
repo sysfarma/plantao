@@ -7,9 +7,12 @@ import { auth, db } from '../lib/firebase';
 import GoogleLoginButton from '../components/GoogleLoginButton';
 import { geocodeAddress } from '../lib/geocoding';
 import { handleFirestoreError, OperationType } from '../lib/firebaseError';
+import { useToast } from '../components/Toast';
+import { translateError } from '../lib/errorTranslations';
 
 export default function Register() {
   const [searchParams] = useSearchParams();
+  const { showToast } = useToast();
   const initialRole = searchParams.get('role') as 'pharmacy' | 'client' || 'pharmacy';
   const [role, setRole] = useState<'pharmacy' | 'client'>(initialRole);
 
@@ -47,11 +50,11 @@ export default function Register() {
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
     setLoading(true);
 
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+      showToast('Cadastro realizado com sucesso!', 'success');
       const user = userCredential.user;
 
       const now = new Date().toISOString();
@@ -109,13 +112,13 @@ export default function Register() {
 
       navigate('/login');
     } catch (err: any) {
-      if (err.code === 'auth/email-already-in-use') {
-        setError('Este e-mail já está em uso.');
-      } else if (err.code === 'auth/weak-password') {
-        setError('A senha deve ter pelo menos 6 caracteres.');
-      } else {
-        handleFirestoreError(err, OperationType.WRITE, 'users/pharmacies/subscriptions');
-        setError(err.message || 'Erro ao cadastrar');
+      console.error('Register error:', err);
+      showToast(translateError(err), 'error');
+      // Still log to firestore for debugging internal permission issues if it's a write error
+      if (!err.code?.includes('auth/')) {
+        try {
+          handleFirestoreError(err, OperationType.WRITE, 'users/pharmacies/subscriptions');
+        } catch(e) {}
       }
     } finally {
       setLoading(false);
@@ -204,12 +207,6 @@ export default function Register() {
         </div>
         
         <form className="mt-6 space-y-6" onSubmit={handleRegister}>
-          {error && (
-            <div className="bg-red-50 text-red-700 p-3 rounded-md text-sm">
-              {error}
-            </div>
-          )}
-
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Account Info */}
             <div className="md:col-span-2">

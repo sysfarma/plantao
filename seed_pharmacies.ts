@@ -1,10 +1,16 @@
-import { initializeApp } from 'firebase/app';
-import { getFirestore, doc, setDoc, collection, addDoc, writeBatch } from 'firebase/firestore';
+import admin from 'firebase-admin';
+import { getFirestore } from 'firebase-admin/firestore';
 import fs from 'fs';
 
 const config = JSON.parse(fs.readFileSync('firebase-applet-config.json', 'utf-8'));
-const app = initializeApp(config);
-const db = getFirestore(app, config.firestoreDatabaseId);
+
+if (!admin.apps.length) {
+  admin.initializeApp({
+    projectId: config.projectId,
+  });
+}
+
+const db = getFirestore(admin.apps[0], config.firestoreDatabaseId);
 
 const pharmacies = [
     {
@@ -300,11 +306,11 @@ const pharmacies = [
 
 async function seed() {
   try {
-    const batch = writeBatch(db);
+    const batch = db.batch();
     
     for (const p of pharmacies) {
       // 1. Create user document
-      const userRef = doc(db, 'users', p.user_id);
+      const userRef = db.collection('users').doc(p.user_id);
       batch.set(userRef, {
         email: p.email,
         role: 'pharmacy',
@@ -312,7 +318,7 @@ async function seed() {
       });
       
       // 2. Create pharmacy document
-      const pharmacyRef = doc(db, 'pharmacies', p.id);
+      const pharmacyRef = db.collection('pharmacies').doc(p.id);
       batch.set(pharmacyRef, {
         user_id: p.user_id,
         name: p.name,
@@ -331,7 +337,7 @@ async function seed() {
       });
       
       // 3. Create active subscription
-      const subRef = doc(collection(db, 'subscriptions'));
+      const subRef = db.collection('subscriptions').doc();
       batch.set(subRef, {
         pharmacy_id: p.id,
         status: 'active',

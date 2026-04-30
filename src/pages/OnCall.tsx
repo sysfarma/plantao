@@ -1,12 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { Search, MapPin, Phone, MessageCircle, Clock, Navigation } from 'lucide-react';
 import { safeJsonFetch } from '../lib/api';
-import { handleFirestoreError, OperationType } from '../lib/firebaseError';
-import { collection, query, where, getDocs, doc, getDoc, addDoc, onSnapshot, writeBatch, increment } from 'firebase/firestore';
-import { useSearchParams } from 'react-router-dom';
-import { db } from '../lib/firebase';
-import { getCachedLocation, setCachedLocation, clearCachedLocation } from '../lib/userCache';
-import { geocodeAddress, reverseGeocode } from '../lib/geocoding';
+import { useSearchParams, useParams, useNavigate } from 'react-router-dom';
+import { clearCachedLocation } from '../lib/userCache';
+import { geocodeAddress } from '../lib/geocoding';
+import { useLocation } from '../hooks/useLocation';
+import { getDistance, formatName } from '../lib/utils';
+import SEOHandler from '../components/SEOHandler';
+import PharmacySchema from '../components/PharmacySchema';
+import FreshnessBanner from '../components/FreshnessBanner';
+import { OnCallPharmacyCardSkeleton } from '../components/PharmacyCardSkeleton';
+import { Alert } from '../components/ui/Alert';
 
 interface Shift {
   start_time: string;
@@ -31,56 +35,66 @@ interface Pharmacy {
   shift: Shift;
 }
 
-function getDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
-  const R = 6371; // Radius of the earth in km
-  const dLat = (lat2 - lat1) * (Math.PI / 180);
-  const dLon = (lon2 - lon1) * (Math.PI / 180);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
-    Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c; // Distance in km
-}
-
 export default function OnCall() {
+  const { uf, city: cityParam } = useParams();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [city, setCity] = useState(searchParams.get('city') || '');
-  const [state, setState] = useState(searchParams.get('state') || '');
+  const { status: locationStatus, location, coords: userCoords, detectLocation, setLocation, setCoords: setUserCoords, setStatus: setLocationStatus } = useLocation();
+  const [city, setCity] = useState('');
+  const [state, setState] = useState('');
   const [cep, setCep] = useState('');
   const [pharmacies, setPharmacies] = useState<Pharmacy[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [lastSync, setLastSync] = useState<Date | null>(null);
+  const [serverDate, setServerDate] = useState<string | null>(null);
   const [noShiftsInSystem, setNoShiftsInSystem] = useState(false);
-  const [userCoords, setUserCoords] = useState<{lat: number, lng: number} | null>(null);
   const [detecting, setDetecting] = useState(false);
-  const [locationStatus, setLocationStatus] = useState<'detecting' | 'detected' | 'failed' | 'idle'>('idle');
   const unsubscribeRef = React.useRef<(() => void) | null>(null);
 
+  // Sync internal state with hook location
   useEffect(() => {
+    if (location) {
+      setCity(location.city);
+      setState(location.state);
+      setCep(location.cep || '');
+    }
+  }, [location]);
+
+  useEffect(() => {
+    fetchServerTime();
     return () => {
       if (unsubscribeRef.current) unsubscribeRef.current();
     };
   }, []);
 
-  const fetchOnCallPharmacies = async (searchCity: string, searchState: string, coords?: {lat: number, lng: number}, searchCep?: string) => {
-    if (unsubscribeRef.current) {
-      unsubscribeRef.current();
-    }
-
-    setLoading(true);
+  const fetchServerTime = async () => {
     try {
-      const today = new Intl.DateTimeFormat('sv-SE', {
-        timeZone: 'America/Sao_Paulo',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit'
-      }).format(new Date());
+      const data = await safeJsonFetch<{date: string}>('/api/status/time');
+      if (data?.date) setServerDate(data.date);
+    } catch (e) {
+      console.warn('Failed to fetch server time', e);
+    }
+  };
 
-      // Fetch today's shifts
-      const shiftsQ = query(collection(db, 'shifts'), where('date', '==', today));
-      const shiftsSnap = await getDocs(shiftsQ);
+  const fetchOnCallPharmacies = async (searchCity: string, searchState: string, coords?: {lat: number, lng: number}, searchCep?: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const queryParams: any = {};
+      if (searchCity) queryParams.city = searchCity;
+      if (searchState) queryParams.state = searchState;
+      if (searchCep) queryParams.cep = searchCep;
+      if (coords) {
+        queryParams.lat = coords.lat;
+        queryParams.lng = coords.lng;
+      }
 
-      if (shiftsSnap.empty) {
+      const data = await safeJsonFetch<Pharmacy[]>('/api/public/on-call', {
+        query: queryParams
+      });
+
+      if (!data || data.length === 0) {
         setNoShiftsInSystem(true);
         setPharmacies([]);
         setLoading(false);
@@ -88,48 +102,7 @@ export default function OnCall() {
       }
 
       setNoShiftsInSystem(false);
-
-      // Fetch active pharmacies
-      let pQuery: any = query(collection(db, 'pharmacies'), where('is_active', '==', 1));
-      if (searchCity && searchState && !searchCep) {
-        pQuery = query(pQuery, where('city', '==', searchCity), where('state', '==', searchState));
-      }
-
-      const pSnap = await getDocs(pQuery);
-      const pharmaciesMap = new Map();
-      pSnap.docs.forEach(doc => pharmaciesMap.set(doc.id, { id: doc.id, ...(doc.data() as any) }));
-
-      // Map shifts directly to pharmacies
-      let onCallPharmacies: Pharmacy[] = [];
-      const cleanSearchCep = searchCep ? searchCep.replace(/\D/g, '').substring(0, 5) : null;
-
-      shiftsSnap.docs.forEach(doc => {
-        const shift = doc.data() as any;
-        const pharmacy = pharmaciesMap.get(shift.pharmacy_id);
-        
-        if (pharmacy) {
-          if (cleanSearchCep) {
-            const pharmCep = (pharmacy.cep || pharmacy.zip || '').replace(/\D/g, '').substring(0, 5);
-            if (pharmCep !== cleanSearchCep) return;
-          }
-          
-          if (searchCity && searchState && !searchCep) {
-            if ((pharmacy.city || '').toLowerCase() !== searchCity.toLowerCase() || 
-                (pharmacy.state || '').toLowerCase() !== searchState.toLowerCase()) {
-              return;
-            }
-          }
-
-          onCallPharmacies.push({
-            ...pharmacy,
-            shift: {
-              start_time: shift.start_time,
-              end_time: shift.end_time,
-              is_24h: shift.is_24h
-            }
-          });
-        }
-      });
+      let onCallPharmacies = data;
 
       if (coords) {
         onCallPharmacies = onCallPharmacies.map(p => {
@@ -142,9 +115,10 @@ export default function OnCall() {
       }
 
       setPharmacies(onCallPharmacies);
+      setLastSync(new Date());
     } catch (error) {
       console.error('Error fetching on-call data:', error);
-      handleFirestoreError(error, OperationType.GET, 'public/on-call');
+      setError('Ocorreu um erro ao buscar os plantões. Por favor, tente novamente.');
       setPharmacies([]);
     } finally {
       setLoading(false);
@@ -172,13 +146,13 @@ export default function OnCall() {
           const coords = { lat: geoData.lat, lng: geoData.lng };
           setUserCoords(coords);
           setLocationStatus('detected');
-          setCachedLocation({ city: data.localidade, state: data.uf, cep: cleanCep, lat: coords.lat, lng: coords.lng, type: 'manual' });
+          setLocation({ city: data.localidade, state: data.uf, cep: cleanCep, lat: coords.lat, lng: coords.lng, type: 'manual' });
           fetchOnCallPharmacies(data.localidade, data.uf, coords, cleanCep);
         } else {
           // Fallback to just city/state if geocoding fails
           setUserCoords(null);
           setLocationStatus('idle');
-          setCachedLocation({ city: data.localidade, state: data.uf, cep: cleanCep, type: 'manual' });
+          setLocation({ city: data.localidade, state: data.uf, cep: cleanCep, type: 'manual' });
           fetchOnCallPharmacies(data.localidade, data.uf, undefined, cleanCep);
         }
       }
@@ -188,162 +162,58 @@ export default function OnCall() {
     }
   };
 
-  const detectLocation = () => {
-    setDetecting(true);
-    setLocationStatus('detecting');
-    
-    if ("geolocation" in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        async (position) => {
-          const coords = { lat: position.coords.latitude, lng: position.coords.longitude };
-          setUserCoords(coords);
-          setLocationStatus('detected');
-          
-          // Try to get city/state/cep from coords
-          try {
-            const data = await reverseGeocode(coords.lat, coords.lng);
-            if (data && data.address) {
-              const detectedCity = data.address.city || data.address.town || data.address.village || data.address.suburb || data.address.municipality || '';
-              let detectedState = data.address.state_code || '';
-              const detectedCep = data.address.postcode || '';
-              
-              // Robust state/UF detection
-              if (!detectedState && data.address['ISO3166-2-lvl4']) {
-                const parts = data.address['ISO3166-2-lvl4'].split('-');
-                detectedState = parts.length > 1 ? parts[1] : parts[0];
-              }
-              
-              if (!detectedState) {
-                const stateCandidate = data.address.state || data.address.region || data.address.province;
-                if (stateCandidate) {
-                  const stateMap: Record<string, string> = {
-                    'acre': 'AC', 'alagoas': 'AL', 'amapa': 'AP', 'amazonas': 'AM',
-                    'bahia': 'BA', 'ceara': 'CE', 'distrito federal': 'DF', 'espirito santo': 'ES',
-                    'goias': 'GO', 'maranhao': 'MA', 'mato grosso': 'MT', 'mato grosso do sul': 'MS',
-                    'minas gerais': 'MG', 'para': 'PA', 'paraiba': 'PB', 'parana': 'PR',
-                    'pernambuco': 'PE', 'piaui': 'PI', 'rio de janeiro': 'RJ', 'rio grande do norte': 'RN',
-                    'rio grande do sul': 'RS', 'rondonia': 'RO', 'roraima': 'RR', 'santa catarina': 'SC',
-                    'sao paulo': 'SP', 'sergipe': 'SE', 'tocantins': 'TO'
-                  };
-                  const normalized = stateCandidate.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-                  detectedState = stateMap[normalized] || stateCandidate.substring(0, 2).toUpperCase();
-                }
-              }
-              
-              // Final sanitize
-              if (detectedState && detectedState.length > 2) {
-                detectedState = detectedState.substring(0, 2).toUpperCase();
-              }
-              
-              setCity(detectedCity);
-              setState(detectedState || '');
-              if (detectedCep) setCep(detectedCep);
-              setCachedLocation({ 
-                city: detectedCity, 
-                state: detectedState || '', 
-                cep: detectedCep,
-                lat: coords.lat, 
-                lng: coords.lng, 
-                type: 'gps' 
-              });
-              fetchOnCallPharmacies(detectedCity, detectedState || '', coords, detectedCep);
-            } else {
-              fetchOnCallPharmacies('', '', coords);
-            }
-          } catch (e) {
-            fetchOnCallPharmacies('', '', coords);
-          }
-          
-          setDetecting(false);
-        },
-        async () => {
-          fallbackToIp();
-        },
-        { timeout: 8000, enableHighAccuracy: true }
-      );
-    } else {
-      fallbackToIp();
-    }
-  };
-
-  const fallbackToIp = async () => {
-    try {
-      const res = await fetch('https://ipwho.is/');
-      const data = await res.json();
-      if (data.success && data.latitude && data.longitude) {
-        const detectedCep = data.postal || '';
-        const coords = { lat: data.latitude, lng: data.longitude };
-        setUserCoords(coords);
-        setLocationStatus('detected');
-        setCity(data.city || '');
-        setState(data.region_code || '');
-        if (detectedCep) setCep(detectedCep);
-        setCachedLocation({ 
-          city: data.city || '', 
-          state: data.region_code || '', 
-          cep: detectedCep,
-          lat: coords.lat, 
-          lng: coords.lng, 
-          type: 'ip' 
-        });
-        fetchOnCallPharmacies(data.city || '', data.region_code || '', coords, detectedCep);
-      } else {
-        setLocationStatus('failed');
-        fetchOnCallPharmacies(city, state);
-      }
-    } catch (error) {
-      console.error('Error detecting location', error);
-      setLocationStatus('failed');
-      fetchOnCallPharmacies(city, state);
-    } finally {
-      setDetecting(false);
-    }
-  };
-
   useEffect(() => {
     const urlLat = searchParams.get('lat');
     const urlLng = searchParams.get('lng');
-    const urlCity = searchParams.get('city');
-    const urlState = searchParams.get('state');
+    
+    // Priority 1: URL Params (/plantao/es/castelo)
+    if (uf && cityParam) {
+      const decodedCity = cityParam.replace(/-/g, ' ');
+      setCity(decodedCity);
+      setState(uf.toUpperCase());
+      fetchOnCallPharmacies(decodedCity, uf.toUpperCase());
+      return;
+    }
 
+    // Priority 2: Query Params (?lat=...&lng=... or ?city=...&state=...)
     if (urlLat && urlLng) {
       const coords = { lat: parseFloat(urlLat), lng: parseFloat(urlLng) };
       setUserCoords(coords);
       setLocationStatus('detected');
-      fetchOnCallPharmacies(urlCity || '', urlState || '', coords);
+      fetchOnCallPharmacies(searchParams.get('city') || '', searchParams.get('state') || '', coords);
       return;
-    } else if (urlCity && urlState) {
-      fetchOnCallPharmacies(urlCity, urlState);
+    } else if (searchParams.get('city') && searchParams.get('state')) {
+      const qCity = searchParams.get('city') || '';
+      const qState = searchParams.get('state') || '';
+      setCity(qCity);
+      setState(qState);
+      fetchOnCallPharmacies(qCity, qState);
       return;
     }
 
-    const cached = getCachedLocation();
-    if (cached && cached.city && cached.state) {
-      setCity(cached.city);
-      setState(cached.state);
-      let coords: {lat: number, lng: number} | undefined = undefined;
-      
-      if (cached.lat && cached.lng) {
-        coords = { lat: cached.lat, lng: cached.lng };
-        setUserCoords(coords);
-        setLocationStatus('detected');
-      } else {
-        setLocationStatus('idle');
-      }
-      
-      if (cached.cep) setCep(cached.cep);
-      fetchOnCallPharmacies(cached.city, cached.state, coords, cached.cep);
-    } else {
-      detectLocation();
+    // Priority 3: Detection
+    detectLocation();
+  }, [uf, cityParam, searchParams, detectLocation]);
+
+  useEffect(() => {
+    if (locationStatus === 'detected' && location && !uf && !cityParam) {
+      fetchOnCallPharmacies(location.city, location.state, userCoords ? { lat: userCoords.lat, lng: userCoords.lng } : undefined, location.cep);
+    } else if (locationStatus === 'failed' && !uf && !cityParam) {
+      fetchOnCallPharmacies('', '', undefined);
     }
-  }, []);
+  }, [locationStatus, location, uf, cityParam, userCoords]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    setUserCoords(null); // Clear coords to force city/state search
-    setLocationStatus('idle');
-    setCachedLocation({ city, state, cep: '', type: 'manual' });
-    fetchOnCallPharmacies(city, state, undefined, '');
+    if (city && state) {
+      const citySlug = city.toLowerCase().trim().replace(/\s+/g, '-');
+      navigate(`/plantao/${state.toLowerCase()}/${citySlug}`);
+    } else {
+      setUserCoords(null);
+      setLocationStatus('idle');
+      setLocation({ city, state, cep: '', type: 'manual' });
+      fetchOnCallPharmacies(city, state, undefined, '');
+    }
   };
 
   const handleTrackClick = async (id: string, type: 'whatsapp' | 'map') => {
@@ -362,11 +232,19 @@ export default function OnCall() {
 
   return (
     <div className="pb-12">
+      <SEOHandler city={city} uf={state} />
       {/* Hero Search Section */}
       <section className="bg-emerald-600 text-white pt-4 pb-16 px-4">
         <div className="w-full max-w-[90%] mx-auto text-center">
           <h1 className="text-4xl font-bold mb-4">Plantões de Hoje</h1>
-          <p className="text-emerald-100 mb-8 text-lg">Veja as farmácias que estão de plantão hoje na sua região</p>
+          {serverDate ? (
+            <p className="text-emerald-50 text-sm mb-4 bg-emerald-700/30 inline-block px-3 py-1 rounded-full border border-emerald-500/30">
+              Data oficial do sistema: <span className="font-bold">{serverDate.split('-').reverse().join('/')}</span>
+            </p>
+          ) : (
+            <div className="h-6 w-48 bg-emerald-700/30 animate-pulse mx-auto mb-4 rounded-full" />
+          )}
+          <p className="text-emerald-100 mb-8 text-lg">Veja as farmácias que estão de plantão hoje na sua região{city && state ? `: ${formatName(city)} - ${state.toUpperCase()}` : ''}</p>
           
           <div className="flex flex-col gap-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -378,7 +256,7 @@ export default function OnCall() {
                     type="text" 
                     placeholder="Cidade" 
                     className="w-full bg-transparent border-none focus:ring-0 text-gray-900 p-3 outline-none"
-                    value={city}
+                    value={formatName(city)}
                     onChange={(e) => setCity(e.target.value)}
                   />
                 </div>
@@ -436,6 +314,7 @@ export default function OnCall() {
       </section>
 
       <div className="w-full max-w-[90%] mx-auto px-4 sm:px-6 lg:px-8 mt-12">
+        <FreshnessBanner lastUpdated={lastSync} />
         <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
           <h2 className="text-2xl font-bold text-gray-900">Farmácias de Plantão</h2>
           
@@ -468,48 +347,56 @@ export default function OnCall() {
           )}
         </div>
 
+        {error && (
+          <div className="mb-6">
+            <Alert 
+              message={error} 
+              onClose={() => setError(null)} 
+            />
+          </div>
+        )}
+
         {loading || locationStatus === 'detecting' ? (
-          <div className="text-center py-20 text-gray-500 flex flex-col items-center gap-4">
-            <div className="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin"></div>
-            <p className="font-medium">
-              {locationStatus === 'detecting' ? 'Detectando sua localização...' : 'Buscando farmácias de plantão...'}
-            </p>
-            <p className="text-sm text-gray-400">Isso pode levar alguns segundos</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {[1, 2, 3, 4, 5, 6].map(i => (
+              <OnCallPharmacyCardSkeleton key={i} />
+            ))}
           </div>
         ) : pharmacies.length > 0 ? (
-          <div className="flex flex-col gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {pharmacies.map(pharmacy => (
-              <div key={pharmacy.id} className="bg-white border border-emerald-100 rounded-xl p-6 shadow-sm hover:shadow-md transition-all relative overflow-hidden flex flex-col w-full">
-                <div className="absolute top-0 right-0 bg-emerald-600 text-white text-[10px] font-bold px-3 py-1 rounded-bl-lg flex items-center gap-1 uppercase tracking-wider">
-                  <Clock className="w-3 h-3" />
+              <div key={pharmacy.id} className="bg-white border border-emerald-100 rounded-2xl p-6 shadow-sm hover:shadow-xl transition-all duration-300 relative overflow-hidden flex flex-col w-full h-full group">
+                <PharmacySchema pharmacy={pharmacy} />
+                <div className="absolute top-0 right-0 bg-emerald-600 text-white text-[10px] font-extrabold px-4 py-1.5 rounded-bl-2xl flex items-center gap-1.5 uppercase tracking-widest z-10 shadow-sm transition-all group-hover:scale-105 origin-top-right">
+                  <Clock className="w-3.5 h-3.5" />
                   {pharmacy.shift.is_24h ? '24 Horas' : `${pharmacy.shift.start_time} - ${pharmacy.shift.end_time}`}
                 </div>
                 
-                <div className="mb-4">
-                  <h3 className="text-xl font-bold text-gray-900 mb-2 line-clamp-1">{pharmacy.name}</h3>
-                  <div className="flex items-start gap-2 text-gray-500 text-sm">
-                    <MapPin className="w-4 h-4 mt-0.5 flex-shrink-0 text-emerald-600" />
+                <div className="flex-1 mb-6">
+                  <h3 className="text-xl font-bold text-gray-900 mb-3 group-hover:text-emerald-600 transition-colors">{pharmacy.name}</h3>
+                  <div className="flex items-start gap-3 text-gray-500 text-sm leading-relaxed">
+                    <MapPin className="w-4 h-4 mt-0.5 flex-shrink-0 text-emerald-500" />
                     <p>
-                      {pharmacy.street}, {pharmacy.number}<br/>
+                      <span className="font-medium text-gray-700">{pharmacy.street}, {pharmacy.number}</span><br/>
                       {pharmacy.neighborhood}, {pharmacy.city} - {pharmacy.state}
                     </p>
                   </div>
                 </div>
 
-                <div className="mt-auto pt-6 flex gap-2">
-                  <a href={`tel:${pharmacy.phone}`} className="flex-1 flex items-center justify-center gap-2 bg-gray-50 text-gray-700 px-4 py-2.5 rounded-lg hover:bg-gray-100 text-sm font-semibold transition-colors border border-gray-200">
-                    <Phone className="w-4 h-4" />
-                    Ligar
+                <div className="grid grid-cols-2 gap-2 mb-4">
+                  <a href={`tel:${pharmacy.phone}`} className="flex items-center justify-center gap-2 bg-gray-50 text-gray-700 p-3 rounded-xl hover:bg-gray-100 text-xs font-bold transition-all border border-gray-100">
+                    <Phone className="w-4 h-4 text-emerald-600" />
+                    LIGAR
                   </a>
                   <a 
                     onClick={() => handleTrackClick(pharmacy.id, 'whatsapp')} 
                     href={`https://wa.me/55${pharmacy.whatsapp.replace(/\D/g, '')}`} 
                     target="_blank" 
                     rel="noreferrer" 
-                    className="flex-1 flex items-center justify-center gap-2 bg-emerald-600 text-white px-4 py-2.5 rounded-lg hover:bg-emerald-700 text-sm font-semibold transition-colors shadow-sm"
+                    className="flex items-center justify-center gap-2 bg-emerald-50 text-emerald-700 p-3 rounded-xl hover:bg-emerald-100 text-xs font-bold transition-all"
                   >
-                    <MessageCircle className="w-4 h-4" />
-                    WhatsApp
+                    <MessageCircle className="w-4 h-4 text-emerald-500" />
+                    WHATSAPP
                   </a>
                 </div>
                 
@@ -518,9 +405,9 @@ export default function OnCall() {
                   href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(pharmacy.street + ', ' + pharmacy.number + ' - ' + pharmacy.city)}`} 
                   target="_blank" 
                   rel="noreferrer" 
-                  className="mt-3 w-full flex items-center justify-center gap-2 text-emerald-600 hover:text-emerald-700 text-xs font-bold py-2 transition-colors"
+                  className="w-full flex items-center justify-center gap-2 bg-blue-50 text-blue-700 p-3 rounded-xl hover:bg-blue-100 text-xs font-bold transition-all border border-blue-100"
                 >
-                  <Navigation className="w-3 h-3" />
+                  <Navigation className="w-4 h-4 text-blue-500" />
                   VER NO MAPA
                 </a>
               </div>

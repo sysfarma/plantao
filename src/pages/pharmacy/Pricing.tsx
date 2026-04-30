@@ -7,6 +7,8 @@ import { safeJsonFetch } from '../../lib/api';
 import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, orderBy, onSnapshot } from 'firebase/firestore';
 import { db, getAuthToken } from '../../lib/firebase';
 import { handleFirestoreError, OperationType } from '../../lib/firebaseError';
+import { useToast } from '../../components/Toast';
+import { translateError } from '../../lib/errorTranslations';
 
 const IconMap: Record<string, any> = {
   Zap, TrendingUp, Star, Smartphone, Award, Shield, Store, Check, Plus
@@ -14,6 +16,7 @@ const IconMap: Record<string, any> = {
 
 export default function Pricing() {
   const navigate = useNavigate();
+  const { showToast } = useToast();
   const [plans, setPlans] = useState<any>(null);
   const [selectedPlanId, setSelectedPlanId] = useState<string>('');
   const [loading, setLoading] = useState(true);
@@ -113,7 +116,7 @@ export default function Pricing() {
               }
             } catch (err: any) {
               console.error('Error initializing pricing blocks:', err);
-              alert('Erro ao inicializar preços padrão. Verifique se os limites da conta/Firebase foram excedidos.\nDetalhes: ' + err.message);
+              showToast(translateError(err), 'error');
             }
           };
           initDefaults();
@@ -149,7 +152,9 @@ export default function Pricing() {
         ...updates,
         updated_at: new Date().toISOString()
       });
+      showToast('Bloco atualizado!', 'success');
     } catch (error) {
+      showToast(translateError(error), 'error');
       handleFirestoreError(error, OperationType.UPDATE, `pricing_blocks/${id}`);
     }
   };
@@ -170,8 +175,10 @@ export default function Pricing() {
           created_at: new Date().toISOString()
         });
       }
+      showToast('Bloco salvo!', 'success');
       setIsModalOpen(false);
     } catch (error) {
+      showToast(translateError(error), 'error');
       handleFirestoreError(error, editingBlock ? OperationType.UPDATE : OperationType.CREATE, 'pricing_blocks');
     }
   };
@@ -180,7 +187,9 @@ export default function Pricing() {
     if (!window.confirm('Tem certeza que deseja excluir este bloco?')) return;
     try {
       await deleteDoc(doc(db, 'pricing_blocks', id));
+      showToast('Bloco excluído!', 'success');
     } catch (error) {
+      showToast(translateError(error), 'error');
       handleFirestoreError(error, OperationType.DELETE, `pricing_blocks/${id}`);
     }
   };

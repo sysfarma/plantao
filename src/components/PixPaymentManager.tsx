@@ -188,6 +188,7 @@ export default function PixPaymentManager({ onPaymentSuccess, planType = 'annual
             <img 
               src={`data:image/png;base64,${pixData.qr_code_base64}`} 
               alt="QR Code Pix" 
+              loading="lazy"
               className="w-56 h-56 transition-transform group-hover:scale-105 duration-500" 
             />
           ) : (
