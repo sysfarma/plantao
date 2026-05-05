@@ -82,6 +82,11 @@ const db = getFirestore(admin.apps[0], firebaseConfig.firestoreDatabaseId);
 db.settings({ ignoreUndefinedProperties: true });
 const auth = getAuth(admin.apps[0]);
 
+// Sitemap Cache Variables
+let sitemapCache: string | null = null;
+let sitemapCacheTimestamp: number = 0;
+const SITEMAP_CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
+
 const normalize = (str: string) => str.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
 
 // Haversine distance formula
@@ -804,6 +809,15 @@ async function startServer() {
   // Public: Sitemap
   app.get('/sitemap.xml', publicLimiter, async (req, res) => {
     try {
+      const now = Date.now();
+      
+      // Serve from cache if available and not expired
+      if (sitemapCache && (now - sitemapCacheTimestamp < SITEMAP_CACHE_DURATION)) {
+        res.header('Content-Type', 'application/xml');
+        return res.send(sitemapCache);
+      }
+
+      console.log('Refreshing sitemap.xml cache...');
       const snapshot = await db.collection('pharmacies').where('is_active', 'in', [1, true]).get();
       const cities = new Set<string>();
       
@@ -830,6 +844,10 @@ async function startServer() {
       });
 
       xml += '</urlset>';
+
+      // Update cache
+      sitemapCache = xml;
+      sitemapCacheTimestamp = now;
 
       res.header('Content-Type', 'application/xml');
       res.send(xml);
@@ -3552,7 +3570,7 @@ async function startServer() {
     console.log('Vite middleware initialized');
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    const distPath = path.join(__dirname, 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));

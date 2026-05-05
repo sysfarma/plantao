@@ -36,6 +36,7 @@ export default function Pricing() {
   const [blockForm, setBlockForm] = useState({ title: '', description: '', icon: 'Zap', is_active: true, order: 0 });
 
   useEffect(() => {
+    window.scrollTo(0, 0);
     const fetchData = async () => {
       try {
         const token = await getAuthToken();

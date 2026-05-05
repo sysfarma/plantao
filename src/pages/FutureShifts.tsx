@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
-import { Clock, Calendar, Store, MapPin, Phone, Plus } from 'lucide-react';
+import { Clock, Calendar, Store, MapPin, Phone, Plus, MessageCircle } from 'lucide-react';
 import { formatToBRDate } from '../lib/dateUtils';
 import { doc, getDoc } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../lib/firebaseError';
@@ -18,6 +18,7 @@ export default function FutureShifts() {
   const dashboardLink = user.role === 'admin' ? '/admin?tab=shifts' : '/pharmacy?tab=shifts';
 
   useEffect(() => {
+    window.scrollTo(0, 0);
     const fetchShifts = async () => {
       setLoading(true);
       setErrorMsg(null);
@@ -180,20 +181,20 @@ export default function FutureShifts() {
                   </div>
                 </div>
                 
-                <div className="flex items-center gap-3">
+                <div className="flex flex-col md:flex-row items-stretch md:items-center gap-3">
                   <a 
                     href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${shift.pharmacy.name}, ${shift.pharmacy.street || ""}, ${shift.pharmacy.number || ""}, ${shift.pharmacy.city || ""}, ${shift.pharmacy.state || ""}`)}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-3 bg-white border border-gray-200 text-gray-700 font-bold rounded-2xl hover:bg-gray-50 transition-colors"
+                    className="flex items-center justify-center gap-2 px-6 py-3 bg-white border border-gray-200 text-gray-700 font-bold rounded-2xl hover:bg-gray-50 transition-colors md:w-auto"
                   >
                     <MapPin className="w-4 h-4 text-emerald-600" />
-                    Ver no Mapa
+                    Mapa
                   </a>
                   {shift.pharmacy.phone && (
                     <a 
                       href={`tel:${shift.pharmacy.phone}`}
-                      className="flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-3 bg-gray-100 text-gray-700 font-bold rounded-2xl hover:bg-gray-200 transition-colors"
+                      className="flex items-center justify-center gap-2 px-6 py-3 bg-gray-100 text-gray-700 font-bold rounded-2xl hover:bg-gray-200 transition-colors md:w-auto"
                     >
                       <Phone className="w-4 h-4" />
                       Ligar
@@ -204,8 +205,9 @@ export default function FutureShifts() {
                       href={`https://wa.me/55${shift.pharmacy.whatsapp.replace(/\D/g, '')}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-3 bg-emerald-600 text-white font-bold rounded-2xl hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-200"
+                      className="flex items-center justify-center gap-2 px-6 py-3 bg-emerald-600 text-white font-bold rounded-2xl hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-200 md:w-auto"
                     >
+                      <MessageCircle className="w-4 h-4 text-white" />
                       WhatsApp
                     </a>
                   )}

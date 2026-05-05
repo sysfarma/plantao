@@ -404,8 +404,21 @@ export default function OnCall() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2 mb-4">
-                  <a href={`tel:${pharmacy.phone}`} className="flex items-center justify-center gap-2 bg-gray-50 text-gray-700 p-3 rounded-xl hover:bg-gray-100 text-xs font-bold transition-all border border-gray-100">
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <a 
+                    onClick={() => handleTrackClick(pharmacy.id, 'map')} 
+                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(pharmacy.street + ', ' + pharmacy.number + ' - ' + pharmacy.city)}`} 
+                    target="_blank" 
+                    rel="noreferrer" 
+                    className="flex items-center justify-center gap-2 bg-blue-50 text-blue-700 p-3 rounded-xl hover:bg-blue-100 text-xs font-bold transition-all border border-blue-100 sm:flex-1 order-1 sm:order-3"
+                  >
+                    <Navigation className="w-4 h-4 text-blue-500" />
+                    VER NO MAPA
+                  </a>
+                  <a 
+                    href={`tel:${pharmacy.phone}`} 
+                    className="flex items-center justify-center gap-2 bg-gray-50 text-gray-700 p-3 rounded-xl hover:bg-gray-100 text-xs font-bold transition-all border border-gray-100 sm:flex-1 order-2 sm:order-1"
+                  >
                     <Phone className="w-4 h-4 text-emerald-600" />
                     LIGAR
                   </a>
@@ -414,23 +427,12 @@ export default function OnCall() {
                     href={`https://wa.me/55${pharmacy.whatsapp.replace(/\D/g, '')}`} 
                     target="_blank" 
                     rel="noreferrer" 
-                    className="flex items-center justify-center gap-2 bg-emerald-50 text-emerald-700 p-3 rounded-xl hover:bg-emerald-100 text-xs font-bold transition-all"
+                    className="flex items-center justify-center gap-2 bg-emerald-50 text-emerald-700 p-3 rounded-xl hover:bg-emerald-100 text-xs font-bold transition-all sm:flex-1 order-3 sm:order-2"
                   >
                     <MessageCircle className="w-4 h-4 text-emerald-500" />
                     WHATSAPP
                   </a>
                 </div>
-                
-                <a 
-                  onClick={() => handleTrackClick(pharmacy.id, 'map')} 
-                  href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(pharmacy.street + ', ' + pharmacy.number + ' - ' + pharmacy.city)}`} 
-                  target="_blank" 
-                  rel="noreferrer" 
-                  className="w-full flex items-center justify-center gap-2 bg-blue-50 text-blue-700 p-3 rounded-xl hover:bg-blue-100 text-xs font-bold transition-all border border-blue-100"
-                >
-                  <Navigation className="w-4 h-4 text-blue-500" />
-                  VER NO MAPA
-                </a>
               </div>
             ))}
           </div>
