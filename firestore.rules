@@ -107,7 +107,8 @@ service cloud.firestore {
     }
 
     match /pharmacies/{pharmacyId} {
-      allow read: if isValidId(pharmacyId);
+      allow get: if isValidId(pharmacyId);
+      allow list: if true;
       allow create: if isVerified() && isValidId(pharmacyId) && isValidPharmacy(incoming()) && 
                     (incoming().user_id == request.auth.uid || isAdmin()) &&
                     (isAdmin() || incoming().is_active == 0); // Self-register is always inactive
@@ -123,7 +124,8 @@ service cloud.firestore {
     }
 
     match /shifts/{shiftId} {
-      allow read: if isValidId(shiftId);
+      allow get: if isValidId(shiftId);
+      allow list: if true;
       allow create: if isVerified() && isValidId(shiftId) && isValidShift(incoming()) && 
                     (incoming().user_id == request.auth.uid || isAdmin()) &&
                     (isAdmin() || exists(/databases/$(database)/documents/pharmacies/$(incoming().pharmacy_id)));
@@ -167,6 +169,11 @@ service cloud.firestore {
     }
 
     match /config/{configId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /pricing_blocks/{blockId} {
       allow read: if true;
       allow write: if isAdmin();
     }

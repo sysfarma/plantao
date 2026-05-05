@@ -39,6 +39,7 @@ export default function AdminDashboard() {
   const [adminShifts, setAdminShifts] = useState<any[]>([]);
   const [adminHighlights, setAdminHighlights] = useState<any[]>([]);
   const [adminSubscribers, setAdminSubscribers] = useState<any[]>([]);
+  const [allPharmaciesList, setAllPharmaciesList] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<any>(null);
   const [loadingTable, setLoadingTable] = useState(false);
@@ -142,6 +143,39 @@ export default function AdminDashboard() {
     setEditingPharmacy(pharmacy);
     setFormData(pharmacy);
     setIsModalOpen(true);
+  };
+
+  const handleCepChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    let value = e.target.value.replace(/\D/g, '');
+    if (value.length > 8) value = value.slice(0, 8);
+    
+    // Format as 00000-000
+    let formattedCep = value;
+    if (value.length >= 5) {
+      formattedCep = value.slice(0, 5) + '-' + value.slice(5);
+    }
+    
+    setFormData({ ...formData, cep: formattedCep });
+
+    if (value.length === 8) {
+      try {
+        const response = await fetch(`https://viacep.com.br/ws/${value}/json/`);
+        if (!response.ok) return;
+        const data = await response.json();
+        if (data && !data.erro) {
+          setFormData(prev => ({
+            ...prev,
+            cep: formattedCep, // Keep formatting
+            street: data.logradouro || prev.street || '',
+            neighborhood: data.bairro || prev.neighborhood || '',
+            city: data.localidade || prev.city || '',
+            state: data.uf || prev.state || ''
+          }));
+        }
+      } catch (error) {
+        console.error('Error fetching CEP:', error);
+      }
+    }
   };
 
   const handleSavePharmacy = async (e: React.FormEvent) => {
@@ -300,6 +334,15 @@ export default function AdminDashboard() {
     } catch (e) { console.error('Error fetching stats:', e); }
   };
 
+  const fetchAllPharmaciesList = async () => {
+    try {
+      const data = await safeFetch('/api/admin/pharmacies/all');
+      if (data && typeof data !== 'string') {
+        setAllPharmaciesList(data);
+      }
+    } catch (e) { console.error('Error fetching all pharmacies list:', e); }
+  };
+
   const fetchPharmacies = async () => {
     setLoadingTable(true);
     try {
@@ -446,6 +489,7 @@ export default function AdminDashboard() {
     setEditingShiftId(null);
     setPharmacyShiftSearch('');
     setShiftForm({ pharmacy_id: '', date: '', start_time: '07:00', end_time: '22:00', is_24h: false });
+    if (allPharmaciesList.length === 0) fetchAllPharmaciesList();
     setIsShiftModalOpen(true);
   };
 
@@ -459,6 +503,7 @@ export default function AdminDashboard() {
       end_time: shift.end_time,
       is_24h: shift.is_24h === 1
     });
+    if (allPharmaciesList.length === 0) fetchAllPharmaciesList();
     setIsShiftModalOpen(true);
   };
 
@@ -468,7 +513,7 @@ export default function AdminDashboard() {
       const token = await getAuthToken();
       if (!token) throw new Error('Not authenticated');
 
-      const pharm = pharmacies.find(p => p.id === shiftForm.pharmacy_id);
+      const pharm = allPharmaciesList.find(p => p.id === shiftForm.pharmacy_id) || pharmacies.find(p => p.id === shiftForm.pharmacy_id);
       if (!pharm?.user_id) {
         throw new Error('Esta farmácia não possui um ID de usuário vinculado. Por favor, edite a farmácia primeiro para sincronizar.');
       }
@@ -2034,7 +2079,7 @@ export default function AdminDashboard() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700">CEP</label>
-                  <input type="text" value={formData.cep || ''} onChange={e => setFormData({...formData, cep: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="00000-000" />
+                  <input type="text" value={formData.cep || ''} onChange={handleCepChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all font-mono" placeholder="00000-000" maxLength={9} />
                 </div>
               </div>
               <div className="pt-4 flex justify-end gap-3">
@@ -2101,22 +2146,34 @@ export default function AdminDashboard() {
                     className="block w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm bg-white"
                   >
                     <option value="" disabled>Selecione uma farmácia...</option>
-                    {pharmacies
+                    {allPharmaciesList
                       .filter(p => {
-                        const search = pharmacyShiftSearch.toLowerCase();
+                        const search = pharmacyShiftSearch.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
                         if (!search) return true;
+                        if (search.length < 2) return false;
                         
-                        const name = (p.name || '').toLowerCase();
-                        const city = (p.city || '').toLowerCase();
-                        const state = (p.state || '').toLowerCase();
+                        const name = (p.name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+                        const city = (p.city || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+                        const state = (p.state || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
                         
-                        return name.includes(search) || 
-                               city.includes(search) || 
-                               state.includes(search);
+                        return name.includes(search) || city.includes(search) || state.includes(search);
                       })
                       .map(p => (
                       <option key={p.id} value={p.id}>{p.name} ({p.city}/{p.state})</option>
                     ))}
+                    {shiftForm.pharmacy_id && !allPharmaciesList.filter(p => {
+                      const search = pharmacyShiftSearch.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+                      if (!search) return true;
+                      if (search.length < 2) return false;
+                      const name = (p.name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+                      const city = (p.city || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+                      const state = (p.state || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+                      return name.includes(search) || city.includes(search) || state.includes(search);
+                    }).some(p => p.id === shiftForm.pharmacy_id) && (() => {
+                      const p = allPharmaciesList.find(p => p.id === shiftForm.pharmacy_id);
+                      if (p) return <option key={p.id} value={p.id}>{p.name} ({p.city}/{p.state})</option>;
+                      return null;
+                    })()}
                   </select>
                 </div>
               </div>

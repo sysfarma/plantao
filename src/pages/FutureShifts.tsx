@@ -5,11 +5,13 @@ import { Clock, Calendar, Store, MapPin, Phone, Plus } from 'lucide-react';
 import { formatToBRDate } from '../lib/dateUtils';
 import { doc, getDoc } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../lib/firebaseError';
+import SEOHandler from '../components/SEOHandler';
 import { Link } from 'react-router-dom';
 
 export default function FutureShifts() {
   const [shifts, setShifts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [daysCount, setDaysCount] = useState(7);
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const canRegister = user.role === 'admin' || user.role === 'pharmacy';
@@ -18,6 +20,7 @@ export default function FutureShifts() {
   useEffect(() => {
     const fetchShifts = async () => {
       setLoading(true);
+      setErrorMsg(null);
       try {
         // Fetch config for days count
         const configDoc = await getDoc(doc(db, 'config', 'general'));
@@ -51,23 +54,48 @@ export default function FutureShifts() {
         const pharms: Record<string, any> = {};
         
         if (pharmacyIds.length > 0) {
-          // Firebase 'in' limit is 10, so we might need chunks if many pharms
-          // For simplicity here assume not too many distinct pharms in next 7 days
-          const pharmSnapshot = await getDocs(query(collection(db, 'pharmacies'), where('__name__', 'in', pharmacyIds.slice(0, 10))));
-          pharmSnapshot.forEach(doc => {
-            pharms[doc.id] = doc.data();
-          });
+          // Firebase 'in' limit is 30 in some environments but safe is 10
+          // Let's implement chunked fetching
+          const chunks = [];
+          for (let i = 0; i < pharmacyIds.length; i += 10) {
+            chunks.push(pharmacyIds.slice(i, i + 10));
+          }
+
+          await Promise.all(chunks.map(async (chunk) => {
+            const pharmSnapshot = await getDocs(query(collection(db, 'pharmacies'), where('__name__', 'in', chunk)));
+            pharmSnapshot.forEach(doc => {
+              pharms[doc.id] = doc.data();
+            });
+          }));
         }
 
-        const consolidated = shiftsData.map((s: any) => ({
-          ...s,
-          pharmacy: pharms[s.pharmacy_id] || { name: 'Farmácia Desconhecida' }
-        }));
+        // Filter shifts that have an active pharmacy
+        const consolidated = shiftsData
+          .map((s: any) => ({
+            ...s,
+            pharmacy: pharms[s.pharmacy_id]
+          }))
+          .filter((s: any) => s.pharmacy && s.pharmacy.is_active === 1);
 
         setShifts(consolidated);
       } catch (error) {
         console.error('Error fetching future shifts:', error);
-        handleFirestoreError(error, OperationType.LIST, 'shifts');
+        
+        // We still call handleFirestoreError so it logs properly format, but we catch what it throws
+        try {
+          handleFirestoreError(error, OperationType.LIST, 'shifts');
+        } catch (handledError: any) {
+          // Parse the generic message to get the user-friendly translated text if possible
+          let msg = "Erro ao carregar plantões.";
+          try {
+             const parsed = JSON.parse(handledError.message);
+             if (parsed.userMessage) msg = parsed.userMessage;
+             else if (parsed.error) msg = parsed.error;
+          } catch(e) {
+             msg = handledError.message || msg;
+          }
+           setErrorMsg(msg);
+        }
       } finally {
         setLoading(false);
       }
@@ -76,10 +104,26 @@ export default function FutureShifts() {
     fetchShifts();
   }, []);
 
-  if (loading) return <div className="p-8 text-center text-emerald-600">Carregando próximos plantões...</div>;
+  if (loading) return (
+    <div className="min-h-[60vh] flex flex-col items-center justify-center p-8">
+      <div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+      <p className="text-emerald-700 font-bold animate-pulse text-lg">Carregando próximos plantões...</p>
+    </div>
+  );
+
+  if (errorMsg) return (
+    <div className="p-8 text-center text-red-600">
+      <p className="font-bold mb-2">Ops! Ocorreu um erro.</p>
+      <p>{errorMsg}</p>
+    </div>
+  );
 
   return (
     <div className="w-full max-w-[90%] mx-auto py-12 px-4">
+      <SEOHandler 
+        title="Próximos Plantões - Farmácias de Plantão" 
+        description="Confira a programação das farmácias de plantão para os próximos dias em sua região."
+      />
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
         <div className="flex items-center gap-3">
           <div className="p-3 bg-emerald-100 rounded-2xl text-emerald-600">
@@ -137,6 +181,15 @@ export default function FutureShifts() {
                 </div>
                 
                 <div className="flex items-center gap-3">
+                  <a 
+                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${shift.pharmacy.name}, ${shift.pharmacy.street || ""}, ${shift.pharmacy.number || ""}, ${shift.pharmacy.city || ""}, ${shift.pharmacy.state || ""}`)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-3 bg-white border border-gray-200 text-gray-700 font-bold rounded-2xl hover:bg-gray-50 transition-colors"
+                  >
+                    <MapPin className="w-4 h-4 text-emerald-600" />
+                    Ver no Mapa
+                  </a>
                   {shift.pharmacy.phone && (
                     <a 
                       href={`tel:${shift.pharmacy.phone}`}

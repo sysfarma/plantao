@@ -380,7 +380,11 @@ export default function OnCall() {
             ))}
           </div>
         ) : pharmacies.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className={`grid gap-6 ${
+            pharmacies.length === 1 ? 'grid-cols-1' :
+            pharmacies.length === 2 ? 'grid-cols-1 md:grid-cols-2' :
+            'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
+          }`}>
             {pharmacies.map(pharmacy => (
               <div key={pharmacy.id} className="bg-white border border-emerald-100 rounded-2xl p-6 shadow-sm hover:shadow-xl transition-all duration-300 relative overflow-hidden flex flex-col w-full h-full group">
                 <PharmacySchema pharmacy={pharmacy} />

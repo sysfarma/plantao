@@ -79,6 +79,7 @@ interface SubscriptionData {
 }
 
 const db = getFirestore(admin.apps[0], firebaseConfig.firestoreDatabaseId);
+db.settings({ ignoreUndefinedProperties: true });
 const auth = getAuth(admin.apps[0]);
 
 const normalize = (str: string) => str.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
@@ -1325,10 +1326,14 @@ async function startServer() {
       if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
       
       const pharmacyDoc = pharmacySnapshot.docs[0];
-      const { name, phone, whatsapp, street, number, neighborhood, city, state } = req.body;
+      const { 
+        name = '', phone = '', whatsapp = '', 
+        street = '', number = '', neighborhood = '', 
+        city = '', state = '', cep = '' 
+      } = req.body;
       
       const updatedData = {
-        name, phone, whatsapp, street, number, neighborhood, city, state,
+        name, phone, whatsapp, street, number, neighborhood, city, state, cep,
         updated_at: new Date().toISOString()
       };
       
@@ -2603,6 +2608,27 @@ async function startServer() {
     }
   });
 
+  // Admin: Get all pharmacies compactly for dropdowns
+  app.get('/api/admin/pharmacies/all', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    try {
+      const snapshot = await db.collection('pharmacies').orderBy('name', 'asc').get();
+      const result = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          name: data.name,
+          city: data.city,
+          state: data.state,
+          user_id: data.user_id
+        };
+      });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Admin: Get all pharmacies (PAGINAÇÃO NATIVA QUANDO POSSÍVEL)
   app.get('/api/admin/pharmacies', authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
@@ -2844,7 +2870,10 @@ async function startServer() {
   app.put('/api/admin/pharmacies/:id', authLimiter, authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
     const { id } = req.params;
-    const { email, password, name, phone, whatsapp, street, number, neighborhood, city, state, cep } = req.body;
+    const { 
+      email = '', password = '', name = '', phone = '', whatsapp = '', 
+      street = '', number = '', neighborhood = '', city = '', state = '', cep = '' 
+    } = req.body;
     
     try {
       const pharmacyDoc = await db.collection('pharmacies').doc(id).get();
@@ -2926,7 +2955,10 @@ async function startServer() {
   // Admin: Create Pharmacy
   app.post('/api/admin/pharmacies', authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
-    const { email, password, name, phone, whatsapp, street, number, neighborhood, city, state } = req.body;
+    const { 
+      email = '', password = '', name = '', phone = '', whatsapp = '', 
+      street = '', number = '', neighborhood = '', city = '', state = '', cep = '' 
+    } = req.body;
     
     try {
       let currentUserId;
@@ -2956,7 +2988,7 @@ async function startServer() {
 
       const now = new Date().toISOString();
       await db.collection('users').doc(currentUserId).set({
-        email,
+        email: email || '',
         role: 'pharmacy',
         created_at: now,
         updated_at: now
@@ -2966,19 +2998,20 @@ async function startServer() {
       
       await db.collection('pharmacies').doc(pharmacyId).set({
         user_id: currentUserId,
-        name,
-        phone,
-        whatsapp,
-        email,
-        user_email: email,
+        name: name || '',
+        phone: phone || '',
+        whatsapp: whatsapp || '',
+        email: email || '',
+        user_email: email || '',
         sub_status: 'active',
         website: '',
-        street,
-        number,
-        neighborhood,
-        city,
-        state,
-        zip: '',
+        street: street || '',
+        number: number || '',
+        neighborhood: neighborhood || '',
+        city: city || '',
+        state: state || '',
+        zip: cep || '',
+        cep: cep || '',
         is_active: 1,
         created_at: now,
         updated_at: now
@@ -2998,8 +3031,9 @@ async function startServer() {
       await updateDashboardStats();
       res.status(201).json({ message: 'Pharmacy created successfully' });
     } catch (error: any) {
-      console.error('Admin Create Pharmacy Error:', error);
-      res.status(500).json({ error: error.message || 'Server error' });
+      console.error('Admin Create Pharmacy Error Stack:', error.stack);
+      console.error('Admin Create Pharmacy Error details:', error);
+      res.status(500).json({ error: `Start error: ${error?.message || 'Server error'}` });
     }
   });
 

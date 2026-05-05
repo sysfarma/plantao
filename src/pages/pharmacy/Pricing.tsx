@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Check, Shield, Zap, TrendingUp, Star, Award, Smartphone, Loader2, Store, Plus, Trash2, Edit, X, Save, Ban } from 'lucide-react';
+import { Check, Shield, Zap, TrendingUp, Star, Award, Smartphone, Loader2, Store, Plus, Trash2, Edit, X, Save, Ban, MessageCircle } from 'lucide-react';
 import PaymentMethodSelector from '../../components/PaymentMethodSelector';
 import { useNavigate } from 'react-router-dom';
 import { safeJsonFetch } from '../../lib/api';
@@ -116,7 +116,8 @@ export default function Pricing() {
               }
             } catch (err: any) {
               console.error('Error initializing pricing blocks:', err);
-              showToast(translateError(err), 'error');
+              // Fallback to static defaults if init fails
+              setBenefits(defaults);
             }
           };
           initDefaults();
@@ -126,6 +127,19 @@ export default function Pricing() {
       } else {
         setBenefits(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
       }
+      setLoadingBenefits(false);
+    }, (error) => {
+      console.error('Error listening to pricing blocks:', error);
+      // Fallback to defaults on error
+      const defaults = [
+        { icon: 'Zap', title: 'Liberação Imediata', description: 'Pague via Pix e tenha acesso ao painel em segundos.', is_active: true, order: 1 },
+        { icon: 'TrendingUp', title: 'Visibilidade Prioritária', description: 'Apareça no topo das buscas em sua cidade e estado.', is_active: true, order: 2 },
+        { icon: 'Star', title: 'Destaque de Plantão', description: 'Selo exclusivo \'Farmácia de Plantão\' em destaque no mapa.', is_active: true, order: 3 },
+        { icon: 'Smartphone', title: 'Link Direto WhatsApp', description: 'Clientes entram em contato com apenas um clique.', is_active: true, order: 4 },
+        { icon: 'Award', title: 'Métricas Avançadas', description: 'Relatórios detalhados de cliques e engajamento.', is_active: true, order: 5 },
+        { icon: 'Shield', title: 'Suporte Premium', description: 'Canal exclusivo de atendimento para parceiros.', is_active: true, order: 6 }
+      ];
+      setBenefits(defaults);
       setLoadingBenefits(false);
     });
 
@@ -138,6 +152,8 @@ export default function Pricing() {
           active: data.whatsapp_active ?? true
         });
       }
+    }, (error) => {
+      console.error('Error listening to general config:', error);
     });
 
     return () => {
@@ -487,7 +503,7 @@ export default function Pricing() {
           rel="noopener noreferrer"
           className="fixed bottom-[calc(var(--spacing)*18)] right-6 z-40 bg-[#25D366] text-white p-4 rounded-full shadow-2xl hover:scale-110 transition-transform active:scale-95 flex items-center gap-2 group"
         >
-          <Smartphone className="w-6 h-6" />
+          <MessageCircle className="w-6 h-6" />
           <span className="max-w-0 overflow-hidden group-hover:max-w-xs transition-all duration-500 ease-in-out whitespace-nowrap font-bold text-sm">
             Apoio via WhatsApp
           </span>

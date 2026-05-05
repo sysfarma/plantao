@@ -47,5 +47,10 @@ export const translateError = (error: any): string => {
   if (message.includes('Pharmacy not active')) return 'Esta farmácia ainda não foi ativada.';
   if (message.includes('Subscription required')) return 'É necessário uma assinatura ativa.';
   
+  // If the error message is relatively clean and likely a custom validation message
+  if (message && message.length < 150 && !message.includes('fetch') && !message.includes('is not a function') && !message.includes('Unexpected') && !message.includes('JSON')) {
+    return message;
+  }
+  
   return 'Ocorreu um erro inesperado. Tente novamente.';
 };

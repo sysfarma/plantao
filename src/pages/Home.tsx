@@ -242,7 +242,11 @@ export default function Home() {
             <Star className="w-5 h-5 text-yellow-500 fill-yellow-500" />
             Destaques do Dia
           </h2>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className={`grid gap-6 ${
+        dayHighlights.length === 1 ? 'grid-cols-1' :
+        dayHighlights.length === 2 ? 'grid-cols-1 md:grid-cols-2' :
+        'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
+      }`}>
         {dayHighlights.map(pharmacy => (
           <PharmacyCard key={pharmacy.id} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
         ))}
@@ -256,7 +260,11 @@ export default function Home() {
             <Star className="w-5 h-5 text-emerald-500 fill-emerald-500" />
             Destaques da Semana
           </h2>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className={`grid gap-6 ${
+        weekHighlights.length === 1 ? 'grid-cols-1' :
+        weekHighlights.length === 2 ? 'grid-cols-1 md:grid-cols-2' :
+        'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
+      }`}>
         {weekHighlights.map(pharmacy => (
           <PharmacyCard key={pharmacy.id} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
         ))}
@@ -270,7 +278,11 @@ export default function Home() {
             <Star className="w-5 h-5 text-blue-500 fill-blue-500" />
             Destaques do Mês
           </h2>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className={`grid gap-6 ${
+        monthHighlights.length === 1 ? 'grid-cols-1' :
+        monthHighlights.length === 2 ? 'grid-cols-1 md:grid-cols-2' :
+        'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
+      }`}>
         {monthHighlights.map(pharmacy => (
           <PharmacyCard key={pharmacy.id} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
         ))}
@@ -335,7 +347,11 @@ export default function Home() {
         </div>
       ) : pharmacies.length > 0 ? (
         <Fragment>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className={`grid gap-6 ${
+            pharmacies.length === 1 ? 'grid-cols-1' :
+            pharmacies.length === 2 ? 'grid-cols-1 md:grid-cols-2' :
+            'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
+          }`}>
             {pharmacies.map(pharmacy => (
               <PharmacyCard key={pharmacy.id} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
             ))}

@@ -4,9 +4,11 @@ import { Helmet } from 'react-helmet-async';
 interface SEOHandlerProps {
   city?: string;
   uf?: string;
+  title?: string;
+  description?: string;
 }
 
-const SEOHandler: React.FC<SEOHandlerProps> = ({ city, uf }) => {
+const SEOHandler: React.FC<SEOHandlerProps> = ({ city, uf, title: customTitle, description: customDescription }) => {
   const now = new Date();
   const monthNames = [
     'janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
@@ -15,13 +17,13 @@ const SEOHandler: React.FC<SEOHandlerProps> = ({ city, uf }) => {
   const currentMonth = monthNames[now.getMonth()];
   const currentYear = now.getFullYear();
 
-  const title = city && uf
+  const title = customTitle || (city && uf
     ? `Plantão de farmácia em ${city} ${uf.toUpperCase()} hoje - ${currentMonth} ${currentYear}`
-    : 'Plantões de Hoje | Farmácias de Plantão';
+    : 'Plantões de Hoje | Farmácias de Plantão');
 
-  const description = city && uf
+  const description = customDescription || (city && uf
     ? `Confira a escala de plantão das farmácias de ${city} (${uf.toUpperCase()}) atualizada para hoje. Veja endereços, telefones e localização das farmácias abertas agora.`
-    : 'Encontre farmácias de plantão hoje na sua região. Escalas atualizadas de farmácias 24 horas e plantonistas em todo o Brasil.';
+    : 'Encontre farmácias de plantão hoje na sua região. Escalas atualizadas de farmácias 24 horas e plantonistas em todo o Brasil.');
 
   const canonicalUrl = city && uf
     ? `https://farmaciasdeplantao.app.br/plantao/${uf.toLowerCase()}/${city.toLowerCase().replace(/\s+/g, '-')}`
