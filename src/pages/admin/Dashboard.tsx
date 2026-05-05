@@ -57,7 +57,8 @@ export default function AdminDashboard() {
     whatsapp_active: true,
     email_support_active: true,
     support_email: 'contato@farmaciasdeplantao.app.br',
-    support_phone: '(00) 00000-0000'
+    support_phone: '(00) 00000-0000',
+    platform_last_update: ''
   });
   const [subscriptionPlans, setSubscriptionPlans] = useState<any>({
     free: { active: true, price: 0, title: 'Plano Gratuito', frequency: 1, frequency_type: 'years', benefits: [] },
@@ -410,7 +411,8 @@ export default function AdminDashboard() {
             whatsapp_active: general.whatsapp_active ?? true,
             email_support_active: general.email_support_active ?? true,
             support_email: general.support_email || 'contato@farmaciasdeplantao.app.br',
-            support_phone: general.support_phone || '(00) 00000-0000'
+            support_phone: general.support_phone || '(00) 00000-0000',
+            platform_last_update: general.platform_last_update || ''
           });
         }
       }
@@ -874,7 +876,11 @@ export default function AdminDashboard() {
               </div>
               <h3 className="text-gray-500 text-sm font-medium">Última Atualização</h3>
             </div>
-            <p className="text-sm font-medium text-gray-900">{stats.lastUpdate ? new Date(stats.lastUpdate).toLocaleString('pt-BR') : 'Agora'}</p>
+            <p className="text-sm font-medium text-gray-900">
+              {generalConfig.platform_last_update 
+                ? new Date(generalConfig.platform_last_update).toLocaleString('pt-BR') 
+                : (stats.lastUpdate ? new Date(stats.lastUpdate).toLocaleString('pt-BR') : 'Agora')}
+            </p>
           </div>
         </div>
       )}
@@ -1898,6 +1904,17 @@ export default function AdminDashboard() {
                   className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
                 />
               </div>
+              {isAdminMaster && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Data de Atualização Pública (Master)</label>
+                  <input 
+                    type="datetime-local" 
+                    value={generalConfig.platform_last_update ? new Date(generalConfig.platform_last_update).toISOString().slice(0, 16) : ''} 
+                    onChange={e => setGeneralConfig({...generalConfig, platform_last_update: e.target.value ? new Date(e.target.value).toISOString() : ''})}
+                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"
+                  />
+                </div>
+              )}
             </div>
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

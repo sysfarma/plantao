@@ -1,7 +1,22 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Lock } from 'lucide-react';
+import { safeJsonFetch } from '../lib/api';
 
 export default function Privacy() {
+  const [lastUpdate, setLastUpdate] = useState<string>('');
+
+  useEffect(() => {
+    safeJsonFetch<any>('/api/public/config')
+      .then(config => {
+        if (config?.platform_last_update) {
+          setLastUpdate(new Date(config.platform_last_update).toLocaleDateString('pt-BR'));
+        } else {
+          setLastUpdate(new Date().toLocaleDateString('pt-BR'));
+        }
+      })
+      .catch(() => setLastUpdate(new Date().toLocaleDateString('pt-BR')));
+  }, []);
+
   return (
     <div className="max-w-4xl mx-auto py-12 px-4 sm:px-6 lg:px-8">
       <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-8 md:p-12">
@@ -68,7 +83,7 @@ export default function Privacy() {
         </div>
         
         <div className="mt-12 pt-8 border-t border-gray-100 text-sm text-gray-400">
-          Última atualização: {new Date().toLocaleDateString('pt-BR')}
+          Última atualização: {lastUpdate}
         </div>
       </div>
     </div>

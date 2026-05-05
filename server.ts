@@ -2586,7 +2586,26 @@ async function startServer() {
     }
   });
 
-  // Admin: Get Dashboard Stats
+  // Public: Get General Configuration
+  app.get('/api/public/config', async (req, res) => {
+    try {
+      const configDoc = await db.collection('config').doc('general').get();
+      const config = configDoc.data() || {};
+      
+      res.json({
+        whatsapp_support: config.whatsapp_support,
+        future_shifts_days: config.future_shifts_days,
+        support_email: config.support_email,
+        support_phone: config.support_phone,
+        whatsapp_active: config.whatsapp_active,
+        email_support_active: config.email_support_active,
+        platform_last_update: config.platform_last_update
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Admin: Get Dashboard Stats
   app.get('/api/admin/stats', authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });

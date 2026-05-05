@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { motion } from 'motion/react';
 import { Mail, Phone, MessageSquare, Clock, MapPin } from 'lucide-react';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -8,6 +9,9 @@ export default function Contact() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Ensure page starts at the top
+    window.scrollTo(0, 0);
+
     const fetchConfig = async () => {
       try {
         const docSnap = await getDoc(doc(db, 'config', 'general'));
@@ -24,18 +28,40 @@ export default function Contact() {
   }, []);
 
   return (
-    <div className="max-w-4xl mx-auto py-12 px-4 sm:px-6 lg:px-8">
+    <motion.div 
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5 }}
+      className="max-w-4xl mx-auto py-12 px-4 sm:px-6 lg:px-8"
+    >
       <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-8 md:p-12">
         <div className="text-center mb-12">
-          <h1 className="text-4xl font-black text-gray-900 mb-4">Fale Conosco</h1>
-          <p className="text-gray-500 text-lg max-w-2xl mx-auto font-medium">
+          <motion.h1 
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.1 }}
+            className="text-4xl font-black text-gray-900 mb-4"
+          >
+            Fale Conosco
+          </motion.h1>
+          <motion.p 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.2 }}
+            className="text-gray-500 text-lg max-w-2xl mx-auto font-medium"
+          >
             Tem alguma dúvida, sugestão ou encontrou algum erro? Nossa equipe está pronta para te atender.
-          </p>
+          </motion.p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
           {/* Contact Methods */}
-          <div className="space-y-6">
+          <motion.div 
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: 0.3 }}
+            className="space-y-6"
+          >
             <div className="bg-emerald-50 p-6 rounded-2xl border border-emerald-100">
               <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
                 <MessageSquare className="w-5 h-5 text-emerald-600" />
@@ -90,10 +116,14 @@ export default function Contact() {
                 </div>
               </div>
             </div>
-          </div>
+          </motion.div>
 
-          {/* Map/Office Info */}
-          <div className="bg-emerald-900 rounded-3xl p-8 text-white flex flex-col justify-between relative overflow-hidden">
+            <motion.div 
+             initial={{ opacity: 0, x: 20 }}
+             animate={{ opacity: 1, x: 0 }}
+             transition={{ delay: 0.4 }}
+             className="bg-emerald-900 rounded-3xl p-8 text-white flex flex-col justify-between relative overflow-hidden"
+            >
              <div className="relative z-10">
                <h2 className="text-2xl font-bold mb-6">Nossa Missão</h2>
                <p className="text-emerald-100/80 mb-8 leading-relaxed font-medium">
@@ -111,9 +141,9 @@ export default function Contact() {
              
              {/* Decorative pill element */}
              <div className="absolute -bottom-10 -right-10 w-40 h-40 bg-white/5 rounded-full blur-3xl"></div>
-          </div>
+          </motion.div>
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 }
