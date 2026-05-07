@@ -21,7 +21,8 @@ service cloud.firestore {
     function isAdmin() {
       // Super Admin check via email + verified status
       return isVerified() && (
-        request.auth.token.email == 'sys.farmaciasdeplantao@gmail.com'
+        request.auth.token.email == 'sys.farmaciasdeplantao@gmail.com' ||
+        request.auth.token.email == 'sys.farmaciasdeplantao@gmail.com' // Placeholder for actual admin
       );
     }
 
@@ -121,6 +122,14 @@ service cloud.firestore {
                      incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phone', 'whatsapp', 'street', 'number', 'neighborhood', 'city', 'state', 'zip', 'updated_at', 'lat', 'lng', 'cep']))
                   );
       allow delete: if isVerified() && isValidId(pharmacyId) && isAdmin();
+      
+      // Private subcollection for sensitive settings (mp_customer_id, etc)
+      match /private/{docId} {
+        allow read, write: if isVerified() && (
+          isAdmin() || 
+          get(/databases/$(database)/documents/pharmacies/$(pharmacyId)).data.user_id == request.auth.uid
+        );
+      }
     }
 
     match /shifts/{shiftId} {
@@ -169,7 +178,7 @@ service cloud.firestore {
     }
 
     match /config/{configId} {
-      allow read: if true;
+      allow read: if (configId != 'mercadopago' && configId != 'secrets') || isAdmin();
       allow write: if isAdmin();
     }
 

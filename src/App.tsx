@@ -9,6 +9,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { FirebaseProvider } from './components/FirebaseProvider';
 import { ToastProvider } from './components/Toast';
 import { StabilityToast } from './components/StabilityToast';
+import ScrollToTop from './components/ScrollToTop';
 import PublicLayout from './layouts/PublicLayout';
 import AdminLayout from './layouts/AdminLayout';
 import PharmacyLayout from './layouts/PharmacyLayout';
@@ -37,7 +38,8 @@ export default function App() {
           <StabilityToast />
           <HelmetProvider>
             <Router>
-            <Routes>
+              <ScrollToTop />
+              <Routes>
               {/* Public Routes */}
               <Route element={<PublicLayout />}>
                 <Route path="/" element={<Home />} />

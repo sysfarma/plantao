@@ -1,10 +1,14 @@
-# Issue: Implementar ScrollToTop Global
-**Data e Hora (Brasília):** 05/05/2026 16:06
+# Issue: Implementar ScrollToTop Global [CONCLUÍDA]
+**Data e Hora (Brasília):** 05/05/2026 16:15
 
-**Descrição:**
-As páginas não resetam a posição do scroll ao navegar entre rotas, causando uma experiência ruim (usuário "cai" no meio da página nova).
+**Status:** Implementado em 05/05/2026 16:15
 
-**Tarefas:**
-- Criar o componente `ScrollToTop.tsx` em `src/components/`.
-- Integrar o componente no `App.tsx` dentro do `BrowserRouter`.
-- Verificar se o reset de scroll funciona em todas as rotas públicas e privadas.
+**Resumo da Solução:**
+- Criado o componente `ScrollToTop.tsx` em `src/components/`.
+- Integrado ao `Router` no `App.tsx`.
+- Agora, toda vez que o usuário navega para uma nova rota, a página volta automaticamente para o topo (0,0).
+
+**Tarefas Realizadas:**
+- [x] Criar o componente `ScrollToTop.tsx`.
+- [x] Integrar no `App.tsx` dentro do `Router`.
+- [x] Verificar conformidade com as rotas.

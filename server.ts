@@ -87,6 +87,39 @@ let sitemapCache: string | null = null;
 let sitemapCacheTimestamp: number = 0;
 const SITEMAP_CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
 
+const ERRORS = {
+  PHARMACY_NOT_FOUND: 'Farmácia não encontrada',
+  SHIFT_NOT_FOUND: 'Plantão não encontrado',
+  USER_NOT_FOUND: 'Usuário não encontrado',
+  ACCESS_DENIED: 'Acesso negado',
+  INTERNAL_ERROR: 'Erro interno do servidor',
+  PAYMENT_NOT_FOUND: 'Pagamento não encontrado',
+  INVALID_PAYLOAD: 'Dados inválidos',
+  UNAUTHORIZED: 'Não autorizado',
+  SUBSCRIPTION_NOT_FOUND: 'Assinatura não encontrada',
+  ACTIVE_SUBSCRIPTION_EXISTS: 'Você já possui uma assinatura ativa',
+  TOKEN_REQUIRED: 'Token não fornecido ou inválido',
+  INVALID_TOKEN: 'Token inválido ou expirado',
+  TOKEN_EXPIRED: 'Token expirado',
+  EMAIL_REQUIRED: 'E-mail é obrigatório',
+  PROFILE_SYNC_FAILED: 'Falha ao sincronizar perfil',
+  PLAN_NOT_AVAILABLE: 'Plano não disponível',
+  NO_ACTIVE_SUBSCRIPTION: 'Nenhuma assinatura ativa encontrada',
+  CARD_TOKEN_REQUIRED: 'Dados do cartão não fornecidos',
+  NOT_MP_SUBSCRIPTION: 'Assinatura não gerenciada pelo Mercado Pago',
+  PIX_GENERATION_FAILED: 'Erro ao gerar pagamento Pix',
+  SECURITY_HEADERS_MISSING: 'Cabeçalhos de segurança ausentes',
+  INVALID_SIGNATURE: 'Assinatura inválida',
+  SIGNATURE_ERROR: 'Erro de validação de assinatura',
+  CONFIG_ERROR: 'Configuração do sistema pendente',
+  SUBSCRIPTION_PROCESS_ERROR: 'Erro ao processar assinatura',
+  SUBSCRIPTION_CANCEL_ERROR: 'Erro ao cancelar assinatura',
+  CARD_UPDATE_ERROR: 'Erro ao atualizar dados do cartão',
+  ACCESS_TOKEN_REQUIRED: 'Token de acesso é obrigatório',
+  TEST_TOKEN_DETECTED: 'Token de teste/placeholder detectado.',
+  ROUTE_NOT_FOUND: 'Rota não encontrada'
+};
+
 const normalize = (str: string) => str.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
 
 // Haversine distance formula
@@ -280,65 +313,25 @@ async function updateDashboardStats(force = false) {
     
     const currentYear = new Date().getFullYear();
     const yearRef = db.collection('stats_revenue').doc(`year_${currentYear}`);
-    const yearDoc = await yearRef.get();
+    const statsRef = db.collection('config').doc('stats');
     
-    let totalRevenue = 0;
-    let revenueByMonth: { name: string, total: number }[] = [];
+    const [yearDoc, globalStatsDoc] = await Promise.all([
+      yearRef.get(),
+      statsRef.get()
+    ]);
+    
+    const yearData = yearDoc.exists ? yearDoc.data() || {} : {};
+    const globalStatsData = globalStatsDoc.exists ? globalStatsDoc.data() || {} : {};
+    
     const monthNames = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    const revenueByMonth = monthNames.map((month, index) => ({
+      name: month,
+      total: yearData[`m${index}`] || 0
+    }));
 
-    if (yearDoc.exists) {
-      const yearData = yearDoc.data() || {};
-      
-      // Get global total revenue from config/stats
-      const statsDoc = await db.collection('config').doc('stats').get();
-      totalRevenue = statsDoc.data()?.totalRevenue || 0;
-      
-      revenueByMonth = monthNames.map((month, index) => ({
-        name: month,
-        total: yearData[`m${index}`] || 0
-      }));
-    } else {
-      // Lazy Migration / Fallback: perform full count for this year
-      console.log(`[Stats] Year doc not found for ${currentYear}, performing recovery scan...`);
-      
-      const totalRevenueResult = await db.collection('payments')
-        .where('status', '==', 'approved')
-        .aggregate({
-          total: admin.firestore.AggregateField.sum('amount')
-        })
-        .get();
-      
-      totalRevenue = totalRevenueResult.data().total || 0;
+    const totalRevenue = globalStatsData.totalRevenue || 0;
 
-      const startOfYear = new Date(currentYear, 0, 1).toISOString();
-      const yearPaymentsSnapshot = await db.collection('payments')
-        .where('status', '==', 'approved')
-        .where('created_at', '>=', startOfYear)
-        .select('amount', 'created_at')
-        .get();
-
-      const yearStats: any = { total: 0 };
-      revenueByMonth = monthNames.map((month, index) => {
-        const monthPayments = yearPaymentsSnapshot.docs.filter(doc => {
-          const d = new Date(doc.data().created_at);
-          return d.getMonth() === index && d.getFullYear() === currentYear;
-        });
-        const monthTotal = monthPayments.reduce((acc, doc) => acc + (doc.data().amount || 0), 0);
-        yearStats[`m${index}`] = monthTotal;
-        yearStats.total += monthTotal;
-        return {
-          name: month,
-          total: monthTotal
-        };
-      });
-
-      // Save the recovered year stats
-      await yearRef.set({ ...yearStats, lastUpdate: new Date().toISOString() });
-      // Also sync the global total if it seems out of date
-      await db.collection('config').doc('stats').set({ totalRevenue }, { merge: true });
-    }
-
-    await db.collection('config').doc('stats').set({
+    await statsRef.set({
       totalPharmacies: pharmaCount,
       activePharmacies: activePharmaCount,
       totalRevenue,
@@ -349,6 +342,8 @@ async function updateDashboardStats(force = false) {
       ],
       lastUpdate: new Date().toISOString()
     }, { merge: true });
+
+    console.log('[Stats] Dashboard stats updated incrementally (no recovery scan).');
   } catch (err) {
     console.error('Error updating dashboard stats:', err);
   }
@@ -404,7 +399,7 @@ async function startServer() {
     } catch (err: any) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({
-          error: 'Dados inválidos',
+          error: ERRORS.INVALID_PAYLOAD,
           details: err.issues.map(e => ({
             field: e.path.join('.'),
             message: e.message
@@ -451,7 +446,7 @@ async function startServer() {
 
     if (!token || token === 'null' || token === 'undefined') {
       console.log('Auth Middleware: No valid token provided');
-      return res.status(401).json({ error: 'Token não fornecido ou inválido' });
+      return res.status(401).json({ error: ERRORS.TOKEN_REQUIRED });
     }
 
     try {
@@ -478,7 +473,7 @@ async function startServer() {
       next();
     } catch (err) {
       console.error('Auth Middleware Error:', err);
-      return res.status(403).json({ error: 'Token inválido ou expirado' });
+      return res.status(403).json({ error: ERRORS.INVALID_TOKEN });
     }
   };
 
@@ -487,16 +482,16 @@ async function startServer() {
   // Debug: Check Admin Status
   app.get('/api/debug/admin-check', authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Acesso negado' });
+      return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     }
     try {
       const adminEmail = process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL.replace(/['"]/g, '').trim() : 'sys.farmaciasdeplantao@gmail.com';
-      if (!adminEmail) return res.status(500).json({ error: 'ADMIN_EMAIL not configured' });
+      if (!adminEmail) return res.status(500).json({ error: ERRORS.CONFIG_ERROR });
       let userRecord = null;
       try {
         userRecord = await auth.getUserByEmail(adminEmail);
       } catch (e) {
-        return res.json({ authExists: false, error: 'User not found in Auth' });
+        return res.json({ authExists: false, error: ERRORS.USER_NOT_FOUND });
       }
       
       const userDoc = await db.collection('users').where('email', '==', adminEmail).get();
@@ -538,7 +533,7 @@ async function startServer() {
     }
 
     const { email } = req.body;
-    if (!email) return res.status(400).json({ error: 'Email obrigatório' });
+    if (!email) return res.status(400).json({ error: ERRORS.EMAIL_REQUIRED });
 
     try {
       const userSnapshot = await db.collection('users').where('email', '==', email).get();
@@ -593,18 +588,18 @@ async function startServer() {
       const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
       const resetSnapshot = await db.collection('password_resets').where('token', '==', hashedToken).get();
       
-      if (resetSnapshot.empty) return res.status(400).json({ error: 'Token inválido ou expirado' });
+      if (resetSnapshot.empty) return res.status(400).json({ error: ERRORS.INVALID_TOKEN });
       
       const resetDoc = resetSnapshot.docs[0];
       const resetData = resetDoc.data();
       
       if (new Date(resetData.expires_at) < new Date()) {
         await resetDoc.ref.delete();
-        return res.status(400).json({ error: 'Token expirado' });
+        return res.status(400).json({ error: ERRORS.TOKEN_EXPIRED });
       }
       
       const userSnapshot = await db.collection('users').where('email', '==', resetData.email).get();
-      if (userSnapshot.empty) return res.status(400).json({ error: 'Usuário não encontrado' });
+      if (userSnapshot.empty) return res.status(400).json({ error: ERRORS.USER_NOT_FOUND });
       
       const userId = userSnapshot.docs[0].id;
       
@@ -701,7 +696,7 @@ async function startServer() {
       });
     } catch (err: any) {
       console.error('Google Sync Error:', err);
-      res.status(500).json({ error: 'Falha ao sincronizar perfil' });
+      res.status(500).json({ error: ERRORS.PROFILE_SYNC_FAILED });
     }
   });
 
@@ -1040,7 +1035,17 @@ async function startServer() {
       }
 
       // 2. Extract active shifts for today
-      const shiftsSnapshot = await db.collection('shifts').where('date', '==', today).limit(500).get();
+      let shiftsQuery: any = db.collection('shifts').where('date', '==', today);
+      
+      if (state) {
+        shiftsQuery = shiftsQuery.where('state', '==', state.toUpperCase());
+      }
+      
+      // Note: city in shifts is stored as it appears in the pharmacy profile.
+      // If we had a normalized_city, we would use it here.
+      // For now, filtering by state already dramatically improves the 500-limit bottleneck.
+      
+      const shiftsSnapshot = await shiftsQuery.limit(1000).get();
       
       if (shiftsSnapshot.empty) {
         return res.json([]);
@@ -1048,8 +1053,9 @@ async function startServer() {
 
       let pharmacyIds = [...new Set(shiftsSnapshot.docs.map(doc => (doc.data() as any).pharmacy_id))];
       
+      // Secondary filter: Match against the localized allowedPharmacyIds if coordinates or city were provided
       if (allowedPharmacyIds) {
-        pharmacyIds = pharmacyIds.filter(id => allowedPharmacyIds!.includes(id));
+        pharmacyIds = (pharmacyIds as string[]).filter(id => allowedPharmacyIds!.includes(id));
       }
 
       if (pharmacyIds.length === 0) {
@@ -1233,7 +1239,7 @@ async function startServer() {
       const now = new Date().toISOString();
       const pharmacyDoc = await db.collection('pharmacies').doc(id).get();
       if (!pharmacyDoc.exists) {
-        return res.status(404).json({ error: 'Pharmacy not found' });
+        return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
       }
 
       const pharmacyData = pharmacyDoc.data()!;
@@ -1314,11 +1320,11 @@ async function startServer() {
 
   // Pharmacy: Get Profile
   app.get('/api/pharmacy/profile', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     
     try {
       const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
-      if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
+      if (pharmacySnapshot.empty) return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
       
       const pharmacyDoc = pharmacySnapshot.docs[0];
       const pharmacy = { id: pharmacyDoc.id, ...pharmacyDoc.data() };
@@ -1337,11 +1343,11 @@ async function startServer() {
 
   // Pharmacy: Update Profile
   app.put('/api/pharmacy/profile', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     
     try {
       const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
-      if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
+      if (pharmacySnapshot.empty) return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
       
       const pharmacyDoc = pharmacySnapshot.docs[0];
       const { 
@@ -1365,11 +1371,11 @@ async function startServer() {
 
   // Pharmacy: Get Highlights
   app.get('/api/pharmacy/highlights', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     
     try {
       const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
-      if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
+      if (pharmacySnapshot.empty) return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
       
       const pharmacyId = pharmacySnapshot.docs[0].id;
       const highlightsSnapshot = await db.collection('highlights').where('pharmacy_id', '==', pharmacyId).get();
@@ -1382,11 +1388,11 @@ async function startServer() {
 
   // Pharmacy: Get Payments
   app.get('/api/pharmacy/payments', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     
     try {
       const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
-      if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
+      if (pharmacySnapshot.empty) return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
       
       const pharmacyId = pharmacySnapshot.docs[0].id;
       
@@ -1408,11 +1414,11 @@ async function startServer() {
 
   // Pharmacy: Get Reports
   app.get('/api/pharmacy/reports', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'pharmacy' && req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'pharmacy' && req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     
     try {
       const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
-      if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
+      if (pharmacySnapshot.empty) return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
       
       const pharmacyId = pharmacySnapshot.docs[0].id;
 
@@ -1454,7 +1460,7 @@ async function startServer() {
   });
 
   app.get('/api/pharmacy/audit-logs', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'pharmacy' && req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'pharmacy' && req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     
     const page = Number(req.query.page) || 1;
     const pageSize = Number(req.query.limit) || 20;
@@ -1462,7 +1468,7 @@ async function startServer() {
     try {
       // First find the pharmacy ID for this user
       const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
-      if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
+      if (pharmacySnapshot.empty) return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
       const pharmacyId = pharmacySnapshot.docs[0].id;
 
       // Fetch logs related to this pharmacy resource
@@ -1495,11 +1501,11 @@ async function startServer() {
 
   // Pharmacy: Get Shifts
   app.get('/api/pharmacy/shifts', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     
     try {
       const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
-      if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
+      if (pharmacySnapshot.empty) return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
       
       const pharmacyId = pharmacySnapshot.docs[0].id;
       
@@ -1525,13 +1531,14 @@ async function startServer() {
 
   // Pharmacy: Create Shift
   app.post('/api/pharmacy/shifts', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     
     try {
       const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
-      if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
+      if (pharmacySnapshot.empty) return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
       
       const pharmacyId = pharmacySnapshot.docs[0].id;
+      const pharmacyData = pharmacySnapshot.docs[0].data();
       const { date, start_time, end_time, is_24h } = req.body;
       
       const newShift = {
@@ -1540,6 +1547,8 @@ async function startServer() {
         start_time: is_24h ? '00:00' : start_time,
         end_time: is_24h ? '23:59' : end_time,
         is_24h: is_24h ? 1 : 0,
+        city: pharmacyData.city || '',
+        state: pharmacyData.state || '',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       };
@@ -1553,17 +1562,17 @@ async function startServer() {
 
   // Pharmacy: Update Shift
   app.put('/api/pharmacy/shifts/:id', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     
     try {
       const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
-      if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
+      if (pharmacySnapshot.empty) return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
       
       const pharmacyId = pharmacySnapshot.docs[0].id;
       const shiftDoc = await db.collection('shifts').doc(req.params.id).get();
       
       if (!shiftDoc.exists || shiftDoc.data()?.pharmacy_id !== pharmacyId) {
-        return res.status(404).json({ error: 'Shift not found' });
+        return res.status(404).json({ error: ERRORS.SHIFT_NOT_FOUND });
       }
       
       const { date, start_time, end_time, is_24h } = req.body;
@@ -1585,17 +1594,17 @@ async function startServer() {
 
   // Pharmacy: Delete Shift
   app.delete('/api/pharmacy/shifts/:id', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     
     try {
       const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
-      if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
+      if (pharmacySnapshot.empty) return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
       
       const pharmacyId = pharmacySnapshot.docs[0].id;
       const shiftDoc = await db.collection('shifts').doc(req.params.id).get();
       
       if (!shiftDoc.exists || shiftDoc.data()?.pharmacy_id !== pharmacyId) {
-        return res.status(404).json({ error: 'Shift not found' });
+        return res.status(404).json({ error: ERRORS.SHIFT_NOT_FOUND });
       }
       
       await db.collection('shifts').doc(req.params.id).delete();
@@ -1607,16 +1616,21 @@ async function startServer() {
 
   // Subscriptions: Create Subscription (Recurrent)
   app.post('/api/subscriptions/create', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
 
     try {
       const { card_token, email, payment_method_id, installments = 1, identificationType, identificationNumber, planType = 'annual' } = req.body;
       const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
-      if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
+      if (pharmacySnapshot.empty) return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
       
       const pharmacyDoc = pharmacySnapshot.docs[0];
       const pharmacyData = pharmacyDoc.data();
       const pharmacyId = pharmacyDoc.id;
+
+      // Fetch private settings for sensitive info
+      const privateSnap = await db.collection('pharmacies').doc(pharmacyId).collection('private').doc('settings').get();
+      const privateData = privateSnap.exists ? privateSnap.data() : {};
+      const mpCustomerId = privateData?.mp_customer_id || pharmacyData?.mp_customer_id;
 
       // Check if there is already an active subscription for this pharmacy
       const existingActiveSub = await db.collection('subscriptions')
@@ -1626,7 +1640,7 @@ async function startServer() {
 
       if (!existingActiveSub.empty) {
         return res.status(400).json({ 
-          error: 'Você já possui uma assinatura ativa.',
+          error: ERRORS.ACTIVE_SUBSCRIPTION_EXISTS,
           details: 'Se deseja alterar seu plano, utilize a opção de Atualizar Plano.'
         });
       }
@@ -1639,7 +1653,7 @@ async function startServer() {
       };
       const planConfig = (plansData as any)[planType];
       if (!planConfig || !planConfig.active) {
-         return res.status(400).json({ error: 'Plano selecionado não está disponível.' });
+         return res.status(400).json({ error: ERRORS.PLAN_NOT_AVAILABLE });
       }
 
       // Handle Free Plan bypass
@@ -1673,7 +1687,7 @@ async function startServer() {
       const { customerClient, preApprovalClient, isMock } = await getMPClient();
 
       // 1. Ensure Customer exists (Optionally stored in MP)
-      let customerId = pharmacyData.mp_customer_id;
+      let customerId = mpCustomerId;
       if (!customerId && !isMock) {
         try {
           const customer = await customerClient.create({
@@ -1689,7 +1703,9 @@ async function startServer() {
           });
           customerId = customer?.id;
           if (customerId) {
-            await db.collection('pharmacies').doc(pharmacyId).update({ mp_customer_id: customerId });
+            await db.collection('pharmacies').doc(pharmacyId).collection('private').doc('settings').set({ 
+              mp_customer_id: customerId 
+            }, { merge: true });
           }
         } catch (e: any) {
           console.warn(`Note: MP Customer creation failed (${e.message}). Attempting fallback search...`);
@@ -1700,7 +1716,9 @@ async function startServer() {
             if (searchResult && searchResult.results && searchResult.results.length > 0) {
               customerId = searchResult.results[0].id;
               if (customerId) {
-                await db.collection('pharmacies').doc(pharmacyId).update({ mp_customer_id: customerId });
+                await db.collection('pharmacies').doc(pharmacyId).collection('private').doc('settings').set({ 
+                  mp_customer_id: customerId 
+                }, { merge: true });
                 console.log(`Fallback successful: Linked existing MP Customer ${customerId} to Pharmacy ${pharmacyId}`);
               }
             } else {
@@ -1794,17 +1812,17 @@ async function startServer() {
 
     } catch (err: any) {
       console.error('Error creating subscription:', err);
-      res.status(500).json({ error: 'Erro ao processar assinatura: ' + err.message });
+      res.status(500).json({ error: ERRORS.SUBSCRIPTION_PROCESS_ERROR + ': ' + err.message });
     }
   });
 
   // Pharmacy: Cancel Subscription voluntarily
   app.delete('/api/subscriptions/cancel', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
 
     try {
       const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
-      if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
+      if (pharmacySnapshot.empty) return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
       
       const pharmacyDoc = pharmacySnapshot.docs[0];
       const pharmacyId = pharmacyDoc.id;
@@ -1816,7 +1834,7 @@ async function startServer() {
         .get();
 
       if (subSnapshot.empty) {
-        return res.status(400).json({ error: 'Nenhuma assinatura ativa encontrada para cancelar.' });
+        return res.status(400).json({ error: ERRORS.NO_ACTIVE_SUBSCRIPTION });
       }
 
       const activeSubDoc = subSnapshot.docs[0];
@@ -1837,8 +1855,8 @@ async function startServer() {
             if (mpError.status !== 400 && mpError.status !== 404) {
               const formatted = formatMPError(mpError);
               return res.status(mpError.status || 500).json({ 
-                error: 'Erro no MercadoPago ao cancelar: ' + formatted.message,
-                details: formatted.details
+                error: ERRORS.SUBSCRIPTION_CANCEL_ERROR,
+                details: formatted.message
               });
             }
           }
@@ -1866,20 +1884,20 @@ async function startServer() {
       res.json({ success: true, message: 'Assinatura cancelada com sucesso.' });
     } catch (err: any) {
       console.error('Error in /api/subscriptions/cancel:', err);
-      res.status(500).json({ error: 'Erro ao cancelar assinatura: ' + err.message });
+      res.status(500).json({ error: ERRORS.SUBSCRIPTION_CANCEL_ERROR + ': ' + err.message });
     }
   });
 
   // Pharmacy: Update Subscription Card Token
   app.put('/api/subscriptions/update-card', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
 
     try {
       const { card_token } = req.body;
-      if (!card_token) return res.status(400).json({ error: 'Token do cartão não fornecido.' });
+      if (!card_token) return res.status(400).json({ error: ERRORS.CARD_TOKEN_REQUIRED });
 
       const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
-      if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
+      if (pharmacySnapshot.empty) return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
       const pharmacyId = pharmacySnapshot.docs[0].id;
 
       // Find active subscription
@@ -1889,7 +1907,7 @@ async function startServer() {
         .get();
 
       if (subSnapshot.empty) {
-        return res.status(404).json({ error: 'Nenhuma assinatura ativa encontrada para atualizar o cartão.' });
+        return res.status(404).json({ error: ERRORS.NO_ACTIVE_SUBSCRIPTION });
       }
 
       // Filter sub with MP preapproval
@@ -1905,7 +1923,7 @@ async function startServer() {
       }
 
       if (!activeSub) {
-         return res.status(400).json({ error: 'Assinatura atual não é gerenciada pelo Mercado Pago.' });
+         return res.status(400).json({ error: ERRORS.NOT_MP_SUBSCRIPTION });
       }
 
       const { preApprovalClient, isMock } = await getMPClient();
@@ -1935,18 +1953,18 @@ async function startServer() {
       res.json({ success: true, message: 'Cartão atualizado com sucesso.' });
     } catch (err: any) {
       console.error('Error in /api/subscriptions/update-card:', err);
-      res.status(500).json({ error: 'Erro ao analisar atualização de cartão: ' + err.message });
+      res.status(500).json({ error: ERRORS.CARD_UPDATE_ERROR + ': ' + err.message });
     }
   });
 
   // Pharmacy: Upgrade/Downgrade Subscription
   app.put('/api/subscriptions/update', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     
     try {
       const { planType, card_token, email, identificationType, identificationNumber } = req.body;
       const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
-      if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
+      if (pharmacySnapshot.empty) return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
       const pharmacyId = pharmacySnapshot.docs[0].id;
 
       // 2. Create NEW
@@ -1956,7 +1974,7 @@ async function startServer() {
         annual: { active: true, price: 69.96, title: 'Plano Anual', frequency: 1, frequency_type: 'years' }
       };
       const planConfig = (plansData as any)[planType];
-      if (!planConfig || !planConfig.active) return res.status(400).json({ error: 'Plano selecionado não disponível' });
+      if (!planConfig || !planConfig.active) return res.status(400).json({ error: ERRORS.PLAN_NOT_AVAILABLE });
 
       // Handle Free Plan bypass for updates
       if (planConfig.price === 0) {
@@ -2021,7 +2039,7 @@ async function startServer() {
         } else {
           console.error('Mercado Pago API Upgrade Error:', e.message || e);
           return res.status(e.status || 500).json({ 
-            error: 'Erro na API do Mercado Pago ao atualizar', 
+            error: ERRORS.CARD_UPDATE_ERROR, 
             details: e.message || 'Falha ao processar troca de plano real.' 
           });
         }
@@ -2061,12 +2079,12 @@ async function startServer() {
 
   // Payments: Generate Pix
   app.post('/api/payments/pix', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'pharmacy') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     
     try {
       const { planType = 'annual' } = req.body;
       const pharmacySnapshot = await db.collection('pharmacies').where('user_id', '==', req.user.id).get();
-      if (pharmacySnapshot.empty) return res.status(404).json({ error: 'Pharmacy not found' });
+      if (pharmacySnapshot.empty) return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
       const pharmacy = pharmacySnapshot.docs[0].data();
       const pharmacyId = pharmacySnapshot.docs[0].id;
 
@@ -2078,7 +2096,7 @@ async function startServer() {
       };
       const planConfig = (plansData as any)[planType];
       if (!planConfig || !planConfig.active) {
-         return res.status(400).json({ error: 'Plano selecionado não está disponível.' });
+         return res.status(400).json({ error: ERRORS.PLAN_NOT_AVAILABLE });
       }
 
       let paymentResponse: any = null;
@@ -2155,7 +2173,7 @@ async function startServer() {
 
     } catch (err: any) {
       console.error('Error generating Pix:', err);
-      res.status(500).json({ error: 'Erro ao gerar pagamento Pix' });
+      res.status(500).json({ error: ERRORS.PIX_GENERATION_FAILED });
     }
   });
 
@@ -2168,7 +2186,7 @@ async function startServer() {
 
     if (!xSignature || !xRequestId || !secret) {
       console.error('Missing Webhook Signature headers or Webhook Secret.');
-      return res.status(400).json({ error: 'Missing security headers or secret' });
+      return res.status(400).json({ error: ERRORS.SECURITY_HEADERS_MISSING });
     }
 
     try {
@@ -2188,7 +2206,7 @@ async function startServer() {
       
       if (!ts || !hash || !dataId) {
         console.error('Invalid signature format or missing data ID.');
-        return res.status(400).json({ error: 'Invalid signature payload' });
+        return res.status(400).json({ error: ERRORS.INVALID_SIGNATURE });
       }
 
       const manifest = `id:${dataId};request-id:${xRequestId};ts:${ts};`;
@@ -2196,11 +2214,11 @@ async function startServer() {
       
       if (hmac !== hash) {
         console.error('Invalid Webhook Signature. Expected:', hash, 'Got:', hmac);
-        return res.status(403).json({ error: 'Invalid Signature' });
+        return res.status(403).json({ error: ERRORS.INVALID_SIGNATURE });
       }
     } catch (e) {
       console.error('Error validating webhook signature', e);
-      return res.status(500).json({ error: 'Internal signature validation error' });
+      return res.status(500).json({ error: ERRORS.SIGNATURE_ERROR });
     }
 
     // Send immediate 200 OK to Mercado Pago to prevent Timeout/Retries
@@ -2443,14 +2461,14 @@ async function startServer() {
 
   // Dev: Simulate Payment Approval
   app.post('/api/dev/simulate-payment', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'pharmacy' && req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'pharmacy' && req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     
     try {
       const { payment_id } = req.body;
       const paymentsSnapshot = await db.collection('payments').where('mp_payment_id', '==', payment_id).get();
       
       if (paymentsSnapshot.empty) {
-        return res.status(404).json({ error: 'Payment not found' });
+        return res.status(404).json({ error: ERRORS.PAYMENT_NOT_FOUND });
       }
 
       const paymentDoc = paymentsSnapshot.docs[0];
@@ -2527,7 +2545,7 @@ async function startServer() {
   app.get('/api/user/profile', authenticateToken, async (req: any, res) => {
     try {
       const userDoc = await db.collection('users').doc(req.user.id).get();
-      if (!userDoc.exists) return res.status(404).json({ error: 'Usuário não encontrado' });
+      if (!userDoc.exists) return res.status(404).json({ error: ERRORS.USER_NOT_FOUND });
       
       const userData = userDoc.data();
       let profileData: any = { ...userData, id: req.user.id };
@@ -2626,7 +2644,7 @@ async function startServer() {
 
   // Admin: Get Dashboard Stats
   app.get('/api/admin/stats', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     try {
       const statsDoc = await db.collection('config').doc('stats').get();
       let data = statsDoc.data();
@@ -2647,7 +2665,7 @@ async function startServer() {
 
   // Admin: Get all pharmacies compactly for dropdowns
   app.get('/api/admin/pharmacies/all', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     try {
       const snapshot = await db.collection('pharmacies').orderBy('name', 'asc').get();
       const result = snapshot.docs.map(doc => {
@@ -2668,7 +2686,7 @@ async function startServer() {
 
   // Admin: Get all pharmacies (PAGINAÇÃO NATIVA QUANDO POSSÍVEL)
   app.get('/api/admin/pharmacies', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     
     const page = Number(req.query.page) || 1;
     const limitNum = Number(req.query.limit) || 20;
@@ -2732,7 +2750,7 @@ async function startServer() {
 
   // Admin: Get pharmacy payments
   app.get('/api/admin/pharmacies/:id/payments', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     try {
       const snapshot = await db.collection('payments')
         .where('pharmacy_id', '==', req.params.id)
@@ -2752,12 +2770,12 @@ async function startServer() {
 
   // Admin: Activate Pharmacy
   app.post('/api/admin/pharmacies/:id/activate', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     const { id } = req.params;
     
     try {
       const pharmacyDoc = await db.collection('pharmacies').doc(id).get();
-      if (!pharmacyDoc.exists) return res.status(404).json({ error: 'Pharmacy not found' });
+      if (!pharmacyDoc.exists) return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
 
       const now = new Date().toISOString();
       await db.collection('pharmacies').doc(id).update({ 
@@ -2801,7 +2819,7 @@ async function startServer() {
         status: 'approved',
         created_at: now,
         updated_at: now
-      });
+      }).then(doc => trackPaymentMetric(69.96, now, doc.id));
 
       const pharmacy = pharmacyDoc.data();
       if (pharmacy) {
@@ -2818,12 +2836,12 @@ async function startServer() {
 
   // Admin: Deactivate Pharmacy
   app.post('/api/admin/pharmacies/:id/deactivate', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     const { id } = req.params;
     
     try {
       const pharmacyDoc = await db.collection('pharmacies').doc(id).get();
-      if (!pharmacyDoc.exists) return res.status(404).json({ error: 'Pharmacy not found' });
+      if (!pharmacyDoc.exists) return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
 
       const now = new Date().toISOString();
       await db.collection('pharmacies').doc(id).update({ 
@@ -2854,12 +2872,12 @@ async function startServer() {
 
   // Admin: Delete Pharmacy
   app.delete('/api/admin/pharmacies/:id', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     const { id } = req.params;
     
     try {
       const pharmacyDoc = await db.collection('pharmacies').doc(id).get();
-      if (!pharmacyDoc.exists) return res.status(404).json({ error: 'Pharmacy not found' });
+      if (!pharmacyDoc.exists) return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
       const pharmacy = pharmacyDoc.data();
 
       // Delete user from Firebase Auth
@@ -2905,7 +2923,7 @@ async function startServer() {
 
   // Admin: Update Pharmacy
   app.put('/api/admin/pharmacies/:id', authLimiter, authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     const { id } = req.params;
     const { 
       email = '', password = '', name = '', phone = '', whatsapp = '', 
@@ -2915,7 +2933,7 @@ async function startServer() {
     try {
       const pharmacyDoc = await db.collection('pharmacies').doc(id).get();
       if (!pharmacyDoc.exists) {
-        return res.status(404).json({ error: 'Farmácia não encontrada' });
+        return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
       }
       const pharmacyData = pharmacyDoc.data()!;
       let currentUserId = pharmacyData.user_id;
@@ -2950,7 +2968,7 @@ async function startServer() {
           // If email exists, we might want to link it, but let's be strict for atomicity
           // unless it's the 'email-already-exists' which we handle specifically if needed
           return res.status(400).json({ 
-            error: 'Falha na atualização de autenticação', 
+            error: ERRORS.PROFILE_SYNC_FAILED, 
             details: authError.message 
           });
         }
@@ -2991,7 +3009,7 @@ async function startServer() {
 
   // Admin: Create Pharmacy
   app.post('/api/admin/pharmacies', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     const { 
       email = '', password = '', name = '', phone = '', whatsapp = '', 
       street = '', number = '', neighborhood = '', city = '', state = '', cep = '' 
@@ -3070,13 +3088,13 @@ async function startServer() {
     } catch (error: any) {
       console.error('Admin Create Pharmacy Error Stack:', error.stack);
       console.error('Admin Create Pharmacy Error details:', error);
-      res.status(500).json({ error: `Start error: ${error?.message || 'Server error'}` });
+      res.status(500).json({ error: ERRORS.INTERNAL_ERROR, details: error?.message });
     }
   });
 
   // Admin: Get All Shifts (PAGINATED)
   app.get('/api/admin/shifts', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     
     const limitDays = Number(req.query.days) || 30; // Default to last 30 days of shifts
     const today = new Date();
@@ -3120,10 +3138,14 @@ async function startServer() {
 
   // Admin: Create Shift
   app.post('/api/admin/shifts', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     try {
       console.log('Creating shift:', req.body);
       const { pharmacy_id, user_id, date, start_time, end_time, is_24h } = req.body;
+      
+      const pharmacyDoc = await db.collection('pharmacies').doc(pharmacy_id).get();
+      const pharmacyData = pharmacyDoc.exists ? pharmacyDoc.data() : null;
+
       const newShift = {
         pharmacy_id,
         user_id: user_id || '',
@@ -3131,6 +3153,8 @@ async function startServer() {
         start_time: is_24h ? '00:00' : start_time,
         end_time: is_24h ? '23:59' : end_time,
         is_24h: is_24h ? 1 : 0,
+        city: pharmacyData?.city || '',
+        state: pharmacyData?.state || '',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       };
@@ -3146,10 +3170,10 @@ async function startServer() {
 
   // Admin: Update Shift
   app.put('/api/admin/shifts/:id', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     try {
       const shiftDoc = await db.collection('shifts').doc(req.params.id).get();
-      if (!shiftDoc.exists) return res.status(404).json({ error: 'Shift not found' });
+      if (!shiftDoc.exists) return res.status(404).json({ error: ERRORS.SHIFT_NOT_FOUND });
       
       const { pharmacy_id, date, start_time, end_time, is_24h } = req.body;
       const updatedData = {
@@ -3169,7 +3193,7 @@ async function startServer() {
 
   // Admin: Delete Shift
   app.delete('/api/admin/shifts/:id', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     try {
       await db.collection('shifts').doc(req.params.id).delete();
       res.json({ message: 'Shift deleted successfully' });
@@ -3180,7 +3204,7 @@ async function startServer() {
 
   // Admin: Get Reports
   app.get('/api/admin/reports', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     
     try {
       const statsDoc = await db.collection('config').doc('stats').get();
@@ -3201,7 +3225,7 @@ async function startServer() {
 
   // Admin: Sync System Data (Optimization Tool)
   app.post('/api/admin/sync-data', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     
     try {
       const pharmaciesSnapshot = await db.collection('pharmacies').get();
@@ -3243,7 +3267,7 @@ async function startServer() {
   // Admin: Set Highlight
   // Admin: Get Highlights (with pharmacy names)
   app.get('/api/admin/highlights', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     try {
       const snapshot = await db.collection('highlights').orderBy('created_at', 'desc').limit(200).get();
       
@@ -3276,7 +3300,7 @@ async function startServer() {
   });
 
   app.post('/api/admin/highlights', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     const { pharmacy_id, type, date_start, date_end, city, state } = req.body;
     
     try {
@@ -3303,7 +3327,7 @@ async function startServer() {
 
   // Admin: Delete Highlight
   app.delete('/api/admin/highlights/:id', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     try {
       await db.collection('highlights').doc(req.params.id).delete();
       res.json({ message: 'Highlight deleted successfully' });
@@ -3314,7 +3338,7 @@ async function startServer() {
 
   // Admin: Get Config (MercadoPago + General)
   app.get('/api/admin/config', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     try {
       const [mpDoc, genDoc] = await Promise.all([
         db.collection('config').doc('mercadopago').get(),
@@ -3332,7 +3356,7 @@ async function startServer() {
 
   // Admin: Update Config
   app.post('/api/admin/config', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     try {
       const { mercadopago, general } = req.body;
       const now = new Date().toISOString();
@@ -3363,7 +3387,7 @@ async function startServer() {
   // Admin: Get Subscription Plans
   // Admin: Get Audit Logs
   app.get('/api/admin/audit-logs', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     const limitDays = Number(req.query.days) || 7;
     const page = Number(req.query.page) || 1;
     const pageSize = Number(req.query.limit) || 50;
@@ -3389,7 +3413,7 @@ async function startServer() {
   });
 
   app.get('/api/admin/subscription-plans', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     try {
       const plansDoc = await db.collection('config').doc('subscription_plans').get();
       if (!plansDoc.exists) {
@@ -3406,7 +3430,7 @@ async function startServer() {
 
   // Admin: Get Subscriptions (Subscribers - PAGINATED)
   app.get('/api/admin/subscriptions', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     try {
       const subsSnapshot = await db.collection('subscriptions').orderBy('created_at', 'desc').limit(1000).get();
       
@@ -3442,12 +3466,12 @@ async function startServer() {
 
   // Admin: Update Subscription
   app.put('/api/admin/subscriptions/:id', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     try {
       const { status, plan_type, next_billing_date, expires_at } = req.body;
       const subRef = db.collection('subscriptions').doc(req.params.id);
       const subDoc = await subRef.get();
-      if (!subDoc.exists) return res.status(404).json({ error: 'Assinatura não encontrada' });
+      if (!subDoc.exists) return res.status(404).json({ error: ERRORS.SUBSCRIPTION_NOT_FOUND });
 
       const updateData: any = {
         status,
@@ -3479,11 +3503,11 @@ async function startServer() {
 
   // Admin: Delete Subscription
   app.delete('/api/admin/subscriptions/:id', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     try {
       const subRef = db.collection('subscriptions').doc(req.params.id);
       const subDoc = await subRef.get();
-      if (!subDoc.exists) return res.status(404).json({ error: 'Assinatura não encontrada' });
+      if (!subDoc.exists) return res.status(404).json({ error: ERRORS.SUBSCRIPTION_NOT_FOUND });
 
       const pharmacyId = subDoc.data()?.pharmacy_id;
       await subRef.delete();
@@ -3503,16 +3527,16 @@ async function startServer() {
 
   // Admin: Test Mercado Pago Credentials
   app.post('/api/admin/config/test-mercadopago', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     const { access_token } = req.body;
     
-    if (!access_token) return res.status(400).json({ error: 'Token de acesso é obrigatório' });
+    if (!access_token) return res.status(400).json({ error: ERRORS.ACCESS_TOKEN_REQUIRED });
 
     try {
       if (access_token === 'TEST-1234567890' || access_token === 'YOUR_MERCADOPAGO_ACCESS_TOKEN') {
         return res.status(400).json({ 
           success: false, 
-          error: 'Token de teste/placeholder detectado.',
+          error: ERRORS.TEST_TOKEN_DETECTED,
           details: 'Por favor, insira um Access Token real do seu painel do Mercado Pago.' 
         });
       }
@@ -3540,7 +3564,7 @@ async function startServer() {
 
   // Admin: Save Subscription Plans
   app.put('/api/admin/subscription-plans', authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     try {
       await db.collection('config').doc('subscription_plans').set({
         ...req.body,
@@ -3555,7 +3579,10 @@ async function startServer() {
 
   // Catch-all for API routes to return JSON instead of HTML
   app.all('/api/*', (req, res) => {
-    res.status(404).json({ error: `Rota não encontrada: ${req.method} ${req.url}` });
+    res.status(404).json({ 
+      error: ERRORS.ROUTE_NOT_FOUND, 
+      details: `${req.method} ${req.url}` 
+    });
   });
 
   // Vite middleware for development

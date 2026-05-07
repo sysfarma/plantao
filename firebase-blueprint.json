@@ -108,6 +108,8 @@
         "start_time": { "type": "string" },
         "end_time": { "type": "string" },
         "is_24h": { "type": "number" },
+        "city": { "type": "string" },
+        "state": { "type": "string" },
         "created_at": { "type": "string", "format": "date-time" },
         "updated_at": { "type": "string", "format": "date-time" }
       },

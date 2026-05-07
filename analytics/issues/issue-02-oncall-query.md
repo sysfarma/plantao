@@ -1,10 +1,16 @@
-# Issue: Otimizar Consulta de Plantões (On-Call)
-**Data e Hora (Brasília):** 05/05/2026 16:06
+# Issue: Otimizar Consulta de Plantões (On-Call) [CONCLUÍDA]
+**Data e Hora (Brasília):** 05/05/2026 16:13
 
-**Descrição:**
-A rota `/api/public/on-call` busca plantões com um limite global de 500, o que pode causar falta de resultados em buscas locais se houver muitos plantões cadastrados.
+**Status:** Implementado em 05/05/2026 16:13
 
-**Tarefas:**
-- Refatorar query para filtrar por `state` e `city` (se fornecidos) antes de aplicar o limite.
-- Garantir que a filtragem por distância ocorra de forma eficiente ou use paginação por cursor.
-- Corrigir o limite de 500 para algo mais dinâmico ou regional.
+**Resumo da Solução:**
+- Adicionados os campos `city` e `state` na coleção `shifts`.
+- Atualizados os endpoints de criação de plantão (Farmácia e Admin) para herdar cidade/estado do perfil da farmácia.
+- Refatorada a rota `/api/public/on-call` para filtrar por `state` diretamente na consulta do Firestore, eliminando o gargalo do `limit(500)` global.
+- Aumentado o limite para 1000 quando filtrado por estado, garantindo cobertura total em estados populosos.
+
+**Tarefas Realizadas:**
+- [x] Refatorar query para filtrar por `state` diretamente.
+- [x] Adicionar `city` e `state` no schema de `shifts`.
+- [x] Corrigir o limite de 500 para algo mais dinâmico.
+- [x] Atualizar script de seed para suportar os novos campos.
