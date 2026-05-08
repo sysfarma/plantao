@@ -97,7 +97,9 @@ export default function PharmacyView() {
     );
   }
 
-  const { open: isOpen, message: statusMsg } = isPharmacyOpen(pharmacy.operating_hours);
+  const normalHours = isPharmacyOpen(pharmacy.operating_hours);
+  const isOpen = pharmacy.on_call ? true : normalHours.open;
+  const statusMsg = pharmacy.on_call ? 'ABERTO AGORA' : normalHours.message;
   const mapQuery = encodeURIComponent(`${pharmacy.street}, ${pharmacy.number}, ${pharmacy.neighborhood}, ${pharmacy.city}, ${pharmacy.state}`);
 
   return (
@@ -129,15 +131,16 @@ export default function PharmacyView() {
           </div>
 
           <div className="flex items-center gap-2 mb-2">
-            {pharmacy.on_call && (
-               <span className="bg-orange-500 text-white text-[10px] font-black uppercase tracking-tighter px-2 py-0.5 rounded shadow-sm flex items-center gap-1">
-                 <Star className="w-3 h-3 fill-current" />
-                 DE PLANTÃO HOJE
+            {pharmacy.on_call ? (
+               <span className="bg-white text-emerald-600 text-[10px] font-black uppercase tracking-tighter px-2 py-0.5 rounded shadow-sm flex items-center gap-1">
+                 <Star className="w-3 h-3 fill-emerald-500" />
+                 ABERTO AGORA (PLANTÃO)
                </span>
+            ) : (
+              <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded shadow-sm ${isOpen ? 'bg-white text-emerald-600' : 'bg-red-500 text-white'}`}>
+                {statusMsg}
+              </span>
             )}
-            <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded shadow-sm ${isOpen ? 'bg-white text-emerald-600' : 'bg-red-500 text-white'}`}>
-              {statusMsg}
-            </span>
           </div>
 
           <h1 className="text-3xl md:text-4xl font-black mb-2 tracking-tight">{pharmacy.name}</h1>

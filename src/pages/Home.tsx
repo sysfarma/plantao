@@ -7,6 +7,7 @@ import { clearCachedLocation } from '../lib/userCache';
 import { geocodeAddress } from '../lib/geocoding';
 import { useLocation } from '../hooks/useLocation';
 import { getDistance, formatName } from '../lib/utils';
+import { isPharmacyOpen } from '../lib/dateUtils';
 import SEOHandler from '../components/SEOHandler';
 import PharmacySchema from '../components/PharmacySchema';
 import { PharmacyCardSkeleton } from '../components/PharmacyCardSkeleton';
@@ -556,19 +557,29 @@ export default function Home() {
 }
 
 function PharmacyCard({ pharmacy, onTrackClick }: { pharmacy: Pharmacy; onTrackClick: (id: string, type: 'whatsapp' | 'map') => void; key?: React.Key }) {
+  const normalHours = isPharmacyOpen((pharmacy as any).operating_hours);
+  const isOnCall = (pharmacy as any).on_call === true || (pharmacy as any).type === 'day'; // 'day' highlights are usually the plantão of the day
+  const isOpen = isOnCall ? true : normalHours.open;
+  const statusMsg = isOnCall ? 'ABERTO AGORA' : normalHours.message;
+
   return (
     <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm hover:shadow-xl transition-all duration-300 w-full flex flex-col h-full group relative">
       <PharmacySchema pharmacy={pharmacy} />
       <div className="flex-1">
         <div className="flex justify-between items-start mb-2">
-          <Link to={`/farmacia/${pharmacy.id}`} className="hover:underline">
+          <Link to={`/farmacia/${(pharmacy as any).slug || pharmacy.id}`} className="hover:underline">
             <h3 className="text-xl font-bold text-gray-900 group-hover:text-emerald-600 transition-colors">{pharmacy.name}</h3>
           </Link>
-          {(pharmacy as any).distance !== undefined && (
-             <span className="text-xs font-bold bg-emerald-100 text-emerald-700 px-2 py-1 rounded-md">
-               {Number((pharmacy as any).distance).toFixed(1)} km
-             </span>
-          )}
+          <div className="flex flex-col items-end gap-1">
+            {(pharmacy as any).distance !== undefined && (
+               <span className="text-xs font-bold bg-emerald-100 text-emerald-700 px-2 py-1 rounded-md">
+                 {Number((pharmacy as any).distance).toFixed(1)} km
+               </span>
+            )}
+            <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded shadow-sm ${isOpen ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-red-50 text-red-600 border border-red-100'}`}>
+              {statusMsg}
+            </span>
+          </div>
         </div>
         <p className="text-sm text-gray-500 mb-6 leading-relaxed">
           <span className="block font-medium text-gray-700">{pharmacy.street}, {pharmacy.number}</span>

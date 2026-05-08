@@ -5,6 +5,13 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+export function generateSlug(name: string, city: string, state: string): string {
+  const combined = `${name}-${city}-${state}`;
+  return normalizeString(combined)
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 export function normalizeString(str: string): string {
   if (!str) return '';
   return str

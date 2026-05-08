@@ -20,6 +20,17 @@ import { emailService } from './emailService.ts';
 const phoneRegex = /^\(?\d{2}\)?\s?\d{4,5}-?\d{4}$/;
 const cnpjRegex = /^\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}$|^\d{14}$/;
 
+function generateSlug(name: string, city: string, state: string): string {
+  const combined = `${name}-${city}-${state}`;
+  if (!combined) return '';
+  return combined
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 const pharmacySchema = z.object({
   name: z.string().min(3, "Nome muito curto"),
   email: z.string().email("E-mail inválido"),
@@ -840,6 +851,7 @@ async function startServer() {
   // Helper object to extract only public PII-safe fields
   const sanitizePublicPharmacy = (id: string, data: any) => ({
     id,
+    slug: data.slug || generateSlug(data.name || '', data.city || '', data.state || ''),
     name: data.name || '',
     street: data.street || '',
     number: data.number || '',
@@ -867,9 +879,22 @@ async function startServer() {
   app.get('/api/public/pharmacies/:id', publicLimiter, async (req, res) => {
     const { id } = req.params;
     try {
-      const pharmacyDoc = await db.collection('pharmacies').doc(id).get();
+      let pharmacyDoc = await db.collection('pharmacies').doc(id).get();
+      let pharmacyId = id;
+      
       if (!pharmacyDoc.exists) {
-        return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
+        // Try to fall back to search by slug
+        const snapshot = await db.collection('pharmacies')
+          .where('slug', '==', id)
+          .where('is_active', '==', 1)
+          .limit(1)
+          .get();
+          
+        if (snapshot.empty) {
+          return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
+        }
+        pharmacyDoc = snapshot.docs[0] as any;
+        pharmacyId = pharmacyDoc.id;
       }
 
       const data = pharmacyDoc.data()!;
@@ -877,7 +902,7 @@ async function startServer() {
         return res.status(404).json({ error: 'Farmácia inativa.' });
       }
 
-      const pharmacy = sanitizePublicPharmacy(pharmacyDoc.id, data);
+      const pharmacy = sanitizePublicPharmacy(pharmacyId, data);
 
       // Check if on call today
       const today = new Intl.DateTimeFormat('sv-SE', {
@@ -888,7 +913,7 @@ async function startServer() {
       }).format(new Date());
 
       const shiftsSnapshot = await db.collection('shifts')
-        .where('pharmacy_id', '==', id)
+        .where('pharmacy_id', '==', pharmacyId)
         .where('date', '==', today)
         .limit(1)
         .get();
@@ -3056,6 +3081,8 @@ async function startServer() {
       const pharmacyData = pharmacyDoc.data()!;
       let currentUserId = pharmacyData.user_id;
 
+      const slug = generateSlug(name || pharmacyData.name, city || pharmacyData.city, state || pharmacyData.state);
+
       // Geocoding logic: Trigger if address changed AND (user didn't manually provide valid coordinates)
       let finalCoordinates = coordinates;
       const userProvidedCoords = coordinates && coordinates.lat !== null && coordinates.lng !== null;
@@ -3150,7 +3177,8 @@ async function startServer() {
         coordinates: finalCoordinates || null,
         operating_hours: operating_hours || null,
         is_active, sub_status,
-        zip: cep
+        zip: cep,
+        slug
       };
 
       Object.entries(fieldsToSave).forEach(([key, val]) => {
@@ -3228,6 +3256,8 @@ async function startServer() {
       const email = rawEmail?.toString().trim().toLowerCase() || '';
       const cleanCnpj = cnpj?.replace(/\D/g, '');
       
+      const slug = generateSlug(name, city, state);
+      
       // Geocoding logic
       let finalCoordinates = coordinates;
       if (!finalCoordinates && street && city) {
@@ -3298,6 +3328,7 @@ async function startServer() {
         state: state || '',
         cep: cep || '',
         zip: cep || '',
+        slug,
         is_active: is_active !== undefined ? is_active : 1,
         created_at: now,
         updated_at: now
@@ -3989,8 +4020,31 @@ async function startServer() {
     }
   });
 
-  app.listen(PORT, '0.0.0.0', () => {
+  app.listen(PORT, '0.0.0.0', async () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    
+    // Migration: Populate missing slugs for pharmacies
+    try {
+      const snapshot = await db.collection('pharmacies').get();
+      const batch = db.batch();
+      let count = 0;
+      
+      snapshot.docs.forEach(doc => {
+        const data = doc.data();
+        if (!data.slug) {
+          const slug = generateSlug(data.name || '', data.city || '', data.state || '');
+          batch.update(doc.ref, { slug });
+          count++;
+        }
+      });
+      
+      if (count > 0) {
+        await batch.commit();
+        console.log(`Migration: Added slugs to ${count} pharmacies.`);
+      }
+    } catch (e) {
+      console.error('Migration failed:', e);
+    }
   });
 }
 
