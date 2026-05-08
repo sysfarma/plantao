@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Outlet, Link, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, LogOut, Pill, Menu, X, Home, Clock, User, Download, Calendar, Share2 } from 'lucide-react';
+import { LayoutDashboard, LogOut, Pill, Menu, X, Home, Clock, User, Download, Calendar, Share2, FileText } from 'lucide-react';
 import MobileBottomNav from '../components/MobileBottomNav';
 import { usePWA } from '../hooks/usePWA';
 import { useToast } from '../components/Toast';
@@ -87,6 +87,10 @@ export default function AdminLayout() {
           <Link to="/admin" onClick={() => setIsMenuOpen(false)} className="flex items-center gap-3 px-3 py-2 rounded-md text-slate-300 hover:text-white hover:bg-slate-800 transition-colors">
             <LayoutDashboard className="w-5 h-5" />
             Dashboard
+          </Link>
+          <Link to="/admin/footer" onClick={() => setIsMenuOpen(false)} className="flex items-center gap-3 px-3 py-2 rounded-md text-slate-300 hover:text-white hover:bg-slate-800 transition-colors">
+            <FileText className="w-5 h-5" />
+            Configurar Rodapé
           </Link>
           <Link to="/perfil" onClick={() => setIsMenuOpen(false)} className="flex items-center gap-3 px-3 py-2 rounded-md text-slate-300 hover:text-white hover:bg-slate-800 transition-colors">
             <User className="w-5 h-5" />

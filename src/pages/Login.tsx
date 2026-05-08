@@ -20,7 +20,8 @@ export default function Login() {
     setLoading(true);
 
     try {
-      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const emailToSignIn = email.trim();
+      const userCredential = await signInWithEmailAndPassword(auth, emailToSignIn, password);
       showToast('Login realizado com sucesso!', 'success');
       const token = await getIdToken(userCredential.user);
 

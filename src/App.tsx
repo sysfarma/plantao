@@ -16,6 +16,7 @@ import PharmacyLayout from './layouts/PharmacyLayout';
 
 import Home from './pages/Home';
 import OnCall from './pages/OnCall';
+import PharmacyView from './pages/pharmacy/View';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import ForgotPassword from './pages/ForgotPassword';
@@ -23,6 +24,7 @@ import ResetPassword from './pages/ResetPassword';
 import Profile from './pages/Profile';
 
 import AdminDashboard from './pages/admin/Dashboard';
+import FooterSettings from './pages/footer';
 import PharmacyDashboard from './pages/pharmacy/Dashboard';
 import Pricing from './pages/pharmacy/Pricing';
 import FutureShifts from './pages/FutureShifts';
@@ -45,6 +47,7 @@ export default function App() {
                 <Route path="/" element={<Home />} />
                 <Route path="/plantao" element={<OnCall />} />
                 <Route path="/plantao/:uf/:city" element={<OnCall />} />
+                <Route path="/farmacia/:id" element={<PharmacyView />} />
                 <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
@@ -60,6 +63,7 @@ export default function App() {
         {/* Admin Routes */}
         <Route path="/admin" element={<AdminLayout />}>
           <Route index element={<AdminDashboard />} />
+          <Route path="footer" element={<FooterSettings />} />
         </Route>
 
         {/* Pharmacy Routes */}

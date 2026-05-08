@@ -1,25 +1,31 @@
-# Relatório de Análise do Sistema
-**Data e Hora (Brasília):** 05/05/2026 16:04
+# Relatório de Análise do Sistema de Cadastro de Farmácias
+**Data de Geração:** 08/05/2026, 10:54:04 (Horário de Brasília)
 
-## Resumo da Análise
-O sistema foi analisado em busca de erros de performance, segurança, usabilidade e lógica de negócio. Abaixo estão os problemas identificados.
+## 1. Status Atual
+O sistema de cadastro de farmácias possui funcionalidades básicas de CRUD (Criar, Ler, Atualizar, Deletar) operacionais, incluindo:
+- Integração com Firebase Auth para login exclusivo por farmácia.
+- Sincronização automática entre as coleções `pharmacies` e `users`.
+- Busca automática de endereço via CEP (ViaCEP).
+- Gestão de status (Ativo/Inativo) e exclusão permanente pelo Admin Master.
+- Campos básicos: Nome, E-mail, Telefone, WhatsApp, Endereço Completo, Website, Descrição e URL da Logo.
 
-## 1. Erros de Performance e Escalabilidade (Backend)
-- **Sitemap Ineficiente:** A rota `/sitemap.xml` busca TODAS as farmácias ativas do banco de dados sem paginação ou cache. Em um cenário com milhares de farmácias, isso causará timeout e consumo excessivo de memória.
-- **Limite Rígido de Plantões:** A rota `/api/public/on-call` possui um `limit(500)` na busca de plantões. Se houver mais de 500 plantões ativos no país, os resultados locais podem ser omitidos dependendo da ordem de inserção.
-- **Filtro de Localização em Memória:** As rotas de busca pública realizam filtragem de distância (raio de 20km) em memória após buscar até 2000 documentos. O Firestore suporta `geohashes` ou consultas de proximidade que seriam mais eficientes.
-- **Contagem de Pagamentos sem Cache:** A função de recuperação de estatísticas do dashboard percorre todos os pagamentos do ano para recalcular totais. Isso deve ser feito via triggers incrementais.
+## 2. Pendências e Lacunas (O que falta terminar)
 
-## 2. Erros de Interface e Usabilidade (Frontend)
-- **Scroll Position:** As páginas `Home`, `OnCall` e `Pricing` não garantem o retorno ao topo do scroll ao serem carregadas/navegadas, o que pode prejudicar a experiência do usuário se ele vier de uma página longa.
-- **Informações de Plantão em Destaques:** Os "Destaques" na Home não exibem o horário do plantão atual da farmácia, dificultando a decisão rápida do usuário.
-- **Tamanho dos Chunks de Build:** O build do Vite reporta arquivos acima de 500kB, indicando necessidade de code-splitting para melhorar o carregamento inicial.
+### 2.1. Funcionalidades de Dados e Validação
+- **CNPJ**: Ausência do campo CNPJ tanto no banco de dados quanto na interface. É essencial para a validação fiscal das farmácias.
+- **Validação de Duplicidade**: O sistema não impede o cadastro de múltiplas farmácias com o mesmo CNPJ ou Nome Fantasia.
+- **Geolocalização**: Não existem campos para Latitude e Longitude, o que impedirá a plotagem correta em mapas ou cálculos de proximidade no futuro.
+- **Horário de Funcionamento Regular**: Atualmente o sistema foca em "Plantões". Falta uma estrutura para definir o horário comercial padrão (ex: Seg-Sex 08h-22h).
 
-## 3. Erros de Localização (Internationalization)
-- **Mensagens de Erro Híbridas:** Algumas rotas do servidor retornam mensagens em Inglês (ex: "Internal Server Error", "Payment failed") enquanto outras estão em Português. É necessária a padronização.
+### 2.2. Interface e UX (Dashboard Admin)
+- **Upload de Logo**: O campo atual aceita apenas uma URL de texto. Falta integração com Firebase Storage para upload direto de arquivos de imagem.
+- **Ações em Massa**: Não é possível selecionar várias farmácias para ativar/desativar ou excluir de uma vez.
+- **Logs de Auditoria na UI**: Embora os logs sejam salvos no servidor, o administrador não consegue visualizar o histórico de alterações de uma farmácia específica diretamente no dashboard.
+- **Reset de Senha**: Falta um botão no dashboard para disparar o e-mail de recuperação de senha oficial do Firebase para o responsável pela farmácia.
 
-## 4. Segurança (Database)
-- **PII Leak em Listagens:** A regra de segurança para a coleção `pharmacies` permite `list: if true`. Embora o backend sanitize os dados, um acesso direto via client SDK poderia listar campos sensíveis se não estiverem devidamente protegidos em subcoleções.
+### 2.3. Segurança e Robustez
+- **Validação Server-side de Campos**: Falta validação mais rigorosa no `server.ts` para formatos de Telefone, WhatsApp e URLs.
+- **Confirmação de E-mail**: Não há bloqueio para farmácias que não verificaram o e-mail (opcional, mas recomendado).
 
 ---
-*Gerado por AI Coding Agent*
+*Relatório gerado automaticamente para fins de especificação técnica e acompanhamento de projeto.*

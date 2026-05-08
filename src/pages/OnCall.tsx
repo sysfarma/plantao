@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Search, MapPin, Phone, MessageCircle, Clock, Navigation, ChevronDown, ChevronUp } from 'lucide-react';
+import { Search, MapPin, Phone, MessageCircle, Clock, Navigation, ChevronDown, ChevronUp, ChevronRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { safeJsonFetch } from '../lib/api';
-import { useSearchParams, useParams, useNavigate } from 'react-router-dom';
+import { useSearchParams, useParams, useNavigate, Link } from 'react-router-dom';
 import { clearCachedLocation } from '../lib/userCache';
 import { geocodeAddress } from '../lib/geocoding';
 import { useLocation } from '../hooks/useLocation';
@@ -394,7 +394,12 @@ export default function OnCall() {
                 </div>
                 
                 <div className="flex-1 mb-6">
-                  <h3 className="text-xl font-bold text-gray-900 mb-3 group-hover:text-emerald-600 transition-colors">{pharmacy.name}</h3>
+                  <Link to={`/farmacia/${pharmacy.id}`} className="group/link block">
+                    <h3 className="text-xl font-bold text-gray-900 mb-3 group-hover:text-emerald-600 group-hover/link:text-emerald-700 transition-colors flex items-center justify-between">
+                      {pharmacy.name}
+                      <ChevronRight className="w-5 h-5 text-gray-300 group-hover/link:text-emerald-500 group-hover/link:translate-x-1 transition-all" />
+                    </h3>
+                  </Link>
                   <div className="flex items-start gap-3 text-gray-500 text-sm leading-relaxed">
                     <MapPin className="w-4 h-4 mt-0.5 flex-shrink-0 text-emerald-500" />
                     <p>

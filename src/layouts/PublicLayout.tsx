@@ -1,13 +1,17 @@
 import { useState, useEffect } from 'react';
 import { Outlet, Link, useNavigate } from 'react-router-dom';
-import { Pill, Menu, X, Home, User, LogOut, Clock, Download, CreditCard, Calendar, Share2 } from 'lucide-react';
+import { Pill, Menu, X, Home, User, LogOut, Clock, Download, CreditCard, Calendar, Share2, Loader2 } from 'lucide-react';
 import MobileBottomNav from '../components/MobileBottomNav';
 import { usePWA } from '../hooks/usePWA';
 import { useToast } from '../components/Toast';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 
 export default function PublicLayout() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [user, setUser] = useState<any>(null);
+  const [footerConfig, setFooterConfig] = useState<any>(null);
+  const [loadingFooter, setLoadingFooter] = useState(true);
   const navigate = useNavigate();
   const { canInstall, promptInstall } = usePWA();
   const { showToast } = useToast();
@@ -19,6 +23,20 @@ export default function PublicLayout() {
         setUser(JSON.parse(userStr));
       } catch (e) {}
     }
+
+    const fetchFooter = async () => {
+      try {
+        const docSnap = await getDoc(doc(db, 'config', 'footer'));
+        if (docSnap.exists()) {
+          setFooterConfig(docSnap.data());
+        }
+      } catch (error) {
+        console.error('Error fetching footer:', error);
+      } finally {
+        setLoadingFooter(false);
+      }
+    };
+    fetchFooter();
   }, []);
 
   const handleLogout = () => {
@@ -255,12 +273,22 @@ export default function PublicLayout() {
         <div className="w-full max-w-[90%] mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col md:flex-row justify-between items-center gap-6">
             <div className="text-gray-500 text-sm">
-              &copy; {new Date().getFullYear()} Farmácias de Plantão Brasil. Todos os direitos reservados.
+              &copy; {new Date().getFullYear()} {footerConfig?.copyright || 'Farmácias de Plantão Brasil. Todos os direitos reservados.'}
             </div>
             <div className="flex flex-wrap justify-center gap-6 text-sm font-medium">
-              <Link to="/termos" className="text-gray-600 hover:text-emerald-600 transition-colors">Termos de Uso</Link>
-              <Link to="/privacidade" className="text-gray-600 hover:text-emerald-600 transition-colors">Privacidade</Link>
-              <Link to="/contato" className="text-gray-600 hover:text-emerald-600 transition-colors">Fale Conosco</Link>
+              {footerConfig?.links ? (
+                footerConfig.links.map((link: any, idx: number) => (
+                  <Link key={idx} to={link.url} className="text-gray-600 hover:text-emerald-600 transition-colors">
+                    {link.label}
+                  </Link>
+                ))
+              ) : (
+                <>
+                  <Link to="/termos" className="text-gray-600 hover:text-emerald-600 transition-colors">Termos de Uso</Link>
+                  <Link to="/privacidade" className="text-gray-600 hover:text-emerald-600 transition-colors">Privacidade</Link>
+                  <Link to="/contato" className="text-gray-600 hover:text-emerald-600 transition-colors">Fale Conosco</Link>
+                </>
+              )}
             </div>
           </div>
         </div>

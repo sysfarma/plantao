@@ -1,29 +1,32 @@
-# Especificação de Implementações Pendentes
-**Data e Hora (Brasília):** 05/05/2026 16:05
+# Especificação Técnica: Implementações Pendentes (Cadastro de Farmácias)
+**Data de Geração:** 08/05/2026, 10:54:35 (Horário de Brasília)
 
-Com base no relatório de erros gerado, as seguintes implementações são necessárias para garantir a estabilidade, performance e usabilidade do sistema.
+Esta especificação detalha os componentes e comportamentos que ainda precisam ser implementados no sistema de gestão de farmácias.
 
-## 1. Otimizações de Backend (Node.js/Express)
-- **Implementar Cache no Sitemap:** Mudar a lógica do sitemap para gerar e salvar um arquivo estático ou usar Redis/Cache em memória com expiração de 24h.
-- **Refatoração da Consulta de Plantões:**
-  - Adicionar filtros de estado/cidade diretamente na query de `shifts` para evitar o limite de 500 documentos globais.
-  - Implementar paginação real baseada em cursor para as listagens públicas.
-- **Geolocalização Nativa:** Migrar a filtragem de distância de "memória" para consultas baseadas em filtros de latitude/longitude no Firestore (ou Geohashes).
-- **Triggers para Estatísticas:** Implementar Cloud Functions ou lógica de backend que atualize os documentos de estatísticas do dashboard no momento de cada pagamento, eliminando a função de "recovery scan".
+## 1. Campos e Modelagem de Dados (Firestore)
+- **Campo `cnpj`**: Adicionar string com máscara (00.000.000/0000-00) na coleção `pharmacies`.
+- **Campos `coordinates`**: Objeto contendo `lat` (number) e `lng` (number) para integração com mapas.
+- **Campo `operating_hours`**: Array de objetos ou mapa para definir horários padrão por dia da semana.
+- **Validação de Unicidade**: Lógica no `server.ts` para verificar se o CNPJ já existe antes de criar/atualizar.
 
-## 2. Melhorias de Interface (React)
-- **Componente ScrollToTop:** Criar um hook ou componente global que resete a posição do scroll para (0,0) em cada mudança de rota.
-- **Cartão de Farmácia Unificado:** Atualizar o `PharmacyCard` da Home para suportar exibição de "Badge de Status" (Aberto, 24h, Fechado) baseado nos dados de plantão recebidos.
-- **Code Splitting:** Configurar `React.lazy` e `Suspense` para as rotas principais (Admin, Pharmacy Dashboard) para reduzir o tamanho dos chunks.
+## 2. Componentes de UI (Dashboard Admin - Dashboard.tsx)
+- **Componente `ImageUpload`**: Substituir o input de texto `logo_url` por um seletor de arquivos com preview e integração com Firebase Storage.
+- **Botão `Reset Password`**: Adicionar botão na linha da farmácia que chama `/api/admin/pharmacies/:id/reset-password`.
+- **Checkbox de Seleção Multipla**: Implementar checkboxes na tabela para permitir ações em massa.
+- **Modal de Auditoria**: Novo modal para exibir a lista de `admin_logs` filtrada pelo ID da farmácia selecionada.
 
-## 3. Padronização e Traduções
-- **Dicionário de Erros:** Criar um arquivo central de constantes para mensagens de erro em Português-BR no `server.ts`.
-- **Validação de CEP:** Melhorar a regex de CEP no backend para aceitar formatos com e sem hífen de forma mais flexível.
+## 3. Comportamentos e Backend (server.ts)
+- **Rota `POST /api/admin/pharmacies/:id/reset-password`**: Endpoint para chamar `auth.generatePasswordResetLink(email)`.
+- **Integração Geocoding**: No momento de salvar o endereço (ou via botão de sincronização), buscar automaticamente as coordenadas via API do Google Maps ou similar.
+- **Validação de CNPJ**: Middleware ou helper no servidor para validar o dígito verificador do CNPJ.
+- **Endpoint de Ações em Massa**: `POST /api/admin/pharmacies/batch-action` para processar múltiplos IDs simultaneamente.
 
-## 4. Segurança do Banco de Dados
-- **Reforço de Firestore Rules:**
-  - Restringir a listagem de `pharmacies` para retornar apenas campos sanitizados ou mover dados sensíveis para uma subcoleção `/private`.
-  - Auditar todas as coleções em busca do padrão "Master Gate" conforme o blueprint de segurança.
+## 4. Página Pública / Perfil da Farmácia
+- **Página `src/pages/pharmacy/View.tsx`**: Criar visualização pública completa da farmácia para os usuários finais, exibindo:
+    - Logo e descrição.
+    - Status atual (Aberto/Fechado/De Plantão).
+    - Botão direto para WhatsApp.
+    - Mapa de localização.
 
 ---
-*Gerado por AI Coding Agent*
+*Apenas itens não implementados até a data desta especificação.*

@@ -53,17 +53,18 @@ export default function Register() {
     setLoading(true);
 
     try {
-      const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+      const email = formData.email.trim();
+      const userCredential = await createUserWithEmailAndPassword(auth, email, formData.password);
       showToast('Cadastro realizado com sucesso!', 'success');
       const user = userCredential.user;
 
       const now = new Date().toISOString();
       const rawAdmin = import.meta.env.VITE_ADMIN_EMAIL;
       const adminEmail = rawAdmin ? rawAdmin.replace(/['"]/g, '').trim() : 'sys.farmaciasdeplantao@gmail.com';
-      const actualRole = (formData.email === 'sys.farmaciasdeplantao@gmail.com' || (adminEmail && formData.email === adminEmail)) ? 'admin' : role;
+      const actualRole = (email === 'sys.farmaciasdeplantao@gmail.com' || (adminEmail && email === adminEmail)) ? 'admin' : role;
       
       await setDoc(doc(db, 'users', user.uid), {
-        email: formData.email,
+        email: email,
         name: formData.name,
         role: actualRole,
         cep: formData.cep,

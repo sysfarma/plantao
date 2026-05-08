@@ -15,7 +15,7 @@ export default function ForgotPassword() {
     setLoading(true);
 
     try {
-      await sendPasswordResetEmail(auth, email);
+      await sendPasswordResetEmail(auth, email.trim());
       showToast('E-mail de recuperação enviado!', 'success');
     } catch (err: any) {
       // Don't expose whether the email exists or not for security reasons

@@ -16,6 +16,67 @@ import { rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
 import { emailService } from './emailService.ts';
 
+// --- Validation Schemas ---
+const phoneRegex = /^\(?\d{2}\)?\s?\d{4,5}-?\d{4}$/;
+const cnpjRegex = /^\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}$|^\d{14}$/;
+
+const pharmacySchema = z.object({
+  name: z.string().min(3, "Nome muito curto"),
+  email: z.string().email("E-mail inválido"),
+  password: z.string().min(6, "Senha deve ter no mínimo 6 caracteres").optional().or(z.literal('')),
+  phone: z.string().optional().or(z.literal('')),
+  whatsapp: z.string().optional().or(z.literal('')),
+  cnpj: z.string().optional().or(z.literal('')),
+  street: z.string().min(5, "Endereço muito curto").optional().or(z.literal('')),
+  number: z.string().optional().or(z.literal('')),
+  neighborhood: z.string().min(2, "Bairro obrigatório").optional().or(z.literal('')),
+  city: z.string().min(2, "Cidade obrigatória").optional().or(z.literal('')),
+  state: z.string().length(2, "Estado deve ter 2 letras (UF)").optional().or(z.literal('')),
+  cep: z.string().optional().or(z.literal('')),
+  website: z.string().optional().or(z.literal('')),
+  description: z.string().max(2000).optional().or(z.literal('')),
+  logo_url: z.string().optional().or(z.literal('')),
+  coordinates: z.object({
+    lat: z.number().nullable().optional(),
+    lng: z.number().nullable().optional()
+  }).nullable().optional(),
+  operating_hours: z.any().optional(),
+  is_active: z.number().optional(),
+  sub_status: z.string().optional()
+});
+
+// --- Geocoding Helper ---
+const NOMINATIM_BASE_URL = 'https://nominatim.openstreetmap.org';
+const USER_AGENT = 'FarmaciasDePlantaoBrasil/1.0';
+
+async function geocodeAddress(street: string, number: string, city: string, state: string) {
+  const query = encodeURIComponent(`${street}, ${number}, ${city}, ${state}, Brazil`);
+  const url = `${NOMINATIM_BASE_URL}/search?format=json&q=${query}&limit=1`;
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': USER_AGENT,
+        'Accept-Language': 'pt-BR'
+      }
+    });
+
+    if (!response.ok) return null;
+    const data: any = await response.json();
+    
+    if (data && data.length > 0) {
+      return {
+        lat: parseFloat(data[0].lat),
+        lng: parseFloat(data[0].lon)
+      };
+    }
+  } catch (error) {
+    console.error('Geocoding error:', error);
+  }
+  return null;
+}
+// -------------------------
+
 // Helper for next billing date calculation
 function calculateNextBillingDate(frequency: number, frequencyType: string): string {
   const now = new Date();
@@ -796,9 +857,53 @@ async function startServer() {
     lng: data.lng || data.longitude || null,
     description: data.description || '',
     logo_url: data.logo_url || null,
+    operating_hours: data.operating_hours || null,
     is_active: data.is_active,
     created_at: data.created_at,
     updated_at: data.updated_at
+  });
+
+  // Public: Get Single Pharmacy Details
+  app.get('/api/public/pharmacies/:id', publicLimiter, async (req, res) => {
+    const { id } = req.params;
+    try {
+      const pharmacyDoc = await db.collection('pharmacies').doc(id).get();
+      if (!pharmacyDoc.exists) {
+        return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
+      }
+
+      const data = pharmacyDoc.data()!;
+      if (!data.is_active) {
+        return res.status(404).json({ error: 'Farmácia inativa.' });
+      }
+
+      const pharmacy = sanitizePublicPharmacy(pharmacyDoc.id, data);
+
+      // Check if on call today
+      const today = new Intl.DateTimeFormat('sv-SE', {
+        timeZone: 'America/Sao_Paulo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      }).format(new Date());
+
+      const shiftsSnapshot = await db.collection('shifts')
+        .where('pharmacy_id', '==', id)
+        .where('date', '==', today)
+        .limit(1)
+        .get();
+      
+      const onCall = !shiftsSnapshot.empty;
+      const shiftData = onCall ? shiftsSnapshot.docs[0].data() : null;
+
+      res.json({ 
+        ...pharmacy, 
+        on_call: onCall,
+        current_shift: shiftData
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // Public: Sitemap
@@ -1569,6 +1674,7 @@ async function startServer() {
       if (pharmacySnapshot.empty) return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
       
       const pharmacyId = pharmacySnapshot.docs[0].id;
+      const pharmacyData = pharmacySnapshot.docs[0].data();
       const shiftDoc = await db.collection('shifts').doc(req.params.id).get();
       
       if (!shiftDoc.exists || shiftDoc.data()?.pharmacy_id !== pharmacyId) {
@@ -1582,6 +1688,8 @@ async function startServer() {
         start_time: is_24h ? '00:00' : start_time,
         end_time: is_24h ? '23:59' : end_time,
         is_24h: is_24h ? 1 : 0,
+        city: pharmacyData.city || '',
+        state: pharmacyData.state || '',
         updated_at: new Date().toISOString()
       };
       
@@ -2925,12 +3033,22 @@ async function startServer() {
   app.put('/api/admin/pharmacies/:id', authLimiter, authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     const { id } = req.params;
-    const { 
-      email = '', password = '', name = '', phone = '', whatsapp = '', 
-      street = '', number = '', neighborhood = '', city = '', state = '', cep = '' 
-    } = req.body;
     
     try {
+      // Validate with Zod
+      const validatedData = pharmacySchema.partial().parse(req.body);
+      
+      const { 
+        email: rawEmail, password, name, phone, whatsapp, 
+        street, number, neighborhood, city, state, cep,
+        website, description, logo_url,
+        cnpj, coordinates, operating_hours,
+        is_active, sub_status
+      } = req.body;
+      
+      const email = rawEmail?.toString().trim().toLowerCase();
+      const cleanCnpj = cnpj?.replace(/\D/g, '');
+      
       const pharmacyDoc = await db.collection('pharmacies').doc(id).get();
       if (!pharmacyDoc.exists) {
         return res.status(404).json({ error: ERRORS.PHARMACY_NOT_FOUND });
@@ -2938,15 +3056,39 @@ async function startServer() {
       const pharmacyData = pharmacyDoc.data()!;
       let currentUserId = pharmacyData.user_id;
 
-      // 1. Handle Auth updates FIRST
+      // Geocoding logic: Trigger if address changed AND (user didn't manually provide valid coordinates)
+      let finalCoordinates = coordinates;
+      const userProvidedCoords = coordinates && coordinates.lat !== null && coordinates.lng !== null;
+      const addressChanged = street !== pharmacyData.street || city !== pharmacyData.city || number !== pharmacyData.number;
+      
+      if (!userProvidedCoords && addressChanged && street && city) {
+        const geo = await geocodeAddress(street, number || '', city, state || 'RS');
+        if (geo) {
+          finalCoordinates = geo;
+        }
+      } else if (!userProvidedCoords && !pharmacyData.coordinates && street && city) {
+        // No coordinates at all and we have an address
+        const geo = await geocodeAddress(street, number || '', city, state || 'RS');
+        if (geo) finalCoordinates = geo;
+      }
+
+      // Uniqueness check for CNPJ
+      if (cleanCnpj && cleanCnpj !== pharmacyData?.cnpj) {
+        const existingCnpj = await db.collection('pharmacies').where('cnpj', '==', cleanCnpj).get();
+        if (!existingCnpj.empty) {
+          return res.status(400).json({ error: 'Este CNPJ já está cadastrado em outra unidade.' });
+        }
+      }
+      
+      // 1. Handle Auth updates
       if (email || password) {
         try {
-          const updateData: any = {};
-          if (email) updateData.email = email;
-          if (password) updateData.password = password;
+          const authUpdateData: any = {};
+          if (email) authUpdateData.email = email;
+          if (password) authUpdateData.password = password;
           
           if (currentUserId && !currentUserId.startsWith('dummy_')) {
-            await auth.updateUser(currentUserId, updateData);
+            await auth.updateUser(currentUserId, authUpdateData);
           } else if (email && password) {
             // Upgrade dummy to real user
             const userRecord = await auth.createUser({ email, password });
@@ -2960,13 +3102,9 @@ async function startServer() {
               created_at: now,
               updated_at: now
             });
-            
-            // Note: we update currentUserId here so it's used in the pharmacy update below
           }
         } catch (authError: any) {
           console.error('Auth update failed:', authError);
-          // If email exists, we might want to link it, but let's be strict for atomicity
-          // unless it's the 'email-already-exists' which we handle specifically if needed
           return res.status(400).json({ 
             error: ERRORS.PROFILE_SYNC_FAILED, 
             details: authError.message 
@@ -2974,14 +3112,36 @@ async function startServer() {
         }
       }
 
-      // 2. If Auth succeeded (or wasn't needed), update Firestore
+      // 2. Prepare Update Data
       const now = new Date().toISOString();
-      const updatedData: any = {
-        name, phone, whatsapp, street, number, neighborhood, city, state, cep,
-        user_id: currentUserId,
-        updated_at: now
+      const updatedData: any = { updated_at: now };
+      
+      const fieldsToSave = { 
+        name, phone, whatsapp, street, number, 
+        neighborhood, city, state, cep, website, 
+        description, logo_url, cnpj: cleanCnpj,
+        coordinates: finalCoordinates || null,
+        operating_hours: operating_hours || null,
+        is_active, sub_status,
+        zip: cep
       };
-      if (email) updatedData.email = email;
+
+      Object.entries(fieldsToSave).forEach(([key, val]) => {
+        if (val !== undefined) updatedData[key] = val;
+      });
+      
+      // Ensure we don't accidentally overwrite finalCoordinates with undefined coordinates from req.body
+      if (finalCoordinates) {
+        updatedData.coordinates = finalCoordinates;
+      } else if (coordinates === null) {
+        updatedData.coordinates = null;
+      }
+
+      if (currentUserId !== undefined) updatedData.user_id = currentUserId;
+      if (email) {
+        updatedData.email = email;
+        updatedData.user_email = email;
+      }
       
       await db.collection('pharmacies').doc(id).update(updatedData);
       
@@ -2994,6 +3154,21 @@ async function startServer() {
         if (state) userUpdate.state = state;
         
         await db.collection('users').doc(currentUserId).set(userUpdate, { merge: true });
+      }
+
+      // 4. Sync Shifts if City/State changed
+      if (city || state) {
+        const shiftsSnapshot = await db.collection('shifts').where('pharmacy_id', '==', id).get();
+        if (!shiftsSnapshot.empty) {
+          const batch = db.batch();
+          shiftsSnapshot.forEach(sDoc => {
+            batch.update(sDoc.ref, {
+              city: city || pharmacyData?.city || '',
+              state: state || pharmacyData?.state || ''
+            });
+          });
+          await batch.commit();
+        }
       }
 
       await logAdminAction(req.user.id, 'pharmacy', id, 'update', { 
@@ -3010,17 +3185,42 @@ async function startServer() {
   // Admin: Create Pharmacy
   app.post('/api/admin/pharmacies', authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
-    const { 
-      email = '', password = '', name = '', phone = '', whatsapp = '', 
-      street = '', number = '', neighborhood = '', city = '', state = '', cep = '' 
-    } = req.body;
     
     try {
+      // Validate with Zod
+      const validatedData = pharmacySchema.parse(req.body);
+      
+      const { 
+        email: rawEmail, password, name, phone, whatsapp, 
+        street, number, neighborhood, city, state, cep,
+        website, description, logo_url,
+        cnpj, coordinates, operating_hours,
+        is_active, sub_status
+      } = req.body;
+      
+      const email = rawEmail?.toString().trim().toLowerCase() || '';
+      const cleanCnpj = cnpj?.replace(/\D/g, '');
+      
+      // Geocoding logic
+      let finalCoordinates = coordinates;
+      if (!finalCoordinates && street && city) {
+        const geo = await geocodeAddress(street, number || '', city, state);
+        if (geo) finalCoordinates = geo;
+      }
+      
+      // Check CNPJ uniqueness
+      if (cleanCnpj) {
+        const existingCnpj = await db.collection('pharmacies').where('cnpj', '==', cleanCnpj).get();
+        if (!existingCnpj.empty) {
+          return res.status(400).json({ error: 'Este CNPJ já está cadastrado.' });
+        }
+      }
+
       let currentUserId;
       try {
         const userRecord = await auth.createUser({
           email,
-          password,
+          password: password || uuidv4(),
         });
         currentUserId = userRecord.uid;
       } catch (authError: any) {
@@ -3036,7 +3236,6 @@ async function startServer() {
           }
         } else {
           console.error('Error creating Auth user:', authError);
-          // Fallback to dummy user if auth creation fails (e.g., no service account)
           currentUserId = `dummy_${uuidv4()}`;
         }
       }
@@ -3053,21 +3252,26 @@ async function startServer() {
       
       await db.collection('pharmacies').doc(pharmacyId).set({
         user_id: currentUserId,
-        name: name || '',
+        name: name || 'Nova Farmácia',
         phone: phone || '',
         whatsapp: whatsapp || '',
         email: email || '',
         user_email: email || '',
-        sub_status: 'active',
-        website: '',
+        cnpj: cleanCnpj || '',
+        coordinates: finalCoordinates || null,
+        operating_hours: operating_hours || null,
+        sub_status: sub_status || 'active',
+        website: website || '',
+        description: description || '',
+        logo_url: logo_url || '',
         street: street || '',
         number: number || '',
         neighborhood: neighborhood || '',
         city: city || '',
         state: state || '',
-        zip: cep || '',
         cep: cep || '',
-        is_active: 1,
+        zip: cep || '',
+        is_active: is_active !== undefined ? is_active : 1,
         created_at: now,
         updated_at: now
       });
@@ -3089,6 +3293,84 @@ async function startServer() {
       console.error('Admin Create Pharmacy Error Stack:', error.stack);
       console.error('Admin Create Pharmacy Error details:', error);
       res.status(500).json({ error: ERRORS.INTERNAL_ERROR, details: error?.message });
+    }
+  });
+
+  // Admin: Get Pharmacy Logs
+  app.get('/api/admin/pharmacies/:id/logs', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
+    const { id } = req.params;
+    try {
+      const logsSnapshot = await db.collection('audit_logs')
+        .where('resource_id', '==', id)
+        .where('resource_type', '==', 'pharmacy')
+        .orderBy('timestamp', 'desc')
+        .limit(100)
+        .get();
+      
+      const logs = logsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      res.json(logs);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Batch Actions for Pharmacies
+  app.post('/api/admin/pharmacies/batch', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
+    const { ids, action } = req.body; // action: 'activate' | 'deactivate' | 'delete'
+    
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'IDs inválidos.' });
+    }
+
+    try {
+      const batch = db.batch();
+      const now = new Date().toISOString();
+
+      for (const id of ids) {
+        const ref = db.collection('pharmacies').doc(id);
+        if (action === 'activate') {
+          batch.update(ref, { is_active: 1, updated_at: now });
+        } else if (action === 'deactivate') {
+          batch.update(ref, { is_active: 0, updated_at: now });
+        } else if (action === 'delete') {
+          batch.delete(ref);
+          // Also cleanup logs? Maybe not.
+        }
+      }
+
+      await batch.commit();
+      await logAdminAction(req.user.id, 'pharmacy', 'multiple', `batch_${action}`, { count: ids.length, ids });
+      
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Reset Password Link
+  app.post('/api/admin/pharmacies/:id/reset-password', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
+    const { id } = req.params;
+    
+    try {
+      const pharmDoc = await db.collection('pharmacies').doc(id).get();
+      if (!pharmDoc.exists) return res.status(404).json({ error: 'Farmácia não encontrada.' });
+      
+      const email = pharmDoc.data()?.email;
+      if (!email) return res.status(400).json({ error: 'E-mail não configurado para esta farmácia.' });
+
+      // Generate reset link
+      const link = await auth.generatePasswordResetLink(email);
+      
+      // In a real production app, we would send this via email using a service.
+      // Here we will return it so the admin can copy or we can log that it was triggered.
+      await logAdminAction(req.user.id, 'pharmacy', id, 'password_reset_triggered', { email });
+      
+      res.json({ success: true, link });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   });
 
@@ -3144,11 +3426,12 @@ async function startServer() {
       const { pharmacy_id, user_id, date, start_time, end_time, is_24h } = req.body;
       
       const pharmacyDoc = await db.collection('pharmacies').doc(pharmacy_id).get();
-      const pharmacyData = pharmacyDoc.exists ? pharmacyDoc.data() : null;
+      if (!pharmacyDoc.exists) return res.status(404).json({ error: 'Farmácia não encontrada para o ID informado.' });
+      const pharmacyData = pharmacyDoc.data();
 
       const newShift = {
         pharmacy_id,
-        user_id: user_id || '',
+        user_id: user_id || pharmacyData?.user_id || '',
         date,
         start_time: is_24h ? '00:00' : start_time,
         end_time: is_24h ? '23:59' : end_time,
@@ -3161,6 +3444,10 @@ async function startServer() {
       console.log('New shift object:', newShift);
       const docRef = await db.collection('shifts').add(newShift);
       console.log('Shift created with ID:', docRef.id);
+      
+      await updateDashboardStats();
+      await logAdminAction(req.user.id, 'shift', docRef.id, 'create', { pharmacy_id, date });
+      
       res.status(201).json({ id: docRef.id, ...newShift });
     } catch (err: any) {
       console.error('Error creating shift:', err);
@@ -3176,12 +3463,19 @@ async function startServer() {
       if (!shiftDoc.exists) return res.status(404).json({ error: ERRORS.SHIFT_NOT_FOUND });
       
       const { pharmacy_id, date, start_time, end_time, is_24h } = req.body;
+
+      const pharmacyDoc = await db.collection('pharmacies').doc(pharmacy_id).get();
+      if (!pharmacyDoc.exists) return res.status(404).json({ error: 'Farmácia não encontrada para o ID informado.' });
+      const pharmacyData = pharmacyDoc.data();
+
       const updatedData = {
         pharmacy_id,
         date,
         start_time: is_24h ? '00:00' : start_time,
         end_time: is_24h ? '23:59' : end_time,
         is_24h: is_24h ? 1 : 0,
+        city: pharmacyData?.city || '',
+        state: pharmacyData?.state || '',
         updated_at: new Date().toISOString()
       };
       await db.collection('shifts').doc(req.params.id).update(updatedData);
@@ -3229,9 +3523,11 @@ async function startServer() {
     
     try {
       const pharmaciesSnapshot = await db.collection('pharmacies').get();
+      const pharmaciesMap = new Map();
       
       for (const pDoc of pharmaciesSnapshot.docs) {
         const p = pDoc.data();
+        pharmaciesMap.set(pDoc.id, p);
         
         // Fetch user email if missing
         let email = p.user_email;
@@ -3256,9 +3552,37 @@ async function startServer() {
           sub_status: status
         });
       }
+
+      // Sync locations in shifts and cleanup orphans
+      const shiftsSnapshot = await db.collection('shifts').get();
+      let shiftCleanupCount = 0;
+      let shiftSyncCount = 0;
+
+      for (const sDoc of shiftsSnapshot.docs) {
+        const s = sDoc.data();
+        const pharm = pharmaciesMap.get(s.pharmacy_id);
+        
+        if (!pharm) {
+          // Orphan shift detected - delete it
+          await sDoc.ref.delete();
+          shiftCleanupCount++;
+        } else {
+          // Check if location needs sync
+          if (s.city !== pharm.city || s.state !== pharm.state) {
+            await sDoc.ref.update({
+              city: pharm.city || '',
+              state: pharm.state || ''
+            });
+            shiftSyncCount++;
+          }
+        }
+      }
       
       await updateDashboardStats();
-      res.json({ success: true, message: 'Dados sincronizados e otimizados' });
+      res.json({ 
+        success: true, 
+        message: `Dados sincronizados. Plantões limpos: ${shiftCleanupCount}. Plantões atualizados: ${shiftSyncCount}.` 
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

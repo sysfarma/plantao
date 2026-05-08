@@ -44,3 +44,40 @@ export function formatToBRDate(dateString: string): string {
   const [y, m, d] = dateString.split('-');
   return `${d}/${m}/${y}`;
 }
+
+export function isPharmacyOpen(operatingHours: any): { open: boolean, message: string } {
+  if (!operatingHours) return { open: true, message: 'Consulte o local' };
+  
+  const now = getSyncedDate();
+  const dayOfWeek = now.getDay().toString(); // 0 (Dom) to 6 (Sab)
+  const hours = operatingHours[dayOfWeek];
+  
+  if (!hours || hours.closed) {
+    return { open: false, message: 'Fechado hoje' };
+  }
+  
+  const [currentH, currentM] = [now.getHours(), now.getMinutes()];
+  const currentTime = currentH * 60 + currentM;
+  
+  const [openH, openM] = hours.open.split(':').map(Number);
+  const [closeH, closeM] = hours.close.split(':').map(Number);
+  
+  const openTime = openH * 60 + openM;
+  const closeTime = closeH * 60 + closeM;
+  
+  // Handling shifts that go past midnight (e.g., 08:00 to 02:00)
+  const isActualCloseTimeAfterOpenTime = closeTime > openTime;
+  
+  if (isActualCloseTimeAfterOpenTime) {
+    if (currentTime >= openTime && currentTime < closeTime) {
+      return { open: true, message: `Aberto até as ${hours.close}` };
+    }
+  } else {
+    // Midnight overlap case
+    if (currentTime >= openTime || currentTime < closeTime) {
+      return { open: true, message: `Aberto até as ${hours.close}` };
+    }
+  }
+  
+  return { open: false, message: 'Fechado agora' };
+}

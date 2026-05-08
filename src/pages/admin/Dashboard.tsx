@@ -1,7 +1,14 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { CheckCircle, XCircle, Star, Trash2, Ban, Edit, Plus, X, Calendar, Search, Filter, History, DollarSign, FileText, RefreshCw, ShieldCheck, AlertCircle, CheckCircle2, Download, ArrowUp, ArrowDown, Loader2 } from 'lucide-react';
+import { 
+  CheckCircle, XCircle, Star, Trash2, Ban, Edit, Plus, X, Calendar, Search, 
+  Filter, History, DollarSign, FileText, RefreshCw, ShieldCheck, AlertCircle, 
+  CheckCircle2, Download, ArrowUp, ArrowDown, Loader2, CheckSquare, Square, 
+  Key, Upload, Copy, Check 
+} from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { storage } from '../../lib/firebase';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { safeJsonFetch } from '../../lib/api';
 import { useFirebase } from '../../components/FirebaseProvider';
 import { calculateHighlightEnd, isShiftPast, formatToBRDate } from '../../lib/dateUtils';
@@ -14,6 +21,7 @@ import { translateError } from '../../lib/errorTranslations';
 interface Pharmacy {
   id: string;
   name: string;
+  email?: string;
   city: string;
   state: string;
   is_active: number;
@@ -24,7 +32,14 @@ interface Pharmacy {
   street: string;
   number: string;
   neighborhood: string;
+  cep: string;
   user_id?: string;
+  website?: string;
+  description?: string;
+  logo_url?: string;
+  cnpj?: string;
+  coordinates?: { lat: number; lng: number };
+  operating_hours?: { [key: string]: { open: string; close: string; closed?: boolean } };
 }
 
 export default function AdminDashboard() {
@@ -70,6 +85,11 @@ export default function AdminDashboard() {
   const [testingMP, setTestingMP] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [selectedPharmacyIds, setSelectedPharmacyIds] = useState<string[]>([]);
+  const [isAuditModalOpen, setIsAuditModalOpen] = useState(false);
+  const [currentPharmacyLogs, setCurrentPharmacyLogs] = useState<any[]>([]);
+  const [isLoadingLogs, setIsLoadingLogs] = useState(false);
+  const [copyingLink, setCopyingLink] = useState<string | null>(null);
   const [editingPharmacy, setEditingPharmacy] = useState<Pharmacy | null>(null);
   const [formData, setFormData] = useState<any>({});
   const [subSearchTerm, setSubSearchTerm] = useState('');
@@ -122,12 +142,19 @@ export default function AdminDashboard() {
   const safeFetch = async (url: string, options: any = {}) => {
     const token = await getAuthToken();
     if (!token) throw new Error('Não autenticado');
+    
+    const headers: any = {
+      ...options.headers,
+      'Authorization': `Bearer ${token}`
+    };
+
+    if (options.body && !(options.body instanceof FormData)) {
+      headers['Content-Type'] = 'application/json';
+    }
+
     return safeJsonFetch(url, {
       ...options,
-      headers: {
-        ...options.headers,
-        'Authorization': `Bearer ${token}`
-      }
+      headers
     });
   };
 
@@ -142,7 +169,26 @@ export default function AdminDashboard() {
 
   const openEditModal = (pharmacy: Pharmacy) => {
     setEditingPharmacy(pharmacy);
-    setFormData(pharmacy);
+    setFormData({
+      ...pharmacy,
+      email: pharmacy.email || pharmacy.user_email || '',
+      street: pharmacy.street || (pharmacy as any).address || '',
+      number: pharmacy.number || '',
+      neighborhood: pharmacy.neighborhood || (pharmacy as any).district || '',
+      city: pharmacy.city || '',
+      state: pharmacy.state || '',
+      cep: pharmacy.cep || (pharmacy as any).zip || '',
+      is_active: pharmacy.is_active !== undefined ? pharmacy.is_active : 1,
+      sub_status: pharmacy.sub_status || 'active',
+      cnpj: pharmacy.cnpj || '',
+      description: pharmacy.description || '',
+      website: pharmacy.website || '',
+      logo_url: pharmacy.logo_url || '',
+      phone: pharmacy.phone || '',
+      whatsapp: pharmacy.whatsapp || '',
+      coordinates: pharmacy.coordinates || { lat: null, lng: null },
+      operating_hours: pharmacy.operating_hours || {}
+    });
     setIsModalOpen(true);
   };
 
@@ -179,18 +225,105 @@ export default function AdminDashboard() {
     }
   };
 
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const storageRef = ref(storage, `pharmacy_logos/${Date.now()}_${file.name}`);
+      const snapshot = await uploadBytes(storageRef, file);
+      const url = await getDownloadURL(snapshot.ref);
+      setFormData({ ...formData, logo_url: url });
+      showToast('Logo enviada com sucesso!', 'success');
+    } catch (err: any) {
+      showToast('Erro ao enviar logo: ' + err.message, 'error');
+    }
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedPharmacyIds.length === filteredAndSortedPharmacies.length) {
+      setSelectedPharmacyIds([]);
+    } else {
+      setSelectedPharmacyIds(filteredAndSortedPharmacies.map(p => p.id));
+    }
+  };
+
+  const toggleSelectPharmacy = (id: string) => {
+    setSelectedPharmacyIds(prev => 
+      prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+    );
+  };
+
+  const handleBatchAction = async (action: 'activate' | 'deactivate' | 'delete') => {
+    if (selectedPharmacyIds.length === 0) return;
+    
+    const confirmMsg = action === 'delete' 
+      ? `Tem certeza que deseja excluir ${selectedPharmacyIds.length} farmácias permanentemente?`
+      : `Deseja ${action === 'activate' ? 'ativar' : 'desativar'} ${selectedPharmacyIds.length} farmácias?`;
+
+    if (!window.confirm(confirmMsg)) return;
+
+    try {
+      await safeFetch('/api/admin/pharmacies/batch', {
+        method: 'POST',
+        body: JSON.stringify({ ids: selectedPharmacyIds, action })
+      });
+      showToast('Ação em massa concluída!', 'success');
+      setSelectedPharmacyIds([]);
+      fetchPharmacies();
+    } catch (err: any) {
+      showToast('Erro na ação em massa: ' + err.message, 'error');
+    }
+  };
+
+  const viewLogs = async (pharmacy: Pharmacy) => {
+    setEditingPharmacy(pharmacy);
+    setIsAuditModalOpen(true);
+    setIsLoadingLogs(true);
+    try {
+      const logs = await safeFetch(`/api/admin/pharmacies/${pharmacy.id}/logs`);
+      setCurrentPharmacyLogs(logs);
+    } catch (err: any) {
+      showToast('Erro ao carregar logs: ' + err.message, 'error');
+    } finally {
+      setIsLoadingLogs(false);
+    }
+  };
+
+  const resetPassword = async (pharmacy: Pharmacy) => {
+    if (!window.confirm(`Enviar link de recuperação de senha para ${pharmacy.user_email}?`)) return;
+    
+    try {
+      const res = await safeFetch(`/api/admin/pharmacies/${pharmacy.id}/reset-password`, { method: 'POST' });
+      if (res.link) {
+        setCopyingLink(res.link);
+        showToast('Link de recuperação gerado!', 'success');
+      } else {
+        showToast('E-mail de recuperação enviado via sistema Firebase.', 'success');
+      }
+    } catch (err: any) {
+      showToast('Erro ao resetar senha: ' + err.message, 'error');
+    }
+  };
+
   const handleSavePharmacy = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       if (editingPharmacy) {
         await safeFetch(`/api/admin/pharmacies/${editingPharmacy.id}`, {
           method: 'PUT',
-          body: JSON.stringify(formData)
+          body: JSON.stringify({
+            ...formData,
+            email: formData.email?.trim()
+          })
         });
       } else {
         await safeFetch('/api/admin/pharmacies', {
           method: 'POST',
-          body: JSON.stringify(formData)
+          body: JSON.stringify({
+            ...formData,
+            email: formData.email?.trim()
+          })
         });
       }
       setIsModalOpen(false);
@@ -516,13 +649,10 @@ export default function AdminDashboard() {
       if (!token) throw new Error('Not authenticated');
 
       const pharm = allPharmaciesList.find(p => p.id === shiftForm.pharmacy_id) || pharmacies.find(p => p.id === shiftForm.pharmacy_id);
-      if (!pharm?.user_id) {
-        throw new Error('Esta farmácia não possui um ID de usuário vinculado. Por favor, edite a farmácia primeiro para sincronizar.');
-      }
 
       const shiftData = {
         pharmacy_id: shiftForm.pharmacy_id,
-        user_id: pharm.user_id,
+        user_id: pharm?.user_id || '',
         date: shiftForm.date,
         start_time: shiftForm.is_24h ? '00:00' : shiftForm.start_time,
         end_time: shiftForm.is_24h ? '23:59' : shiftForm.end_time,
@@ -888,18 +1018,30 @@ export default function AdminDashboard() {
       {activeTab === 'pharmacies' && (
         <div className="space-y-4">
           <div className="flex flex-col md:flex-row justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-200 gap-4">
-            <div className="relative w-full max-w-sm">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
-              <input
-                type="text"
-                placeholder="Buscar por nome, cidade ou e-mail..."
-                value={pharmacySearchTerm}
-                onChange={(e) => {
-                  setPharmacySearchTerm(e.target.value);
-                  setPharmacyPage(1); // Reset to first page on search
-                }}
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-emerald-500 focus:border-emerald-500"
-              />
+            <div className="flex items-center gap-4 w-full max-w-lg">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+                <input
+                  type="text"
+                  placeholder="Buscar por nome, cidade ou e-mail..."
+                  value={pharmacySearchTerm}
+                  onChange={(e) => {
+                    setPharmacySearchTerm(e.target.value);
+                    setPharmacyPage(1);
+                  }}
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-emerald-500 focus:border-emerald-500"
+                />
+              </div>
+              {selectedPharmacyIds.length > 0 && (
+                <div className="flex items-center gap-2 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-100 animate-in fade-in slide-in-from-left-2 transition-all">
+                  <span className="text-sm font-semibold text-emerald-700">{selectedPharmacyIds.length} selecionados</span>
+                  <div className="h-4 w-px bg-emerald-200 mx-1"></div>
+                  <button onClick={() => handleBatchAction('activate')} className="p-1 text-emerald-600 hover:bg-emerald-100 rounded" title="Ativar Selecionados"><CheckCircle className="w-4 h-4"/></button>
+                  <button onClick={() => handleBatchAction('deactivate')} className="p-1 text-amber-600 hover:bg-amber-100 rounded" title="Desativar Selecionados"><Ban className="w-4 h-4"/></button>
+                  <button onClick={() => handleBatchAction('delete')} className="p-1 text-red-600 hover:bg-red-100 rounded" title="Excluir Selecionados"><Trash2 className="w-4 h-4"/></button>
+                  <button onClick={() => setSelectedPharmacyIds([])} className="p-1 text-gray-500 hover:bg-gray-100 rounded"><X className="w-4 h-4"/></button>
+                </div>
+              )}
             </div>
             <div className="flex items-center gap-3 w-full md:w-auto">
               <button 
@@ -920,6 +1062,18 @@ export default function AdminDashboard() {
             <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
+                <th className="px-6 py-3 text-left w-10">
+                  <button 
+                    onClick={toggleSelectAll}
+                    className="p-1 hover:bg-gray-200 rounded transition-colors"
+                  >
+                    {selectedPharmacyIds.length === filteredAndSortedPharmacies.length && filteredAndSortedPharmacies.length > 0 ? (
+                      <CheckSquare className="w-5 h-5 text-emerald-600" />
+                    ) : (
+                      <Square className="w-5 h-5 text-gray-400" />
+                    )}
+                  </button>
+                </th>
                 <th 
                   className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                   onClick={() => togglePharmacySort('name')}
@@ -965,7 +1119,19 @@ export default function AdminDashboard() {
                   </td>
                 </tr>
               ) : filteredAndSortedPharmacies.map((pharmacy) => (
-                <tr key={pharmacy.id}>
+                <tr key={pharmacy.id} className={selectedPharmacyIds.includes(pharmacy.id) ? 'bg-emerald-50/30' : ''}>
+                  <td className="px-6 py-4">
+                    <button 
+                      onClick={() => toggleSelectPharmacy(pharmacy.id)}
+                      className="p-1 hover:bg-gray-100 rounded transition-colors"
+                    >
+                      {selectedPharmacyIds.includes(pharmacy.id) ? (
+                        <CheckSquare className="w-5 h-5 text-emerald-600" />
+                      ) : (
+                        <Square className="w-5 h-5 text-gray-400" />
+                      )}
+                    </button>
+                  </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="text-sm font-medium text-gray-900">{pharmacy.name}</div>
                     <div className="text-sm text-gray-500">{pharmacy.user_email}</div>
@@ -1002,34 +1168,52 @@ export default function AdminDashboard() {
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
                     <button 
                       onClick={() => openEditModal(pharmacy)}
-                      className="text-blue-600 hover:text-blue-900 bg-blue-50 px-3 py-1 rounded flex items-center gap-1 inline-flex"
+                      className="text-blue-600 hover:text-blue-900 bg-blue-50 px-2.5 py-1.5 rounded flex items-center gap-1 inline-flex transition-colors"
                       title="Editar"
                     >
                       <Edit className="w-4 h-4" />
                     </button>
-                    {!pharmacy.is_active ? (
-                      <button 
-                        onClick={() => handleActivate(pharmacy.id)}
-                        className="text-emerald-600 hover:text-emerald-900 bg-emerald-50 px-3 py-1 rounded inline-flex"
-                      >
-                        Ativar
-                      </button>
-                    ) : (
-                      <button 
-                        onClick={() => handleDeactivate(pharmacy.id)}
-                        className="text-amber-600 hover:text-amber-900 bg-amber-50 px-3 py-1 rounded flex items-center gap-1 inline-flex"
-                        title="Desativar"
-                      >
-                        <Ban className="w-4 h-4" />
-                      </button>
-                    )}
                     <button 
-                      onClick={() => handleDelete(pharmacy.id)}
-                      className="text-red-600 hover:text-red-900 bg-red-50 px-3 py-1 rounded flex items-center gap-1 inline-flex"
-                      title="Excluir"
+                      onClick={() => viewLogs(pharmacy)}
+                      className="text-purple-600 hover:text-purple-900 bg-purple-50 px-2.5 py-1.5 rounded flex items-center gap-1 inline-flex transition-colors"
+                      title="Auditoria"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <History className="w-4 h-4" />
                     </button>
+                    <button 
+                      onClick={() => resetPassword(pharmacy)}
+                      className="text-amber-600 hover:text-amber-900 bg-amber-50 px-2.5 py-1.5 rounded flex items-center gap-1 inline-flex transition-colors"
+                      title="Resetar Senha"
+                    >
+                      <Key className="w-4 h-4" />
+                    </button>
+                    {isAdminMaster && (
+                      <>
+                        {!pharmacy.is_active ? (
+                          <button 
+                            onClick={() => handleActivate(pharmacy.id)}
+                            className="text-emerald-600 hover:text-emerald-900 bg-emerald-50 px-3 py-1 rounded inline-flex transition-colors"
+                          >
+                            Ativar
+                          </button>
+                        ) : (
+                          <button 
+                            onClick={() => handleDeactivate(pharmacy.id)}
+                            className="text-amber-600 hover:text-amber-900 bg-amber-50 px-3 py-1 rounded flex items-center gap-1 inline-flex transition-colors"
+                            title="Desativar"
+                          >
+                            <Ban className="w-4 h-4" />
+                          </button>
+                        )}
+                        <button 
+                          onClick={() => handleDelete(pharmacy.id)}
+                          className="text-red-600 hover:text-red-900 bg-red-50 px-3 py-1 rounded flex items-center gap-1 inline-flex transition-colors"
+                          title="Excluir"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -2038,77 +2222,378 @@ export default function AdminDashboard() {
 
       {/* Modal Nova/Editar Farmácia */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center p-6 border-b border-gray-200">
-              <h2 className="text-xl font-bold text-gray-900">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 transition-all">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95, y: 10 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-gray-100"
+          >
+            <div className="flex justify-between items-center p-6 border-b border-gray-100 bg-gray-50/50 sticky top-0 bg-white z-10">
+              <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+                <ShieldCheck className="w-6 h-6 text-emerald-600" />
                 {editingPharmacy ? 'Editar Farmácia' : 'Nova Farmácia'}
               </h2>
-              <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-gray-500">
+              <button 
+                onClick={() => setIsModalOpen(false)} 
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-all"
+              >
                 <X className="w-6 h-6" />
               </button>
             </div>
-            <form onSubmit={handleSavePharmacy} className="p-6 space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <form onSubmit={handleSavePharmacy} className="p-8 space-y-6">
+              <div className="space-y-6">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">E-mail (Login)</label>
-                  <input type="email" required value={formData.email || ''} onChange={e => setFormData({...formData, email: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" />
+                  <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                    <span className="w-8 h-[1px] bg-gray-200"></span>
+                    Dados de Acesso
+                    <span className="flex-1 h-[1px] bg-gray-200"></span>
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">E-mail de Login</label>
+                      <input 
+                        type="email" 
+                        required 
+                        value={formData.email || ''} 
+                        onChange={e => setFormData({...formData, email: e.target.value})} 
+                        className="block w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm text-gray-900 placeholder:text-gray-400"
+                        placeholder="farmacia@exemplo.com"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Senha {editingPharmacy && <span className="text-xs text-gray-400 font-normal ml-1">(Deixe em branco para manter)</span>}
+                      </label>
+                      <input 
+                        type="password" 
+                        required={!editingPharmacy} 
+                        value={formData.password || ''} 
+                        onChange={e => setFormData({...formData, password: e.target.value})} 
+                        className="block w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm text-gray-900 placeholder:text-gray-400"
+                        placeholder="••••••••"
+                      />
+                    </div>
+                  </div>
                 </div>
+
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
-                    Senha {editingPharmacy && <span className="text-gray-400 font-normal">(Deixe em branco para manter)</span>}
-                  </label>
-                  <input type="password" required={!editingPharmacy} value={formData.password || ''} onChange={e => setFormData({...formData, password: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" />
+                  <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                    <span className="w-8 h-[1px] bg-gray-200"></span>
+                    Informações da Farmácia
+                    <span className="flex-1 h-[1px] bg-gray-200"></span>
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="md:col-span-2">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Nome Fantasia</label>
+                      <input 
+                        type="text" 
+                        required 
+                        value={formData.name || ''} 
+                        onChange={e => setFormData({...formData, name: e.target.value})} 
+                        className="block w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm text-gray-900 placeholder:text-gray-400"
+                        placeholder="Nome da sua farmácia"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">CNPJ</label>
+                      <input 
+                        type="text" 
+                        value={formData.cnpj || ''} 
+                        onChange={e => {
+                          const val = e.target.value.replace(/\D/g, '').substring(0, 14);
+                          const masked = val.length <= 14 ? val.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2}).*/, '$1.$2.$3/$4-$5') : val;
+                          setFormData({...formData, cnpj: masked});
+                        }} 
+                        className="block w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm text-gray-900 font-mono"
+                        placeholder="00.000.000/0000-00"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Latitude</label>
+                        <input 
+                          type="number" 
+                          step="any"
+                          value={formData.coordinates?.lat !== undefined && formData.coordinates?.lat !== null ? formData.coordinates.lat : ''} 
+                          onChange={e => {
+                            const val = e.target.value === '' ? null : parseFloat(e.target.value);
+                            setFormData({...formData, coordinates: {...(formData.coordinates || {lat: 0, lng: 0}), lat: val}});
+                          }} 
+                          className="block w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm text-gray-900"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Longitude</label>
+                        <input 
+                          type="number" 
+                          step="any"
+                          value={formData.coordinates?.lng !== undefined && formData.coordinates?.lng !== null ? formData.coordinates.lng : ''} 
+                          onChange={e => {
+                            const val = e.target.value === '' ? null : parseFloat(e.target.value);
+                            setFormData({...formData, coordinates: {...(formData.coordinates || {lat: 0, lng: 0}), lng: val}});
+                          }} 
+                          className="block w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm text-gray-900"
+                        />
+                      </div>
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Descrição / Bio</label>
+                      <textarea 
+                        value={formData.description || ''} 
+                        onChange={e => setFormData({...formData, description: e.target.value})} 
+                        rows={3}
+                        className="block w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm text-gray-900 placeholder:text-gray-400"
+                        placeholder="Conte um pouco sobre a farmácia..."
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center justify-between">
+                        Foto / Logo da Farmácia
+                        {formData.logo_url && (
+                          <button 
+                            type="button" 
+                            onClick={() => setFormData({...formData, logo_url: ''})}
+                            className="text-xs text-red-500 hover:underline"
+                          >
+                            Remover
+                          </button>
+                        )}
+                      </label>
+                      <div className="flex items-center gap-4 p-4 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200 hover:border-emerald-300 transition-colors group">
+                        <div className="w-20 h-20 bg-white rounded-xl border border-gray-100 flex items-center justify-center overflow-hidden shadow-inner">
+                          {formData.logo_url ? (
+                            <img src={formData.logo_url} alt="Logo preview" className="w-full h-full object-contain" />
+                          ) : (
+                            <Upload className="w-8 h-8 text-gray-300 group-hover:text-emerald-400 transition-colors" />
+                          )}
+                        </div>
+                        <div className="flex-1">
+                          <p className="text-xs text-gray-500 mb-2">Recomendado: 512x512px (PNG ou JPG)</p>
+                          <label className="inline-flex items-center px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm font-semibold text-gray-700 hover:bg-gray-50 cursor-pointer shadow-sm active:scale-95 transition-all gap-2">
+                             <Upload className="w-4 h-4" />
+                             Escolher Arquivo
+                             <input type="file" className="hidden" accept="image/*" onChange={handleLogoUpload} />
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="md:col-span-2 grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Status da Unidade</label>
+                        <select 
+                          value={formData.is_active ?? 1} 
+                          onChange={e => setFormData({...formData, is_active: parseInt(e.target.value)})}
+                          className="block w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm text-gray-900"
+                        >
+                          <option value={1}>Ativa / Visível</option>
+                          <option value={0}>Inativa / Oculta</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Status de Assinatura</label>
+                        <select 
+                          value={formData.sub_status || 'active'} 
+                          onChange={e => setFormData({...formData, sub_status: e.target.value})}
+                          className="block w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm text-gray-900"
+                        >
+                          <option value="active">Ativa</option>
+                          <option value="past_due">Atrasada</option>
+                          <option value="canceled">Cancelada</option>
+                          <option value="unpaid">Não Paga</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Site / LinkedIn (URL)</label>
+                      <input 
+                        type="url" 
+                        value={formData.website || ''} 
+                        onChange={e => setFormData({...formData, website: e.target.value})} 
+                        className="block w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm text-gray-900 placeholder:text-gray-400"
+                        placeholder="https://suafarmacia.com.br"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Telefone Comercial</label>
+                      <input 
+                        type="text" 
+                        required 
+                        value={formData.phone || ''} 
+                        onChange={e => setFormData({...formData, phone: e.target.value})} 
+                        className="block w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm text-gray-900"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">WhatsApp de Atendimento</label>
+                      <input 
+                        type="text" 
+                        required 
+                        value={formData.whatsapp || ''} 
+                        onChange={e => setFormData({...formData, whatsapp: e.target.value})} 
+                        className="block w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm text-gray-900"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                    <span className="w-8 h-[1px] bg-gray-200"></span>
+                    Horário Comercial Padrão
+                    <span className="flex-1 h-[1px] bg-gray-200"></span>
+                  </h3>
+                  <div className="space-y-3 bg-gray-50 p-4 rounded-xl border border-gray-100">
+                    {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab'].map((day, idx) => {
+                      const dayKey = idx.toString();
+                      const dayData = formData.operating_hours?.[dayKey] || { open: '08:00', close: '22:00', closed: false };
+                      
+                      return (
+                        <div key={day} className="flex items-center gap-4">
+                          <span className="w-10 font-bold text-gray-600">{day}</span>
+                          <div className="flex items-center gap-2 flex-1">
+                            <input 
+                              type="time" 
+                              disabled={dayData.closed}
+                              value={dayData.open}
+                              onChange={e => setFormData({
+                                ...formData, 
+                                operating_hours: {
+                                  ...(formData.operating_hours || {}),
+                                  [dayKey]: { ...dayData, open: e.target.value }
+                                }
+                              })}
+                              className="px-2 py-1 border border-gray-200 rounded-lg text-sm disabled:opacity-50"
+                            />
+                            <span className="text-gray-400">até</span>
+                            <input 
+                              type="time" 
+                              disabled={dayData.closed}
+                              value={dayData.close}
+                              onChange={e => setFormData({
+                                ...formData, 
+                                operating_hours: {
+                                  ...(formData.operating_hours || {}),
+                                  [dayKey]: { ...dayData, close: e.target.value }
+                                }
+                              })}
+                              className="px-2 py-1 border border-gray-200 rounded-lg text-sm disabled:opacity-50"
+                            />
+                          </div>
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input 
+                              type="checkbox" 
+                              checked={dayData.closed}
+                              onChange={e => setFormData({
+                                ...formData, 
+                                operating_hours: {
+                                  ...(formData.operating_hours || {}),
+                                  [dayKey]: { ...dayData, closed: e.target.checked }
+                                }
+                              })}
+                              className="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                            />
+                            <span className="text-xs text-gray-500">Fechado</span>
+                          </label>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                    <span className="w-8 h-[1px] bg-gray-200"></span>
+                    Localização e Endereço
+                    <span className="flex-1 h-[1px] bg-gray-200"></span>
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="md:col-span-2">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Logradouro / Rua</label>
+                      <input 
+                        type="text" 
+                        required 
+                        value={formData.street || ''} 
+                        onChange={e => setFormData({...formData, street: e.target.value})} 
+                        className="block w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm text-gray-900"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Número</label>
+                      <input 
+                        type="text" 
+                        required 
+                        value={formData.number || ''} 
+                        onChange={e => setFormData({...formData, number: e.target.value})} 
+                        className="block w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm text-gray-900"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Bairro</label>
+                      <input 
+                        type="text" 
+                        required 
+                        value={formData.neighborhood || ''} 
+                        onChange={e => setFormData({...formData, neighborhood: e.target.value})} 
+                        className="block w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm text-gray-900"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Cidade</label>
+                      <input 
+                        type="text" 
+                        required 
+                        value={formData.city || ''} 
+                        onChange={e => setFormData({...formData, city: e.target.value})} 
+                        className="block w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm text-gray-900"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Estado</label>
+                        <input 
+                          type="text" 
+                          required 
+                          maxLength={2} 
+                          value={formData.state || ''} 
+                          onChange={e => setFormData({...formData, state: e.target.value})} 
+                          className="block w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm text-gray-900 uppercase"
+                          placeholder="UF"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">CEP</label>
+                        <input 
+                          type="text" 
+                          value={formData.cep || ''} 
+                          onChange={handleCepChange} 
+                          className="block w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm text-gray-900 font-mono" 
+                          placeholder="00000-000" 
+                          maxLength={9} 
+                        />
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="md:col-span-2">
-                  <label className="block text-sm font-medium text-gray-700">Nome da Farmácia</label>
-                  <input type="text" required value={formData.name || ''} onChange={e => setFormData({...formData, name: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Telefone</label>
-                  <input type="text" required value={formData.phone || ''} onChange={e => setFormData({...formData, phone: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">WhatsApp</label>
-                  <input type="text" required value={formData.whatsapp || ''} onChange={e => setFormData({...formData, whatsapp: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" />
-                </div>
-                <div className="md:col-span-2">
-                  <label className="block text-sm font-medium text-gray-700">Rua</label>
-                  <input type="text" required value={formData.street || ''} onChange={e => setFormData({...formData, street: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Número</label>
-                  <input type="text" required value={formData.number || ''} onChange={e => setFormData({...formData, number: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Bairro</label>
-                  <input type="text" required value={formData.neighborhood || ''} onChange={e => setFormData({...formData, neighborhood: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Cidade</label>
-                  <input type="text" required value={formData.city || ''} onChange={e => setFormData({...formData, city: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Estado (UF)</label>
-                  <input type="text" required maxLength={2} value={formData.state || ''} onChange={e => setFormData({...formData, state: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md uppercase" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">CEP</label>
-                  <input type="text" value={formData.cep || ''} onChange={handleCepChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all font-mono" placeholder="00000-000" maxLength={9} />
-                </div>
-              </div>
-              <div className="pt-4 flex justify-end gap-3">
-                <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50">
+
+              <div className="pt-8 flex flex-col sm:flex-row justify-end gap-4 border-t border-gray-100">
+                <button 
+                  type="button" 
+                  onClick={() => setIsModalOpen(false)} 
+                  className="px-6 py-3 border border-gray-200 rounded-xl text-gray-700 font-semibold hover:bg-gray-50 transition-all shadow-sm"
+                >
                   Cancelar
                 </button>
-                <button type="submit" className="px-4 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700">
-                  Salvar
+                <button 
+                  type="submit" 
+                  className="px-8 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2"
+                >
+                  <ShieldCheck className="w-5 h-5" />
+                  {editingPharmacy ? 'Atualizar Dados' : 'Criar Cadastro'}
                 </button>
               </div>
             </form>
-          </div>
+          </motion.div>
         </div>
       )}
       {/* Modal de Plantão (Admin) */}
@@ -2471,6 +2956,118 @@ export default function AdminDashboard() {
         )}
       </AnimatePresence>
 
+      {/* Modal de Auditoria */}
+      <AnimatePresence>
+        {isAuditModalOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-[60]">
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 20 }}
+              className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[85vh] overflow-hidden flex flex-col"
+            >
+              <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+                <div>
+                  <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                    <History className="w-6 h-6 text-purple-600" />
+                    Histórico de Auditoria
+                  </h3>
+                  <p className="text-sm text-gray-500">{editingPharmacy?.name} • {editingPharmacy?.city}</p>
+                </div>
+                <button onClick={() => setIsAuditModalOpen(false)} className="p-2 hover:bg-gray-200 rounded-full transition-colors text-gray-500">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6">
+                {isLoadingLogs ? (
+                  <div className="flex flex-col items-center justify-center py-12 gap-4">
+                    <RefreshCw className="w-10 h-10 text-emerald-500 animate-spin" />
+                    <p className="text-gray-500 animate-pulse font-medium">Carregando histórico...</p>
+                  </div>
+                ) : currentPharmacyLogs.length === 0 ? (
+                  <div className="text-center py-12 text-gray-400 italic">
+                    Nenhum registro encontrado para esta farmácia.
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {currentPharmacyLogs.map((log) => (
+                      <div key={log.id} className="relative pl-8 pb-6 border-l-2 border-gray-100 last:pb-0">
+                        <div className="absolute left-[-9px] top-0 w-4 h-4 rounded-full bg-white border-2 border-emerald-500 z-10"></div>
+                        <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow">
+                          <div className="flex justify-between items-start mb-2">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                              log.action === 'update' ? 'bg-amber-100 text-amber-700' :
+                              log.action === 'activate' ? 'bg-emerald-100 text-emerald-700' :
+                              log.action === 'deactivate' ? 'bg-orange-100 text-orange-700' :
+                              'bg-gray-100 text-gray-600'
+                            }`}>
+                              {log.action}
+                            </span>
+                            <span className="text-[10px] font-mono text-gray-400">
+                              {new Date(log.timestamp).toLocaleDateString()} {new Date(log.timestamp).toLocaleTimeString()}
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-500 mt-2 bg-gray-50 p-2 rounded font-mono overflow-x-auto">
+                            {JSON.stringify(log.details)}
+                          </p>
+                          <div className="mt-2 text-[10px] text-gray-400">
+                            ID Admin: {log.admin_id}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal de Link de Reset */}
+      <AnimatePresence>
+        {copyingLink && (
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 z-[70]">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full text-center"
+            >
+              <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                <Key className="w-8 h-8 text-emerald-600" />
+              </div>
+              <h3 className="text-xl font-bold text-gray-900 mb-2">Link Gerado com Sucesso!</h3>
+              <p className="text-sm text-gray-500 mb-6">Copie o link abaixo e envie para o responsável pela farmácia para que ele possa redefinir a própria senha.</p>
+              
+              <div className="relative mb-6">
+                <input 
+                  type="text" 
+                  readOnly 
+                  value={copyingLink}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-600 focus:outline-none"
+                />
+                <button 
+                  onClick={() => {
+                    navigator.clipboard.writeText(copyingLink);
+                    showToast('Link copiado!', 'success');
+                  }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
+                >
+                  <Copy className="w-4 h-4" />
+                </button>
+              </div>
+
+              <button 
+                onClick={() => setCopyingLink(null)}
+                className="w-full py-3 bg-gray-100 text-gray-700 rounded-xl font-bold hover:bg-gray-200 transition-all"
+              >
+                Fechar
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
