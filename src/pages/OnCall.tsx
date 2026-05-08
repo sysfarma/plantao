@@ -30,6 +30,7 @@ interface Pharmacy {
   neighborhood: string;
   city: string;
   state: string;
+  slug?: string;
   lat?: number;
   lng?: number;
   distance?: number;
@@ -394,7 +395,7 @@ export default function OnCall() {
                 </div>
                 
                 <div className="flex-1 mb-6">
-                  <Link to={`/farmacia/${(pharmacy as any).slug || pharmacy.id}`} className="group/link block">
+                  <Link to={`/farmacia/${pharmacy.slug || pharmacy.id}`} className="group/link block">
                     <h3 className="text-xl font-bold text-gray-900 mb-3 group-hover:text-emerald-600 group-hover/link:text-emerald-700 transition-colors flex items-center justify-between">
                       {pharmacy.name}
                       <ChevronRight className="w-5 h-5 text-gray-300 group-hover/link:text-emerald-500 group-hover/link:translate-x-1 transition-all" />

@@ -25,6 +25,7 @@ interface Pharmacy {
   state: string;
   cep: string;
   website?: string;
+  slug?: string;
   coordinates?: { lat: number; lng: number };
   operating_hours?: any;
   on_call?: boolean;
@@ -103,7 +104,7 @@ export default function PharmacyView() {
   const mapQuery = encodeURIComponent(`${pharmacy.street}, ${pharmacy.number}, ${pharmacy.neighborhood}, ${pharmacy.city}, ${pharmacy.state}`);
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-24 md:pb-12">
+    <div className="min-h-screen bg-gray-50 pb-40 md:pb-12">
       <SEOHandler 
         title={`${pharmacy.name} - Endereço, Telefones e Horários`} 
         description={`Veja telefone, whatsapp, horário de funcionamento e localização no mapa de ${pharmacy.name} em ${pharmacy.city}, ${pharmacy.state}.`}
@@ -132,8 +133,8 @@ export default function PharmacyView() {
 
           <div className="flex items-center gap-2 mb-2">
             {pharmacy.on_call ? (
-               <span className="bg-white text-emerald-600 text-[10px] font-black uppercase tracking-tighter px-2 py-0.5 rounded shadow-sm flex items-center gap-1">
-                 <Star className="w-3 h-3 fill-emerald-500" />
+               <span className="bg-[#f6ff00] text-gray-900 text-[10px] font-black uppercase tracking-tighter px-2 py-0.5 rounded shadow-sm flex items-center gap-1">
+                 <Star className="w-3 h-3 fill-current" />
                  ABERTO AGORA (PLANTÃO)
                </span>
             ) : (
@@ -182,14 +183,13 @@ export default function PharmacyView() {
               <Globe className="w-6 h-6" />
             </div>
             <div>
-              <p className="text-[10px] font-bold text-gray-400 uppercase">Website</p>
-              {pharmacy.website ? (
-                <a href={pharmacy.website} target="_blank" rel="noreferrer" className="text-sm font-bold text-gray-900 truncate block hover:text-purple-600 transition-colors">
-                  Acessar Site Oficial
-                </a>
-              ) : (
-                <p className="text-sm text-gray-400 font-medium">Não informado</p>
-              )}
+              <p className="text-[10px] font-bold text-gray-400 uppercase">Permalink</p>
+              <button 
+                onClick={handleShare}
+                className="text-sm font-bold text-gray-900 truncate block hover:text-emerald-600 transition-colors text-left w-full cursor-pointer"
+              >
+                Página da Farmácia
+              </button>
             </div>
           </div>
         </div>
@@ -294,7 +294,7 @@ export default function PharmacyView() {
       <motion.div 
         initial={{ y: 100 }}
         animate={{ y: 0 }}
-        className="fixed bottom-0 inset-x-0 bg-white shadow-[0_-8px_24px_rgba(0,0,0,0.08)] border-t border-gray-100 p-4 z-50 md:hidden flex gap-3"
+        className="fixed bottom-16 inset-x-0 bg-white/95 backdrop-blur-sm shadow-[0_-8px_24px_rgba(0,0,0,0.08)] border-t border-gray-100 p-4 z-40 md:hidden flex gap-3"
       >
         <a 
           href={`tel:${pharmacy.phone}`}

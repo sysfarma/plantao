@@ -24,6 +24,7 @@ interface Pharmacy {
   neighborhood: string;
   city: string;
   state: string;
+  slug?: string;
   lat?: number;
   lng?: number;
 }
@@ -567,7 +568,7 @@ function PharmacyCard({ pharmacy, onTrackClick }: { pharmacy: Pharmacy; onTrackC
       <PharmacySchema pharmacy={pharmacy} />
       <div className="flex-1">
         <div className="flex justify-between items-start mb-2">
-          <Link to={`/farmacia/${(pharmacy as any).slug || pharmacy.id}`} className="hover:underline">
+          <Link to={`/farmacia/${pharmacy.slug || pharmacy.id}`} className="hover:underline">
             <h3 className="text-xl font-bold text-gray-900 group-hover:text-emerald-600 transition-colors">{pharmacy.name}</h3>
           </Link>
           <div className="flex flex-col items-end gap-1">
@@ -576,8 +577,8 @@ function PharmacyCard({ pharmacy, onTrackClick }: { pharmacy: Pharmacy; onTrackC
                  {Number((pharmacy as any).distance).toFixed(1)} km
                </span>
             )}
-            <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded shadow-sm ${isOpen ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-red-50 text-red-600 border border-red-100'}`}>
-              {statusMsg}
+            <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded shadow-sm ${isOnCall ? 'bg-[#f6ff00] text-gray-900 border border-yellow-200 shadow-sm' : (isOpen ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-red-50 text-red-600 border border-red-100')}`}>
+              {isOnCall ? 'ABERTO AGORA (PLANTÃO)' : statusMsg}
             </span>
           </div>
         </div>
