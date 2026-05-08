@@ -219,20 +219,21 @@ export default function PharmacyView() {
                     Rotas <Navigation className="w-3 h-3" />
                   </a>
                </div>
-               <div className="aspect-video w-full rounded-2xl bg-gray-100 relative overflow-hidden group">
-                  <iframe 
-                    width="100%" 
-                    height="100%" 
-                    style={{ border: 0 }} 
-                    loading="lazy" 
-                    allowFullScreen 
-                    src={`https://www.google.com/maps/embed/v1/place?key=${null}&q=${mapQuery}&zoom=17`}
-                    className="opacity-90 group-hover:opacity-100 transition-opacity"
-                  ></iframe>
-                  {/* Overlay for map interaction info or just a visual hint */}
-                  <div className="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/20 text-white pointer-events-none">
-                     <p className="text-xs font-medium">{pharmacy.street}, {pharmacy.number} - {pharmacy.neighborhood}</p>
+               <div className="aspect-video w-full rounded-2xl bg-gray-50 flex flex-col items-center justify-center p-6 text-center border-2 border-dashed border-gray-200">
+                  <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mb-4">
+                    <MapPin className="w-8 h-8 text-emerald-600" />
                   </div>
+                  <h3 className="text-gray-900 font-bold mb-2">Ver no Google Maps</h3>
+                  <p className="text-sm text-gray-500 mb-4 px-4">{pharmacy.street}, {pharmacy.number} - {pharmacy.neighborhood}</p>
+                  <a 
+                    href={`https://www.google.com/maps/dir/?api=1&destination=${mapQuery}`} 
+                    target="_blank" 
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-2 bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-emerald-700 transition-all active:scale-95 shadow-sm"
+                  >
+                    <Navigation className="w-5 h-5" />
+                    Traçar Rota
+                  </a>
                </div>
             </section>
           </div>

@@ -3088,20 +3088,47 @@ async function startServer() {
           if (password) authUpdateData.password = password;
           
           if (currentUserId && !currentUserId.startsWith('dummy_')) {
+            // First check if email belongs to someone else to avoid error
+            if (email) {
+              try {
+                const userByEmail = await auth.getUserByEmail(email);
+                if (userByEmail.uid !== currentUserId) {
+                  return res.status(400).json({ error: 'Este e-mail já está em uso por outro usuário.' });
+                }
+              } catch (e: any) {
+                // If user not found by email, it's safe to update
+              }
+            }
             await auth.updateUser(currentUserId, authUpdateData);
-          } else if (email && password) {
-            // Upgrade dummy to real user
-            const userRecord = await auth.createUser({ email, password });
-            currentUserId = userRecord.uid;
+          } else if (email) {
+            // Check if user exists by email first
+            let userRecord;
+            try {
+              userRecord = await auth.getUserByEmail(email);
+            } catch (e: any) {
+              // User doesn't exist, we can create
+            }
             
-            // Create user document immediately
-            const now = new Date().toISOString();
-            await db.collection('users').doc(currentUserId).set({
-              email,
-              role: 'pharmacy',
-              created_at: now,
-              updated_at: now
-            });
+            if (userRecord) {
+               // Email exists! Let's link this pharmacy to the existing user instead of failing.
+               currentUserId = userRecord.uid;
+               if (password) {
+                 await auth.updateUser(currentUserId, { password });
+               }
+            } else if (password) {
+              // Upgrade dummy to real user
+              userRecord = await auth.createUser({ email, password });
+              currentUserId = userRecord.uid;
+              
+              // Create user document immediately
+              const now = new Date().toISOString();
+              await db.collection('users').doc(currentUserId).set({
+                email,
+                role: 'pharmacy',
+                created_at: now,
+                updated_at: now
+              });
+            }
           }
         } catch (authError: any) {
           console.error('Auth update failed:', authError);
