@@ -7,7 +7,8 @@ import {
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { safeJsonFetch } from '../../lib/api';
-import { isPharmacyOpen } from '../../lib/dateUtils';
+import { isPharmacyOpen, getSyncedDate } from '../../lib/dateUtils';
+import { toZonedTime } from 'date-fns-tz';
 import SEOHandler from '../../components/SEOHandler';
 import { useToast } from '../../components/Toast';
 
@@ -100,7 +101,12 @@ export default function PharmacyView() {
 
   const normalHours = isPharmacyOpen(pharmacy.operating_hours);
   const isOpen = pharmacy.on_call ? true : normalHours.open;
-  const statusMsg = pharmacy.on_call ? 'ABERTO AGORA' : normalHours.message;
+  const statusMsg = pharmacy.on_call ? 'ABERTO AGORA (PLANTÃO)' : normalHours.message;
+  
+  // Use synchronized Brasilia time for day highlighting
+  const brDate = toZonedTime(getSyncedDate(), 'America/Sao_Paulo');
+  const brDay = brDate.getDay();
+
   const mapQuery = encodeURIComponent(`${pharmacy.street}, ${pharmacy.number}, ${pharmacy.neighborhood}, ${pharmacy.city}, ${pharmacy.state}`);
 
   return (
@@ -132,16 +138,16 @@ export default function PharmacyView() {
           </div>
 
           <div className="flex items-center gap-2 mb-2">
-            {pharmacy.on_call ? (
-               <span className="bg-[#f6ff00] text-gray-900 text-[10px] font-black uppercase tracking-tighter px-2 py-0.5 rounded shadow-sm flex items-center gap-1">
-                 <Star className="w-3 h-3 fill-current" />
-                 ABERTO AGORA (PLANTÃO)
-               </span>
-            ) : (
-              <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded shadow-sm ${isOpen ? 'bg-white text-emerald-600' : 'bg-red-500 text-white'}`}>
-                {statusMsg}
-              </span>
-            )}
+            <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded shadow-sm ${pharmacy.on_call ? 'bg-[#f6ff00] text-gray-900 border border-yellow-200 shadow-sm' : (isOpen ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-red-50 text-red-600 border border-red-100')}`}>
+              {pharmacy.on_call ? (
+                <span className="flex items-center gap-1">
+                  <Star className="w-3 h-3 fill-current" />
+                  {statusMsg}
+                </span>
+              ) : (
+                statusMsg
+              )}
+            </span>
           </div>
 
           <h1 className="text-3xl md:text-4xl font-black mb-2 tracking-tight">{pharmacy.name}</h1>
@@ -254,7 +260,7 @@ export default function PharmacyView() {
                <div className="flex-1 p-2">
                  <div className="space-y-1">
                    {DAYS.map((day, idx) => {
-                     const isToday = new Date().getDay() === idx;
+                     const isToday = brDay === idx;
                      const dayData = pharmacy.operating_hours?.[idx.toString()] || { open: '08:00', close: '22:00', closed: false };
                      
                      return (

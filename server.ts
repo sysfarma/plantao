@@ -1094,6 +1094,47 @@ async function startServer() {
         finalData = pharmacies.slice(startIndex, startIndex + limit);
       }
 
+      // 5. Inject on_call status for results (safe-wrapped)
+      try {
+        if (finalData.length > 0) {
+          const today = new Intl.DateTimeFormat('sv-SE', {
+            timeZone: 'America/Sao_Paulo',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit'
+          }).format(new Date());
+  
+          const pharmacyIds = finalData.map(p => p.id).filter(id => !!id);
+          if (pharmacyIds.length > 0) {
+            const chunkedIds = [];
+            for (let i = 0; i < pharmacyIds.length; i += 30) {
+              chunkedIds.push(pharmacyIds.slice(i, i + 30));
+            }
+  
+            const onCallIds = new Set<string>();
+            await Promise.all(chunkedIds.map(async (chunk) => {
+              if (!chunk.length) return;
+              const snapshot = await db.collection('shifts')
+                .where('date', '==', today)
+                .where('pharmacy_id', 'in', chunk)
+                .get();
+              snapshot.docs.forEach(doc => {
+                const shiftData = doc.data();
+                if (shiftData && shiftData.pharmacy_id) {
+                  onCallIds.add(shiftData.pharmacy_id);
+                }
+              });
+            }));
+  
+            finalData.forEach(p => {
+              (p as any).on_call = onCallIds.has(p.id);
+            });
+          }
+        }
+      } catch (onCallErr) {
+        console.error('[API] Error injecting on_call status in /pharmacies:', onCallErr);
+      }
+
       res.json({
         data: finalData,
         pagination: {
@@ -1307,29 +1348,74 @@ async function startServer() {
       const cleanSearchCep = cep ? cep.replace(/\D/g, '').substring(0, 5) : null;
       const result = [];
 
-      for (const h of highlights) {
-        const p = pharmaciesMap.get(h.pharmacy_id);
-        if (!p) continue;
-
-        // Filtering by city/state
-        if (city && state && !cep) {
-          if ((p.city || '').toLowerCase() !== city.toLowerCase() || 
-              (p.state || '').toLowerCase() !== state.toLowerCase()) {
-            continue;
+      // Fetch on_call status for pharmacies in highlights (safe-wrapped)
+      try {
+        const today = new Intl.DateTimeFormat('sv-SE', {
+          timeZone: 'America/Sao_Paulo',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        }).format(new Date());
+  
+        const onCallIds = new Set<string>();
+        if (pharmacyIds.length > 0) {
+          await Promise.all(chunks.map(async (chunk) => {
+            if (!chunk.length) return;
+            const snapshot = await db.collection('shifts')
+              .where('date', '==', today)
+              .where('pharmacy_id', 'in', chunk)
+              .get();
+            snapshot.docs.forEach(doc => {
+              const shiftData = doc.data();
+              if (shiftData && shiftData.pharmacy_id) {
+                onCallIds.add(shiftData.pharmacy_id);
+              }
+            });
+          }));
+        }
+  
+        for (const h of highlights) {
+          const p = pharmaciesMap.get(h.pharmacy_id);
+          if (!p) continue;
+  
+          // Filtering by city/state
+          if (city && state && !cep) {
+            if ((p.city || '').toLowerCase() !== city.toLowerCase() || 
+                (p.state || '').toLowerCase() !== state.toLowerCase()) {
+              continue;
+            }
+          }
+  
+          if (cleanSearchCep) {
+            const pharmCep = (p.cep || p.zip || '').replace(/\D/g, '').substring(0, 5);
+            if (pharmCep !== cleanSearchCep) continue;
+          }
+          
+          result.push({
+            ...p, // p is already sanitized and has the correct pharmacy id
+            on_call: onCallIds.has(h.pharmacy_id),
+            highlight_id: h.id, // Save the highlight record ID separately
+            type: h.type, // Include type so frontend knows if it's a 'day' highlight
+            date_start: h.date_start,
+            date_end: h.date_end
+          });
+        }
+      } catch (onCallErr) {
+        console.error('[API] Error injecting on_call status in /highlights:', onCallErr);
+        // Fallback: push without on_call
+        for (const h of highlights) {
+          const p = pharmaciesMap.get(h.pharmacy_id);
+          if (p && !result.find(r => (r as any).id === p.id)) {
+            result.push({
+              ...p,
+              on_call: false,
+              highlight_id: h.id,
+              type: h.type,
+              date_start: h.date_start,
+              date_end: h.date_end
+            });
           }
         }
-
-        if (cleanSearchCep) {
-           const pharmCep = (p.cep || p.zip || '').replace(/\D/g, '').substring(0, 5);
-           if (pharmCep !== cleanSearchCep) continue;
-        }
-        
-        result.push({
-          ...p, // p is already sanitized and has the correct pharmacy id
-          highlight_id: h.id, // Save the highlight record ID separately
-          date_start: h.date_start,
-          date_end: h.date_end
-        });
       }
 
       res.json(result);

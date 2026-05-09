@@ -1,4 +1,4 @@
-import { fromZonedTime } from 'date-fns-tz';
+import { fromZonedTime, toZonedTime } from 'date-fns-tz';
 import { addDays, addWeeks, addMonths } from 'date-fns';
 
 const TIMEZONE = 'America/Sao_Paulo';
@@ -9,9 +9,9 @@ export async function syncWithServer() {
   try {
     const start = Date.now();
     const res = await fetch('/api/status/time');
-    const { date } = await res.json();
+    const { timestamp } = await res.json();
     const end = Date.now();
-    const serverTime = new Date(date).getTime();
+    const serverTime = new Date(timestamp).getTime();
     const rtt = (end - start) / 2;
     serverOffset = (serverTime + rtt) - end;
   } catch (e) {
@@ -49,14 +49,17 @@ export function isPharmacyOpen(operatingHours: any): { open: boolean, message: s
   if (!operatingHours) return { open: true, message: 'Consulte o local' };
   
   const now = getSyncedDate();
-  const dayOfWeek = now.getDay().toString(); // 0 (Dom) to 6 (Sab)
+  // Use toZonedTime to get a date representing the time in Brasilia
+  const brDate = toZonedTime(now, TIMEZONE);
+  
+  const dayOfWeek = brDate.getDay().toString(); // 0 (Dom) to 6 (Sab)
   const hours = operatingHours[dayOfWeek];
   
   if (!hours || hours.closed) {
-    return { open: false, message: 'Fechado hoje' };
+    return { open: false, message: 'FECHADO AGORA' };
   }
   
-  const [currentH, currentM] = [now.getHours(), now.getMinutes()];
+  const [currentH, currentM] = [brDate.getHours(), brDate.getMinutes()];
   const currentTime = currentH * 60 + currentM;
   
   const [openH, openM] = hours.open.split(':').map(Number);
@@ -70,14 +73,14 @@ export function isPharmacyOpen(operatingHours: any): { open: boolean, message: s
   
   if (isActualCloseTimeAfterOpenTime) {
     if (currentTime >= openTime && currentTime < closeTime) {
-      return { open: true, message: `Aberto até as ${hours.close}` };
+      return { open: true, message: `ABERTO ATÉ AS ${hours.close}` };
     }
   } else {
     // Midnight overlap case
     if (currentTime >= openTime || currentTime < closeTime) {
-      return { open: true, message: `Aberto até as ${hours.close}` };
+      return { open: true, message: `ABERTO ATÉ AS ${hours.close}` };
     }
   }
   
-  return { open: false, message: 'Fechado agora' };
+  return { open: false, message: 'FECHADO AGORA' };
 }
