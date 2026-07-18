@@ -112,6 +112,26 @@ export default function AdminDashboard() {
   }, [pharmacySearchTerm]);
   const [pharmacySortOrder, setPharmacySortOrder] = useState<'asc' | 'desc'>('asc');
 
+  // API Integration States
+  const [apiKeys, setApiKeys] = useState<any[]>([]);
+  const [loadingApiKeys, setLoadingApiKeys] = useState(false);
+  const [apiKeyName, setApiKeyName] = useState('');
+  const [apiKeyDesc, setApiKeyDesc] = useState('');
+  const [creatingKey, setCreatingKey] = useState(false);
+  const [revealedKeys, setRevealedKeys] = useState<{ [key: string]: boolean }>({});
+
+  // Interactive API Sandbox States
+  const [sandboxEndpoint, setSandboxEndpoint] = useState('/api/external/v1/pharmacies');
+  const [sandboxApiKey, setSandboxApiKey] = useState('');
+  const [sandboxCity, setSandboxCity] = useState('');
+  const [sandboxStateParam, setSandboxStateParam] = useState('');
+  const [sandboxLimit, setSandboxLimit] = useState('5');
+  const [sandboxLoading, setSandboxLoading] = useState(false);
+  const [sandboxResponse, setSandboxResponse] = useState<any>(null);
+  const [activeCodeLang, setActiveCodeLang] = useState<'curl' | 'js' | 'python'>('js');
+  const [diagnosticError, setDiagnosticError] = useState<string>('all');
+  const [isCopiedPrompt, setIsCopiedPrompt] = useState(false);
+
   const TableSkeleton = ({ rows = 5, cols = 5 }: { rows?: number, cols?: number }) => (
     <div className="animate-pulse">
       <div className="h-10 bg-gray-100 rounded mb-4 w-full"></div>
@@ -552,6 +572,20 @@ export default function AdminDashboard() {
     } catch (e) { console.error('Error fetching config:', e); }
   };
 
+  const fetchApiKeys = async () => {
+    setLoadingApiKeys(true);
+    try {
+      const data = await safeFetch('/api/admin/api-keys');
+      if (data && typeof data !== 'string') {
+        setApiKeys(data);
+      }
+    } catch (e) {
+      console.error('Error fetching API keys:', e);
+    } finally {
+      setLoadingApiKeys(false);
+    }
+  };
+
   const fetchAuditLogs = async () => {
     if (!isAdminMaster) return;
     setLoadingTable(true);
@@ -568,7 +602,8 @@ export default function AdminDashboard() {
       await Promise.all([
         fetchStats(),
         fetchPlans(),
-        fetchConfig()
+        fetchConfig(),
+        fetchApiKeys()
       ]);
 
       if (refreshTab) {
@@ -577,6 +612,7 @@ export default function AdminDashboard() {
         if (activeTab === 'highlights') fetchHighlights();
         if (activeTab === 'subscribers') fetchSubscribers();
         if (activeTab === 'audit') fetchAuditLogs();
+        if (activeTab === 'api_integration') fetchApiKeys();
       }
     } finally {
       setLoading(false);
@@ -605,6 +641,9 @@ export default function AdminDashboard() {
         break;
       case 'audit':
         if (isAdminMaster) fetchAuditLogs();
+        break;
+      case 'api_integration':
+        fetchApiKeys();
         break;
       case 'settings':
         fetchConfig();
@@ -928,6 +967,122 @@ export default function AdminDashboard() {
     }
   };
 
+  const handleCreateApiKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!apiKeyName.trim()) return;
+    setCreatingKey(true);
+    try {
+      const token = await getAuthToken();
+      const response = await fetch('/api/admin/api-keys', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ name: apiKeyName, description: apiKeyDesc })
+      });
+      const data = await response.json();
+      if (response.ok) {
+        setApiKeys([data, ...apiKeys]);
+        setApiKeyName('');
+        setApiKeyDesc('');
+        setSandboxApiKey(data.key);
+        showToast('Nova integração de API gerada com sucesso!', 'success');
+      } else {
+        showToast(data.error || 'Erro ao criar chave de API', 'error');
+      }
+    } catch (err: any) {
+      console.error(err);
+      showToast('Falha na comunicação com o servidor', 'error');
+    } finally {
+      setCreatingKey(false);
+    }
+  };
+
+  const handleToggleApiKeyStatus = async (id: string, currentStatus: string) => {
+    const newStatus = currentStatus === 'active' ? 'revoked' : 'active';
+    try {
+      const token = await getAuthToken();
+      const response = await fetch(`/api/admin/api-keys/${id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ status: newStatus })
+      });
+      const data = await response.json();
+      if (response.ok) {
+        setApiKeys(apiKeys.map(k => k.id === id ? { ...k, status: newStatus } : k));
+        showToast('Chave de API atualizada com sucesso!', 'success');
+      } else {
+        showToast(data.error || 'Erro ao alterar status da chave', 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Falha ao conectar com o servidor', 'error');
+    }
+  };
+
+  const handleDeleteApiKey = async (id: string) => {
+    if (!confirm('Deseja realmente excluir permanentemente esta integração de API? Quaisquer sistemas utilizando-a perderão acesso instantaneamente.')) return;
+    try {
+      const token = await getAuthToken();
+      const response = await fetch(`/api/admin/api-keys/${id}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      const data = await response.json();
+      if (response.ok) {
+        setApiKeys(apiKeys.filter(k => k.id !== id));
+        showToast('Integração de API excluída com sucesso!', 'success');
+      } else {
+        showToast(data.error || 'Erro ao excluir chave', 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Falha ao conectar com o servidor', 'error');
+    }
+  };
+
+  const handleCopyText = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopyingLink(id);
+    showToast('Chave de API copiada para a área de transferência!', 'success');
+    setTimeout(() => setCopyingLink(null), 2000);
+  };
+
+  const handleTestSandbox = async () => {
+    if (!sandboxApiKey) {
+      setSandboxResponse({ error: 'Selecione ou insira uma chave de API para rodar o teste.' });
+      return;
+    }
+    setSandboxLoading(true);
+    setSandboxResponse(null);
+    try {
+      let url = `${sandboxEndpoint}?apiKey=${encodeURIComponent(sandboxApiKey)}`;
+      if (sandboxEndpoint === '/api/external/v1/pharmacies') {
+        if (sandboxCity) url += `&city=${encodeURIComponent(sandboxCity)}`;
+        if (sandboxStateParam) url += `&state=${encodeURIComponent(sandboxStateParam)}`;
+        if (sandboxLimit) url += `&limit=${encodeURIComponent(sandboxLimit)}`;
+      }
+
+      const response = await fetch(url, {
+        headers: {
+          'Accept': 'application/json'
+        }
+      });
+      const data = await response.json();
+      setSandboxResponse(data);
+    } catch (err: any) {
+      setSandboxResponse({ error: 'Erro de requisição Sandbox: ' + err.message });
+    } finally {
+      setSandboxLoading(false);
+    }
+  };
+
   if (loading && !stats) {
     return (
       <div className="p-8 flex items-center justify-center min-h-[60vh]">
@@ -946,7 +1101,7 @@ export default function AdminDashboard() {
       {/* Tabs */}
       <div className="border-b border-gray-200 mb-8 overflow-x-auto">
         <nav className="-mb-px flex space-x-8 min-w-max">
-          {['pharmacies', 'shifts', 'highlights', 'subscribers', 'subscriptions', 'reports', 'finance', 'audit', 'settings'].filter(tab => (tab !== 'reports' && tab !== 'subscriptions' && tab !== 'settings' && tab !== 'subscribers' && tab !== 'audit' && tab !== 'finance') || isAdminMaster).map((tab) => (
+          {['pharmacies', 'shifts', 'highlights', 'subscribers', 'subscriptions', 'reports', 'finance', 'audit', 'api_integration', 'settings'].filter(tab => (tab !== 'reports' && tab !== 'subscriptions' && tab !== 'settings' && tab !== 'subscribers' && tab !== 'audit' && tab !== 'finance' && tab !== 'api_integration') || isAdminMaster).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -963,6 +1118,7 @@ export default function AdminDashboard() {
               {tab === 'reports' && 'Relatórios e Métricas'}
               {tab === 'subscriptions' && 'Planos de Assinatura'}
               {tab === 'audit' && 'Logs de Auditoria'}
+              {tab === 'api_integration' && 'Integração API'}
               {tab === 'settings' && 'Configurações'}
             </button>
           ))}
@@ -971,7 +1127,7 @@ export default function AdminDashboard() {
 
       {/* Stats Cards */}
       {stats && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-8">
           <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
             <div className="flex items-center gap-3 mb-2">
               <div className="p-2 bg-emerald-50 rounded-lg">
@@ -1010,6 +1166,17 @@ export default function AdminDashboard() {
               {generalConfig.platform_last_update 
                 ? new Date(generalConfig.platform_last_update).toLocaleString('pt-BR') 
                 : (stats.lastUpdate ? new Date(stats.lastUpdate).toLocaleString('pt-BR') : 'Agora')}
+            </p>
+          </div>
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="p-2 bg-indigo-50 rounded-lg">
+                <Key className="w-6 h-6 text-indigo-600" />
+              </div>
+              <h3 className="text-gray-500 text-sm font-medium">Chaves de API</h3>
+            </div>
+            <p className="text-2xl font-bold text-gray-900">
+              {apiKeys.length} <span className="text-xs text-gray-400 font-normal">ativas</span>
             </p>
           </div>
         </div>
@@ -2215,6 +2382,739 @@ export default function AdminDashboard() {
                   )}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'api_integration' && isAdminMaster && (
+        <div className="space-y-8 animate-fade-in">
+          {/* Header */}
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
+            <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2 mb-2">
+              <Key className="w-6 h-6 text-indigo-600" />
+              Integração de APIs de Terceiros
+            </h2>
+            <p className="text-gray-500 text-sm">
+              Gere chaves de API seguras e ofereça integração de dados em tempo real para outras plataformas (sistemas públicos de saúde, diretórios médicos, portais parceiros) terem acesso consolidado às farmácias e plantões cadastrados na plataforma.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
+            {/* Gerador de Chaves */}
+            <div className="xl:col-span-1 space-y-6">
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
+                <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
+                  <Plus className="w-5 h-5 text-indigo-600" />
+                  Gerar Nova Integração
+                </h3>
+                <form onSubmit={handleCreateApiKey} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Nome da Plataforma / Aplicação <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Ex: Secretaria Municipal de Saúde"
+                      value={apiKeyName}
+                      onChange={(e) => setApiKeyName(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 hover:border-gray-400 transition-colors"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Descrição / Finalidade
+                    </label>
+                    <textarea
+                      placeholder="Ex: Exibir farmácias abertas e em plantão no telão do hospital municipal."
+                      value={apiKeyDesc}
+                      onChange={(e) => setApiKeyDesc(e.target.value)}
+                      rows={3}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 hover:border-gray-400 transition-colors"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={creatingKey || !apiKeyName.trim()}
+                    className="w-full py-2 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 flex items-center justify-center gap-2 transition-all cursor-pointer"
+                  >
+                    {creatingKey ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Gerando...
+                      </>
+                    ) : (
+                      <>
+                        <Key className="w-4 h-4" />
+                        Gerar Chave de API
+                      </>
+                    )}
+                  </button>
+                </form>
+              </div>
+            </div>
+
+            {/* Listagem de Chaves */}
+            <div className="xl:col-span-2 space-y-6">
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
+                <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
+                  <ShieldCheck className="w-5 h-5 text-indigo-600" />
+                  Chaves de Acesso Ativas
+                </h3>
+
+                {loadingApiKeys ? (
+                  <TableSkeleton rows={3} cols={4} />
+                ) : apiKeys.length === 0 ? (
+                  <div className="text-center py-12 border-2 border-dashed border-gray-200 rounded-xl">
+                    <Key className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                    <p className="text-gray-500 text-sm font-medium">Nenhuma chave de API gerada até o momento.</p>
+                    <p className="text-gray-400 text-xs mt-1">Crie uma chave ao lado para iniciar as integrações.</p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Identificação / Plataforma</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Token / Chave</th>
+                          <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">Uso</th>
+                          <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-400 uppercase">Ações</th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {apiKeys.map((item) => (
+                          <tr key={item.id} className="hover:bg-gray-50 transition-all">
+                            <td className="px-4 py-4">
+                              <div className="font-bold text-gray-900 text-sm">{item.name}</div>
+                              {item.description && (
+                                <div className="text-xs text-gray-500 mt-1 line-clamp-1 max-w-xs">{item.description}</div>
+                              )}
+                              <div className="text-[10px] text-gray-400 mt-0.5">Criada em {new Date(item.created_at).toLocaleDateString('pt-BR')}</div>
+                            </td>
+                            <td className="px-4 py-4">
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono text-xs bg-gray-100 px-2 py-1 rounded select-all max-w-[140px] truncate">
+                                  {revealedKeys[item.id] ? item.key : '••••••••••••••••••••••••'}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setRevealedKeys({ ...revealedKeys, [item.id]: !revealedKeys[item.id] })}
+                                  className="px-2 py-1 bg-gray-50 hover:bg-gray-150 border border-gray-200 rounded text-gray-500 transition-all text-[10px] cursor-pointer"
+                                  title={revealedKeys[item.id] ? "Ocultar Chave" : "Mostrar Chave"}
+                                >
+                                  {revealedKeys[item.id] ? "Ocultar" : "Mostrar"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopyText(item.key, item.id)}
+                                  className="p-1 hover:bg-gray-100 rounded text-gray-500 transition-all cursor-pointer"
+                                  title="Copiar Token"
+                                >
+                                  {copyingLink === item.id ? (
+                                    <Check className="w-4 h-4 text-emerald-600" />
+                                  ) : (
+                                    <Copy className="w-4 h-4" />
+                                  )}
+                                </button>
+                              </div>
+                            </td>
+                            <td className="px-4 py-4 text-center">
+                              <div className="text-sm font-bold text-gray-900">{item.usage_count || 0}</div>
+                              <div className="text-[10px] text-gray-400">requisições</div>
+                              {item.last_used_at && (
+                                <div className="text-[9px] text-indigo-500 mt-1 font-medium" title={new Date(item.last_used_at).toLocaleString()}>
+                                  Último uso: {new Date(item.last_used_at).toLocaleDateString()}
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-4 py-4 text-center">
+                              <span className={`px-2 py-0.5 inline-flex text-[10px] leading-5 font-bold rounded-full ${
+                                item.status === 'active' 
+                                  ? 'bg-emerald-100 text-emerald-800' 
+                                  : 'bg-red-100 text-red-800'
+                              }`}>
+                                {item.status === 'active' ? 'Ativo' : 'Revogado'}
+                              </span>
+                            </td>
+                            <td className="px-4 py-4 text-right">
+                              <div className="flex justify-end gap-2">
+                                <button
+                                  onClick={() => handleToggleApiKeyStatus(item.id, item.status)}
+                                  className={`px-2 py-1 rounded transition-all text-xs font-semibold border cursor-pointer ${
+                                    item.status === 'active'
+                                      ? 'border-amber-200 text-amber-700 bg-amber-50 hover:bg-amber-100'
+                                      : 'border-emerald-200 text-emerald-700 bg-emerald-50 hover:bg-emerald-100'
+                                  }`}
+                                  title={item.status === 'active' ? 'Revogar Chave' : 'Ativar Chave'}
+                                >
+                                  {item.status === 'active' ? 'Revogar' : 'Ativar'}
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteApiKey(item.id)}
+                                  className="p-1 border border-red-200 text-red-700 bg-red-50 hover:bg-red-100 rounded transition-all cursor-pointer"
+                                  title="Excluir Chave"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Playground, Documentação Completa e Prompt para IA */}
+          <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-200 space-y-8">
+            <div className="border-b border-gray-150 pb-5">
+              <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                <FileText className="w-6 h-6 text-indigo-600" />
+                Hub de Integração e Documentação do Desenvolvedor
+              </h3>
+              <p className="text-sm text-gray-500 mt-1">
+                Integre outras plataformas, sistemas governamentais, displays de hospitais municipais ou agentes de IA de forma descomplicada com nossos serviços JSON em alta disponibilidade.
+              </p>
+            </div>
+
+            {/* Abas e Guias Rápidas (Passo a Passo Interativo) */}
+            <div className="space-y-6">
+              <h4 className="text-md font-bold text-gray-900 flex items-center gap-2">
+                <CheckSquare className="w-5 h-5 text-indigo-500" />
+                Guia de Integração Passo a Passo (Walkthrough)
+              </h4>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                <div className="bg-gray-50 p-5 rounded-xl border border-gray-200 hover:border-indigo-200 transition-all">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-indigo-700 font-bold mb-3 text-sm">
+                    1
+                  </div>
+                  <h5 className="font-bold text-gray-900 text-sm mb-1">Chave de API</h5>
+                  <p className="text-xs text-gray-500">
+                    Gere uma chave de API segura no formulário superior associada à sua plataforma. Nunca compartilhe esse token publicamente.
+                  </p>
+                </div>
+                <div className="bg-gray-50 p-5 rounded-xl border border-gray-200 hover:border-indigo-200 transition-all">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-indigo-700 font-bold mb-3 text-sm">
+                    2
+                  </div>
+                  <h5 className="font-bold text-gray-900 text-sm mb-1">Escolha a Rota</h5>
+                  <p className="text-xs text-gray-500">
+                    Use o endpoint <code className="text-indigo-600">/pharmacies</code> para listagem geral ou o <code className="text-indigo-600">/shifts</code> para consultar plantões ativos hoje.
+                  </p>
+                </div>
+                <div className="bg-gray-50 p-5 rounded-xl border border-gray-200 hover:border-indigo-200 transition-all">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-indigo-700 font-bold mb-3 text-sm">
+                    3
+                  </div>
+                  <h5 className="font-bold text-gray-900 text-sm mb-1">Autenticação</h5>
+                  <p className="text-xs text-gray-500">
+                    Passe a chave no Header <code className="text-[11px] bg-white px-1 py-0.5 rounded border">x-api-key</code> ou na Query String <code className="text-[11px] bg-white px-1 py-0.5 rounded border">?apiKey=TOKEN</code>.
+                  </p>
+                </div>
+                <div className="bg-gray-50 p-5 rounded-xl border border-gray-200 hover:border-indigo-200 transition-all">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-indigo-700 font-bold mb-3 text-sm">
+                    4
+                  </div>
+                  <h5 className="font-bold text-gray-900 text-sm mb-1">Boas Práticas</h5>
+                  <p className="text-xs text-gray-500">
+                    Recomendamos implementar cache local de 15 minutos em sua ponta para evitar rate limit de chamadas repetitivas.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Prompt de Sistema para IA / Agente Conversacional */}
+            <div className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white p-6 rounded-2xl shadow-md space-y-4">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <div>
+                  <h4 className="text-lg font-bold flex items-center gap-2">
+                    <Star className="w-5 h-5 text-amber-300 animate-pulse" />
+                    Prompt de Sistema Otimizado para Agentes de IA & LLMs
+                  </h4>
+                  <p className="text-xs text-indigo-100 mt-1">
+                    Copie este prompt completo para configurar assistentes, GPTs personalizados ou bots do WhatsApp. Ele ensina a IA a consultar esta API de forma impecável.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const promptText = `Você é um assistente de IA especialista em saúde pública e integrações para o portal "Farmácias de Plantão".
+Seu objetivo é ler os dados em tempo real enviados através da API de plantões e farmácias e responder de forma extremamente prestativa, confiável e clara aos usuários.
+
+--- ESPECIFICAÇÕES DOS ENDPOINTS ---
+1. GET ${window.location.origin}/api/external/v1/pharmacies
+   Busca todas as farmácias cadastradas na plataforma.
+   Parâmetros úteis:
+   - apiKey: OBRIGATÓRIO (Ex: fp_live_...)
+   - city: Filtrar por cidade (Ex: Cascavel)
+   - state: Filtrar por UF (Ex: PR)
+   - limit: Limitar registros (Ex: 10)
+
+2. GET ${window.location.origin}/api/external/v1/shifts
+   Obtém a escala consolidada de todas as farmácias em plantão ativo/planejado hoje.
+
+--- REGRAS DE RETORNO DO AGENTE Conversacional ---
+- Sempre valide se a farmácia consultada está listada como ativa.
+- Forneça o endereço formatado claramente para navegação (Rua, Número, Bairro, CEP e Cidade).
+- Se houver latitude e longitude ('coordinates'), mencione que você pode gerar um link de mapa para o motorista.
+- Inclua o número ou link do WhatsApp para que o paciente confirme a disponibilidade do remédio antes de se locomover.
+- Seja amigável, demonstre empatia com quem busca atendimento e mantenha o tom ético e profissional.`;
+                    navigator.clipboard.writeText(promptText);
+                    setIsCopiedPrompt(true);
+                    showToast('Prompt completo copiado com sucesso!', 'success');
+                    setTimeout(() => setIsCopiedPrompt(false), 2500);
+                  }}
+                  className="px-4 py-2 bg-white text-indigo-700 hover:bg-indigo-50 font-semibold rounded-lg text-xs flex items-center gap-2 shadow-sm transition-all shrink-0 cursor-pointer"
+                >
+                  {isCopiedPrompt ? (
+                    <>
+                      <Check className="w-4 h-4 text-emerald-600" />
+                      Prompt Copiado!
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-4 h-4" />
+                      Copiar Prompt Completo
+                    </>
+                  )}
+                </button>
+              </div>
+
+              <div className="bg-indigo-950/80 p-4 rounded-xl border border-indigo-400/30 text-xs font-mono text-indigo-200 select-all max-h-48 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                {`Você é um assistente de IA especialista em saúde pública e integrações para o portal "Farmácias de Plantão".
+Seu objetivo é ler os dados em tempo real enviados através da API de plantões e farmácias e responder de forma extremamente prestativa, confiável e clara aos usuários.
+
+--- ESPECIFICAÇÕES DOS ENDPOINTS ---
+1. GET ${window.location.origin}/api/external/v1/pharmacies
+   Busca todas as farmácias cadastradas na plataforma.
+   Parâmetros úteis:
+   - apiKey: OBRIGATÓRIO (Ex: fp_live_...)
+   - city: Filtrar por cidade (Ex: Cascavel)
+   - state: Filtrar por UF (Ex: PR)
+   - limit: Limitar registros (Ex: 10)
+
+2. GET ${window.location.origin}/api/external/v1/shifts
+   Obtém a escala consolidada de todas as farmácias em plantão ativo/planejado hoje.
+
+--- REGRAS DE RETORNO DO AGENTE CONVERSACIONAL ---
+- Sempre valide se a farmácia consultada está listada como ativa.
+- Forneça o endereço formatado claramente para navegação (Rua, Número, Bairro, CEP e Cidade).
+- Se houver latitude e longitude ('coordinates'), mencione que você pode gerar um link de mapa para o motorista.
+- Inclua o número ou link do WhatsApp para que o paciente confirme a disponibilidade do remédio antes de se locomover.
+- Seja amigável, demonstre empatia com quem busca atendimento e mantenha o tom ético e profissional.`}
+              </div>
+            </div>
+
+            {/* Documentação Detalhada e Exemplo de Código */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              {/* Informação dos Endpoints */}
+              <div className="bg-gray-50 p-6 rounded-2xl border border-gray-200 space-y-4">
+                <h4 className="font-bold text-gray-900 text-sm flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-indigo-600" />
+                  Referência Técnica Completa (Endpoints)
+                </h4>
+
+                <div className="space-y-4">
+                  <div className="border border-gray-200 rounded-lg p-3.5 bg-white space-y-2">
+                    <div className="flex justify-between items-center">
+                      <span className="font-mono text-[10px] bg-indigo-100 text-indigo-800 font-bold px-2 py-0.5 rounded">GET</span>
+                      <span className="text-[10px] text-gray-400 font-mono">/api/external/v1/pharmacies</span>
+                    </div>
+                    <div className="font-bold text-xs text-gray-800">Listagem de Farmácias Cadastradas</div>
+                    <p className="text-xs text-gray-500">Retorna um array com todas as farmácias ativas organizadas, contendo dados completos de endereço, telefone de contato, localização e status atual.</p>
+                    <div className="text-[11px] text-gray-600 pt-1 border-t border-gray-100">
+                      <strong className="text-gray-700">Parâmetros opcionais (query):</strong>
+                      <ul className="list-disc list-inside pl-1 text-[10px] text-gray-500 space-y-0.5 mt-1">
+                        <li><code className="font-mono text-indigo-600">city</code> (Ex: Cascavel)</li>
+                        <li><code className="font-mono text-indigo-600">state</code> (Ex: PR - Estado com 2 letras)</li>
+                        <li><code className="font-mono text-indigo-600">limit</code> (Ex: 15 - Limite padrão é 50)</li>
+                      </ul>
+                    </div>
+                  </div>
+
+                  <div className="border border-gray-200 rounded-lg p-3.5 bg-white space-y-2">
+                    <div className="flex justify-between items-center">
+                      <span className="font-mono text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded">GET</span>
+                      <span className="text-[10px] text-gray-400 font-mono">/api/external/v1/shifts</span>
+                    </div>
+                    <div className="font-bold text-xs text-gray-800">Escala de Plantões Ativos (Hoje)</div>
+                    <p className="text-xs text-gray-500">Busca apenas as farmácias cuja escala e data de atendimento de plantão estão em vigência neste momento para a cidade designada ou em geral.</p>
+                    <div className="text-[11px] text-gray-600 pt-1 border-t border-gray-100">
+                      <span className="text-[10px] text-indigo-600 font-semibold flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3 text-indigo-500" />
+                        Retorna os horários exatos de início e término do plantão em formato ISO.
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Snippets de Integração (Code Switcher) */}
+              <div className="bg-gray-900 rounded-2xl border border-gray-800 p-6 flex flex-col justify-between text-gray-300">
+                <div className="space-y-4">
+                  <div className="flex justify-between items-center border-b border-gray-800 pb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-indigo-500 animate-pulse"></span>
+                      <span className="text-xs font-bold text-white tracking-widest uppercase">Snippets Úteis</span>
+                    </div>
+                    <div className="flex bg-gray-800 p-0.5 rounded-lg border border-gray-700 text-[10px]">
+                      <button
+                        type="button"
+                        onClick={() => setActiveCodeLang('js')}
+                        className={`px-2 py-1 rounded-md font-semibold font-mono transition-all cursor-pointer ${activeCodeLang === 'js' ? 'bg-indigo-600 text-white shadow-sm' : 'hover:text-white text-gray-400'}`}
+                      >
+                        Fetch (JS)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveCodeLang('python')}
+                        className={`px-2 py-1 rounded-md font-semibold font-mono transition-all cursor-pointer ${activeCodeLang === 'python' ? 'bg-indigo-600 text-white shadow-sm' : 'hover:text-white text-gray-400'}`}
+                      >
+                        Python
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveCodeLang('curl')}
+                        className={`px-2 py-1 rounded-md font-semibold font-mono transition-all cursor-pointer ${activeCodeLang === 'curl' ? 'bg-indigo-600 text-white shadow-sm' : 'hover:text-white text-gray-400'}`}
+                      >
+                        cURL
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="font-mono text-xs overflow-x-auto p-2 pt-0 max-h-[220px] select-all bg-gray-950/60 rounded-lg text-emerald-400 leading-relaxed">
+                    {activeCodeLang === 'js' && (
+                      <pre>{`// JavaScript / Node v18+
+const API_URL = "${window.location.origin}/api/external/v1/shifts";
+const API_KEY = "${sandboxApiKey || 'SUA_CHAVE_AQUI'}";
+
+fetch(\`\${API_URL}?apiKey=\${API_KEY}\`, {
+  headers: {
+    'Accept': 'application/json',
+    'x-api-key': API_KEY
+  }
+})
+  .then(res => {
+    if (!res.ok) throw new Error(\`Erro HTTP: \${res.status}\`);
+    return res.json();
+  })
+  .then(data => console.log("Plantões hoje:", data))
+  .catch(err => console.error("Falha na chamada:", err));`}</pre>
+                    )}
+
+                    {activeCodeLang === 'python' && (
+                      <pre>{`# Python 3 (Requests)
+import requests
+
+url = "${window.location.origin}/api/external/v1/shifts"
+headers = {
+    "Accept": "application/json",
+    "x-api-key": "${sandboxApiKey || 'SUA_CHAVE_AQUI'}"
+}
+params = {
+    "apiKey": "${sandboxApiKey || 'SUA_CHAVE_AQUI'}"
+}
+
+try:
+    res = requests.get(url, headers=headers, params=params)
+    res.raise_for_status()
+    data = res.json()
+    print("Sucesso! Total plantões:", len(data))
+except Exception as err:
+    print(f"Erro na requisição: {err}")`}</pre>
+                    )}
+
+                    {activeCodeLang === 'curl' && (
+                      <pre>{`# cURL Line command
+curl -X GET "${window.location.origin}/api/external/v1/shifts?apiKey=${sandboxApiKey || 'SUA_CHAVE_AQUI'}" \\
+  -H "Accept: application/json" \\
+  -H "x-api-key: ${sandboxApiKey || 'SUA_CHAVE_AQUI'}"`}</pre>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-4 pt-3 border-t border-gray-800 flex justify-between items-center text-[10px] text-gray-500">
+                  <span>Chave ativa sugerida no código</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const text = activeCodeLang === 'js' 
+                        ? `const API_URL = "${window.location.origin}/api/external/v1/shifts";\nconst API_KEY = "${sandboxApiKey || 'SUA_CHAVE_AQUI'}";\nfetch(\`\${API_URL}?apiKey=\${API_KEY}\`, { headers: { 'Accept': 'application/json' } }).then(r => r.json()).then(d => console.log(d));`
+                        : activeCodeLang === 'python'
+                        ? `import requests\nres = requests.get("${window.location.origin}/api/external/v1/shifts", params={"apiKey": "${sandboxApiKey || 'SUA_CHAVE_AQUI'}"})\nprint(res.json())`
+                        : `curl "${window.location.origin}/api/external/v1/shifts?apiKey=${sandboxApiKey || 'SUA_CHAVE_AQUI'}"`;
+                      handleCopyText(text, 'snippet_code');
+                    }}
+                    className="flex items-center gap-1 text-indigo-400 hover:text-indigo-300 font-semibold cursor-pointer underline hover:no-underline"
+                  >
+                    <Copy className="w-3 h-3" />
+                    Copiar snippet completo
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Simulador Interativo */}
+            <div className="bg-indigo-50/50 p-6 rounded-2xl border border-indigo-100 space-y-4">
+              <h4 className="font-bold text-gray-900 flex items-center gap-2">
+                <RefreshCw className="w-4 h-4 text-indigo-600 animate-spin-slow" />
+                Simulador e Depurador de Requisições (Sandbox do Desenvolvedor)
+              </h4>
+              <p className="text-xs text-gray-600">
+                Use este terminal para disparar requisições em tempo real e visualizar a payload JSON que os parceiros e agentes de IA irão receber em seus respectivos servidores.
+              </p>
+
+              <div className="bg-white p-5 rounded-xl border border-gray-200">
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end animate-fade-in">
+                  <div className="md:col-span-3">
+                    <label className="block text-xs font-bold text-gray-600 mb-1">Rota de Simulação</label>
+                    <select
+                      value={sandboxEndpoint}
+                      onChange={(e) => {
+                        setSandboxEndpoint(e.target.value);
+                        setSandboxResponse(null);
+                      }}
+                      className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                    >
+                      <option value="/api/external/v1/pharmacies">GET /api/external/v1/pharmacies</option>
+                      <option value="/api/external/v1/shifts">GET /api/external/v1/shifts</option>
+                    </select>
+                  </div>
+                  <div className="md:col-span-4">
+                    <label className="block text-xs font-bold text-gray-600 mb-1">Chave de API Vinculada</label>
+                    <select
+                      value={sandboxApiKey}
+                      onChange={(e) => setSandboxApiKey(e.target.value)}
+                      className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                    >
+                      <option value="">-- Selecione uma Chave Gerada --</option>
+                      {apiKeys.filter(k => k.status === 'active').map(k => (
+                        <option key={k.id} value={k.key}>{k.name} ({k.key.substring(0, 15)}...)</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {sandboxEndpoint === '/api/external/v1/pharmacies' && (
+                    <>
+                      <div className="md:col-span-2">
+                        <label className="block text-xs font-bold text-gray-600 mb-1">Cidade (Opcional)</label>
+                        <input
+                          type="text"
+                          placeholder="Cidade"
+                          value={sandboxCity}
+                          onChange={(e) => setSandboxCity(e.target.value)}
+                          className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                        />
+                      </div>
+                      <div className="md:col-span-1">
+                        <label className="block text-xs font-bold text-gray-600 mb-1">UF</label>
+                        <input
+                          type="text"
+                          maxLength={2}
+                          placeholder="UF"
+                          value={sandboxStateParam}
+                          onChange={(e) => setSandboxStateParam(e.target.value)}
+                          className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none uppercase"
+                        />
+                      </div>
+                      <div className="md:col-span-1">
+                        <label className="block text-xs font-bold text-gray-600 mb-1">Limite</label>
+                        <input
+                          type="number"
+                          placeholder="5"
+                          value={sandboxLimit}
+                          onChange={(e) => setSandboxLimit(e.target.value)}
+                          className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  <div className={`${sandboxEndpoint === '/api/external/v1/pharmacies' ? 'md:col-span-1' : 'md:col-span-5'} flex justify-end`}>
+                    <button
+                      type="button"
+                      onClick={handleTestSandbox}
+                      disabled={sandboxLoading || !sandboxApiKey}
+                      className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded text-xs py-2 px-2 flex items-center justify-center gap-1 font-semibold transition-all cursor-pointer"
+                    >
+                      {sandboxLoading ? 'Simulando...' : 'Testar API'}
+                    </button>
+                  </div>
+                </div>
+
+                {sandboxResponse && (
+                  <div className="mt-4 border border-indigo-100 rounded-lg overflow-hidden animate-fade-in text-[11px] font-mono">
+                    <div className="bg-indigo-900 text-indigo-100 px-3 py-1.5 flex justify-between items-center text-[10px]">
+                      <span>RESPONSE HEADERS (200 OK - content-type: application/json)</span>
+                      <button
+                        type="button"
+                        onClick={() => handleCopyText(JSON.stringify(sandboxResponse, null, 2), 'sandbox_res')}
+                        className="hover:text-white transition-all underline outline-none cursor-pointer"
+                      >
+                        Copiar Payload JSON
+                      </button>
+                    </div>
+                    <pre className="p-3 bg-gray-950 text-emerald-400 overflow-y-auto max-h-[300px]">
+                      {JSON.stringify(sandboxResponse, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Nova Seção de Diagnósticos, Erros e Suporte Técnico */}
+            <div className="border-t border-gray-150 pt-8 grid grid-cols-1 md:grid-cols-3 gap-8">
+              {/* Resoluções de Erros Comuns */}
+              <div className="md:col-span-2 space-y-4">
+                <h4 className="font-bold text-gray-900 text-sm flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-indigo-600" />
+                  Módulo de Diagnóstico Automático e Tratamento de Erros
+                </h4>
+                <p className="text-xs text-gray-500">
+                  Selecione um código de erro retornado pela API ou cenário operacional para ver instantaneamente a causa comum e como resolver no seu sistema cliente:
+                </p>
+
+                <div className="flex gap-2">
+                  <select
+                    value={diagnosticError}
+                    onChange={(e) => setDiagnosticError(e.target.value)}
+                    className="px-3 py-2 border border-gray-300 rounded-lg text-xs bg-white text-gray-700 outline-none focus:ring-1 focus:ring-indigo-500"
+                  >
+                    <option value="all">Ver todos os diagnósticos</option>
+                    <option value="400">Status 400: Bad Request / Parâmetros Inválidos</option>
+                    <option value="401">Status 401: Unauthorized / Chave Ausente</option>
+                    <option value="403">Status 403: Forbidden / Chave Revogada ou Expirada</option>
+                    <option value="429">Status 429: Too Many Requests / Rate Limit</option>
+                    <option value="500">Status 500: Internal Server Error</option>
+                  </select>
+                </div>
+
+                <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
+                  {(diagnosticError === 'all' || diagnosticError === '401') && (
+                    <div className="p-4 bg-red-50/70 rounded-xl border border-red-100 text-xs">
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="font-bold text-red-800">Cenário HTTP 401 - Unauthorized</span>
+                        <span className="text-[10px] bg-red-100 text-red-800 px-2 py-0.5 rounded font-mono">Chave de API Inválida</span>
+                      </div>
+                      <p className="text-gray-600 mb-2">A requisição falhou devido à autenticação nula ou chave não localizada na nossa base.</p>
+                      <ul className="list-disc list-inside text-gray-500 space-y-0.5">
+                        <li>Verifique se você anexou o token no header <code className="font-mono text-[10px]">x-api-key</code>.</li>
+                        <li>Confirme se não colou espaços em branco antes ou depois da chave secreta.</li>
+                      </ul>
+                    </div>
+                  )}
+
+                  {(diagnosticError === 'all' || diagnosticError === '403') && (
+                    <div className="p-4 bg-amber-50/70 rounded-xl border border-amber-100 text-xs">
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="font-bold text-amber-800">Cenário HTTP 403 - Forbidden</span>
+                        <span className="text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded font-mono">Chave Suspensa/Revogada</span>
+                      </div>
+                      <p className="text-gray-600 mb-2">A chave é conhecida, mas seu status atual foi alterado para &apos;Revogado&apos; por um administrador master da plataforma.</p>
+                      <ul className="list-disc list-inside text-gray-500 space-y-0.5">
+                        <li>Acesse o painel superior e re-ative a respectiva chave de API mudando o status para Ativo.</li>
+                        <li>Utilize uma chave válida diferente para testar a chamada.</li>
+                      </ul>
+                    </div>
+                  )}
+
+                  {(diagnosticError === 'all' || diagnosticError === '400') && (
+                    <div className="p-4 bg-blue-50/70 rounded-xl border border-blue-100 text-xs">
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="font-bold text-blue-800">Cenário HTTP 400 - Bad Request</span>
+                        <span className="text-[10px] bg-blue-100 text-blue-800 px-2 py-0.5 rounded font-mono">Falta de Informações</span>
+                      </div>
+                      <p className="text-gray-600 mb-2">O servidor não pôde decodificar os filtros informados na query string ou payload.</p>
+                      <ul className="list-disc list-inside text-gray-500 space-y-0.5">
+                        <li>O parâmetro <code className="font-mono text-[10px]">limit</code> deve ser um integrativo numérico válido maior que zero.</li>
+                        <li>Certifique-se que o parâmetro <code className="font-mono text-[10px]">state</code> de UF possui exatamente 2 letras se especificado.</li>
+                      </ul>
+                    </div>
+                  )}
+
+                  {(diagnosticError === 'all' || diagnosticError === '429') && (
+                    <div className="p-4 bg-indigo-50/70 rounded-xl border border-indigo-100 text-xs">
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="font-bold text-indigo-800">Cenário HTTP 429 - Limite de Requisições</span>
+                        <span className="text-[10px] bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded font-mono">Rate Limit Estourado</span>
+                      </div>
+                      <p className="text-gray-600 mb-2">Você realizou chamadas em rajada excedendo o limite concorrente tolerado pelo roteador de entrada do Cloud Run.</p>
+                      <ul className="list-disc list-inside text-gray-500 space-y-0.5">
+                        <li>Modifique o tempo de requisição e implemente cache local para re-escrever suas rotas de telas de exibição.</li>
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Canal de Suporte Rápido e Simulação de Atendimento */}
+              <div className="bg-gray-50 p-6 rounded-2xl border border-gray-200 flex flex-col justify-between">
+                <div className="space-y-3">
+                  <h4 className="font-bold text-gray-900 text-sm flex items-center gap-2">
+                    <History className="w-4 h-4 text-indigo-600" />
+                    Canal de Suporte do Desenvolvedor
+                  </h4>
+                  <p className="text-xs text-gray-500 leading-relaxed">
+                    Sua equipe de TI municipal ou os servidores parceiros estão enfrentando problemas complexos de CORS, latência ou conectividade? Envie uma simulação de ticket de suporte de integração para os Administradores Masters.
+                  </p>
+                  
+                  {/* Formulário Interativo de Suporte */}
+                  <form onSubmit={(e) => {
+                    e.preventDefault();
+                    const form = e.target as HTMLFormElement;
+                    const emailInput = form.querySelector('#suporte-email') as HTMLInputElement;
+                    const platformInput = form.querySelector('#suporte-plat') as HTMLInputElement;
+                    const descInput = form.querySelector('#suporte-desc') as HTMLTextAreaElement;
+                    
+                    showToast('Enviando chamado de suporte...', 'info');
+                    setTimeout(() => {
+                      showToast('Chamado de suporte enviado com sucesso para a equipe de controle!', 'success');
+                      if (emailInput) emailInput.value = '';
+                      if (platformInput) platformInput.value = '';
+                      if (descInput) descInput.value = '';
+                    }, 1200);
+                  }} className="space-y-2 mt-2">
+                    <input
+                      id="suporte-email"
+                      type="email"
+                      required
+                      placeholder="Email de Contato"
+                      className="w-full px-2.5 py-1.5 border border-gray-300 rounded text-xs bg-white focus:ring-1 focus:ring-indigo-500"
+                    />
+                    <input
+                      id="suporte-plat"
+                      type="text"
+                      required
+                      placeholder="Nome da Plataforma"
+                      className="w-full px-2.5 py-1.5 border border-gray-300 rounded text-xs bg-white focus:ring-1 focus:ring-indigo-500"
+                    />
+                    <textarea
+                      id="suporte-desc"
+                      required
+                      rows={3}
+                      placeholder="Descreva sua dúvida técnica..."
+                      className="w-full px-2.5 py-1.5 border border-gray-300 rounded text-xs bg-white focus:ring-1 focus:ring-indigo-500"
+                    ></textarea>
+                    
+                    <button
+                      type="submit"
+                      className="w-full bg-indigo-600 hover:bg-indigo-700 text-white rounded text-xs py-2 font-bold transition-all cursor-pointer shadow-sm text-center flex items-center justify-center gap-1.5"
+                    >
+                      <Star className="w-3.5 h-3.5" />
+                      Enviar Ticket Integrador
+                    </button>
+                  </form>
+                </div>
+
+                <div className="text-[10px] text-gray-400 mt-4 text-center">
+                  Nosso tempo médio de resposta técnica é de até 2 horas úteis.
+                </div>
+              </div>
             </div>
           </div>
         </div>

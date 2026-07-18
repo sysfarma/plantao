@@ -4045,6 +4045,274 @@ async function startServer() {
     }
   });
 
+  // ==========================================
+  // API INTEGRATION SYSTEM & DEVELOPER APIS
+  // ==========================================
+
+  // Middleware to authenticate via x-api-key header or apiKey query parameter
+  const validateApiKey = async (req: any, res: any, next: any) => {
+    const apiKey = req.headers['x-api-key'] || req.query.apiKey;
+    if (!apiKey) {
+      return res.status(401).json({ error: 'Chave de API não fornecida. Envie o cabeçalho x-api-key ou o parâmetro de query apiKey.' });
+    }
+
+    try {
+      const snapshot = await db.collection('api_keys')
+        .where('key', '==', apiKey)
+        .limit(1)
+        .get();
+
+      if (snapshot.empty) {
+        return res.status(401).json({ error: 'Chave de API inválida ou inexistente.' });
+      }
+
+      const doc = snapshot.docs[0];
+      const keyData = doc.data();
+
+      if (keyData.status !== 'active') {
+        return res.status(401).json({ error: 'Chave de API inativa ou revogada pelo administrador.' });
+      }
+
+      // Log/Increment usage asynchronously
+      doc.ref.update({
+        usage_count: (keyData.usage_count || 0) + 1,
+        last_used_at: new Date().toISOString()
+      }).catch(err => console.error('Erro ao atualizar uso da chave de API:', err));
+
+      req.apiKeyData = keyData;
+      next();
+    } catch (err: any) {
+      res.status(500).json({ error: 'Erro de validação da API: ' + err.message });
+    }
+  };
+
+  // Admin: List API Keys
+  app.get('/api/admin/api-keys', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
+    try {
+      const snapshot = await db.collection('api_keys').orderBy('created_at', 'desc').get();
+      const keys = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      res.json(keys);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Create API Key
+  app.post('/api/admin/api-keys', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
+    try {
+      const { name, description } = req.body;
+      if (!name) return res.status(400).json({ error: 'Nome da integração é obrigatório' });
+
+      // Generate a crypto secure API Key
+      const randomPart = crypto.randomBytes(16).toString('hex');
+      const apiKey = `fp_live_${randomPart}`;
+
+      const newKey = {
+        name: name.trim(),
+        description: (description || '').trim(),
+        key: apiKey,
+        status: 'active',
+        created_at: new Date().toISOString(),
+        created_by: req.user.email || req.user.id,
+        usage_count: 0,
+        last_used_at: null
+      };
+
+      const docRef = await db.collection('api_keys').add(newKey);
+      await logAdminAction(req.user.id, 'api_keys', docRef.id, 'create', { name });
+
+      res.status(201).json({
+        id: docRef.id,
+        ...newKey
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Update API Key metadata or status
+  app.put('/api/admin/api-keys/:id', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
+    try {
+      const { id } = req.params;
+      const { name, description, status } = req.body;
+
+      const docRef = db.collection('api_keys').doc(id);
+      const doc = await docRef.get();
+      if (!doc.exists) return res.status(404).json({ error: 'Chave de API não encontrada' });
+
+      const updateData: any = {};
+      if (name !== undefined) updateData.name = name.trim();
+      if (description !== undefined) updateData.description = description.trim();
+      if (status !== undefined) {
+        if (status !== 'active' && status !== 'revoked') {
+          return res.status(400).json({ error: 'Status inválido. Use "active" ou "revoked"' });
+        }
+        updateData.status = status;
+      }
+
+      await docRef.update(updateData);
+      await logAdminAction(req.user.id, 'api_keys', id, 'update', updateData);
+
+      res.json({ success: true, message: 'Chave de API atualizada com sucesso!' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Delete API Key
+  app.delete('/api/admin/api-keys/:id', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
+    try {
+      const { id } = req.params;
+      const docRef = db.collection('api_keys').doc(id);
+      const doc = await docRef.get();
+      if (!doc.exists) return res.status(404).json({ error: 'Chave de API não encontrada' });
+
+      const name = doc.data()?.name;
+      await docRef.delete();
+      await logAdminAction(req.user.id, 'api_keys', id, 'delete', { name });
+
+      res.json({ success: true, message: 'Chave de API excluída com sucesso!' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // External Developer API: Fetch all pharmacies
+  app.get('/api/external/v1/pharmacies', validateApiKey, async (req: any, res) => {
+    try {
+      const { city, state, active_only, limit } = req.query;
+      
+      const snapshot = await db.collection('pharmacies').get();
+      let result = snapshot.docs.map((doc: any) => {
+        const d = doc.data();
+        return {
+          id: doc.id,
+          name: d.name,
+          slug: d.slug,
+          city: d.city,
+          state: d.state,
+          phone: d.phone,
+          whatsapp: d.whatsapp,
+          street: d.street,
+          number: d.number,
+          neighborhood: d.neighborhood,
+          cep: d.cep,
+          cnpj: d.cnpj,
+          coordinates: d.coordinates || null,
+          operating_hours: d.operating_hours || null,
+          is_active: d.is_active === 1 || d.is_active === true,
+          logo_url: d.logo_url || null,
+          description: d.description || null,
+          website: d.website || null
+        };
+      });
+
+      // Filter in memory for case-insensitive flexible local options
+      if (city) {
+        const cNorm = city.toLowerCase().trim();
+        result = result.filter((p: any) => p.city?.toLowerCase().includes(cNorm));
+      }
+      if (state) {
+        const sNorm = state.toLowerCase().trim();
+        result = result.filter((p: any) => p.state?.toLowerCase().includes(sNorm));
+      }
+      if (active_only === 'true' || active_only === '1') {
+        result = result.filter((p: any) => p.is_active);
+      }
+
+      // Limit results
+      if (limit) {
+        const lim = parseInt(limit as string, 10);
+        if (!isNaN(lim) && lim > 0) {
+          result = result.slice(0, lim);
+        }
+      }
+
+      res.json({
+        success: true,
+        total: result.length,
+        data: result
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Erro ao processar requisição: ' + err.message });
+    }
+  });
+
+  // External Developer API: Fetch current on-call shifts
+  app.get('/api/external/v1/shifts', validateApiKey, async (req: any, res) => {
+    try {
+      const today = new Intl.DateTimeFormat('sv-SE', {
+        timeZone: 'America/Sao_Paulo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      }).format(new Date());
+
+      const shiftsSnapshot = await db.collection('shifts')
+        .where('date', '==', today)
+        .get();
+
+      const pharmacyIds = shiftsSnapshot.docs.map((doc: any) => doc.data().pharmacy_id).filter(Boolean);
+
+      const pharmaciesMap = new Map();
+      if (pharmacyIds.length > 0) {
+        const chunks = [];
+        for (let i = 0; i < pharmacyIds.length; i += 30) {
+          chunks.push(pharmacyIds.slice(i, i + 30));
+        }
+
+        await Promise.all(chunks.map(async (chunk) => {
+          if (chunk.length === 0) return;
+          const snapshot = await db.collection('pharmacies')
+            .where('__name__', 'in', chunk)
+            .get();
+          snapshot.docs.forEach((doc: any) => {
+            pharmaciesMap.set(doc.id, { id: doc.id, ...doc.data() });
+          });
+        }));
+      }
+
+      const shifts = shiftsSnapshot.docs.map((doc: any) => {
+        const s = doc.data();
+        const p = pharmaciesMap.get(s.pharmacy_id);
+        return {
+          id: doc.id,
+          date: s.date,
+          start_time: s.start_time,
+          end_time: s.end_time,
+          is_24h: s.is_24h === 1 || s.is_24h === true,
+          pharmacy: p ? {
+            id: p.id,
+            name: p.name,
+            city: p.city,
+            state: p.state,
+            phone: p.phone,
+            whatsapp: p.whatsapp,
+            street: p.street,
+            number: p.number,
+            neighborhood: p.neighborhood
+          } : null
+        };
+      });
+
+      res.json({
+        success: true,
+        date: today,
+        total: shifts.length,
+        data: shifts
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Erro ao processar requisição: ' + err.message });
+    }
+  });
+
   // Catch-all for API routes to return JSON instead of HTML
   app.all('/api/*', (req, res) => {
     res.status(404).json({ 
