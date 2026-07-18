@@ -147,7 +147,7 @@ export default function Profile() {
   const content = (
     <div className="max-w-4xl mx-auto px-4 py-12">
       <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="bg-emerald-600 px-8 py-6 text-white">
+        <div className="bg-emerald-600 px-8 py-6 text-white flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div className="flex items-center gap-4">
             <div className="bg-white/20 p-3 rounded-full">
               <User className="w-8 h-8" />
@@ -157,14 +157,24 @@ export default function Profile() {
               <p className="text-emerald-100">Gerencie suas informações e segurança</p>
             </div>
           </div>
-          {(formData.role === 'admin' || formData.role === 'pharmacy') && (
-            <button 
-              onClick={() => navigate(formData.role === 'admin' ? '/admin' : '/pharmacy')}
-              className="bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+          <div className="flex items-center gap-3">
+            {(formData.role === 'admin' || formData.role === 'pharmacy') && (
+              <button 
+                type="button"
+                onClick={() => navigate(formData.role === 'admin' ? '/admin' : '/pharmacy')}
+                className="bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+              >
+                Voltar ao Painel
+              </button>
+            )}
+            <button
+              type="button"
+              disabled
+              className="bg-white/20 border border-white/10 text-white px-4 py-2 rounded-lg text-sm font-semibold select-none cursor-default"
             >
-              Voltar ao Painel
+              {formData.role === 'admin' ? 'Administrador' : formData.role === 'pharmacy' ? 'Farmácia' : 'Cliente'}
             </button>
-          )}
+          </div>
         </div>
 
         <form onSubmit={handleSubmit} className="p-8 space-y-8">
@@ -238,6 +248,17 @@ export default function Profile() {
                       onChange={handleChange}
                       className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"
                     />
+                  </div>
+                  <div className="flex items-center gap-2 pt-6">
+                    <input 
+                      type="checkbox" 
+                      id="is_24h"
+                      name="is_24h"
+                      checked={!!formData.is_24h}
+                      onChange={e => setFormData((prev: any) => ({ ...prev, is_24h: e.target.checked }))}
+                      className="w-4 h-4 text-emerald-600 border-gray-300 rounded focus:ring-emerald-500"
+                    />
+                    <label htmlFor="is_24h" className="text-sm font-medium text-gray-700">Farmácia 24h (Sempre no Plantão)</label>
                   </div>
                 </>
               )}

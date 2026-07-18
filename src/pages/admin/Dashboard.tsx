@@ -40,6 +40,7 @@ interface Pharmacy {
   cnpj?: string;
   coordinates?: { lat: number; lng: number };
   operating_hours?: { [key: string]: { open: string; close: string; closed?: boolean } };
+  is_24h?: boolean | number;
 }
 
 export default function AdminDashboard() {
@@ -237,7 +238,8 @@ export default function AdminDashboard() {
     setEditingPharmacy(null);
     setFormData({
       email: '', password: '', name: '', phone: '', whatsapp: '',
-      street: '', number: '', neighborhood: '', city: '', state: '', cep: ''
+      street: '', number: '', neighborhood: '', city: '', state: '', cep: '',
+      is_24h: false
     });
     setIsModalOpen(true);
   };
@@ -262,7 +264,8 @@ export default function AdminDashboard() {
       phone: pharmacy.phone || '',
       whatsapp: pharmacy.whatsapp || '',
       coordinates: pharmacy.coordinates || { lat: null, lng: null },
-      operating_hours: pharmacy.operating_hours || {}
+      operating_hours: pharmacy.operating_hours || {},
+      is_24h: pharmacy.is_24h === 1 || pharmacy.is_24h === true
     });
     setIsModalOpen(true);
   };
@@ -4007,6 +4010,16 @@ curl -X GET "${window.location.origin}/api/external/v1/shifts?apiKey=${sandboxAp
                           <option value="unpaid">Não Paga</option>
                         </select>
                       </div>
+                    </div>
+                    <div className="md:col-span-2 flex items-center gap-2 py-2">
+                      <input 
+                        type="checkbox" 
+                        id="is_24h"
+                        checked={!!formData.is_24h}
+                        onChange={e => setFormData({...formData, is_24h: e.target.checked})}
+                        className="w-4 h-4 text-emerald-600 border-gray-300 rounded focus:ring-emerald-500"
+                      />
+                      <label htmlFor="is_24h" className="text-sm font-medium text-gray-700">Farmácia 24h (Sempre no Plantão)</label>
                     </div>
                     <div className="md:col-span-2">
                       <label className="block text-sm font-medium text-gray-700 mb-1">Site / LinkedIn (URL)</label>

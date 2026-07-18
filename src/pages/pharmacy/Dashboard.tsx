@@ -575,6 +575,16 @@ export default function PharmacyDashboard() {
                 <label className="block text-sm font-medium text-gray-700">CEP</label>
                 <input type="text" value={editForm.cep || ''} onChange={e => setEditForm({...editForm, cep: e.target.value})} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="00000-000" />
               </div>
+              <div className="md:col-span-2 flex items-center gap-2 pt-2">
+                <input 
+                  type="checkbox" 
+                  id="edit_is_24h"
+                  checked={!!editForm.is_24h}
+                  onChange={e => setEditForm({ ...editForm, is_24h: e.target.checked })}
+                  className="w-4 h-4 text-emerald-600 border-gray-300 rounded focus:ring-emerald-500"
+                />
+                <label htmlFor="edit_is_24h" className="text-sm font-medium text-gray-700">Farmácia 24h (Sempre no Plantão)</label>
+              </div>
             </div>
             <button type="submit" disabled={saving} className="bg-emerald-600 text-white px-6 py-2 rounded-md font-medium hover:bg-emerald-700 disabled:opacity-50">
               {saving ? 'Salvando...' : 'Salvar Alterações'}

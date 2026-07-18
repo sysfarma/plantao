@@ -35,6 +35,7 @@ interface Pharmacy {
   lng?: number;
   distance?: number;
   shift: Shift;
+  is_24h?: number;
 }
 
 export default function OnCall() {
@@ -377,7 +378,7 @@ export default function OnCall() {
         {loading || locationStatus === 'detecting' ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {[1, 2, 3, 4, 5, 6].map(i => (
-              <OnCallPharmacyCardSkeleton key={i} />
+              <OnCallPharmacyCardSkeleton key={`oncall-skeleton-${i}`} />
             ))}
           </div>
         ) : pharmacies.length > 0 ? (
@@ -386,8 +387,8 @@ export default function OnCall() {
             pharmacies.length === 2 ? 'grid-cols-1 md:grid-cols-2' :
             'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
           }`}>
-            {pharmacies.map(pharmacy => (
-              <div key={pharmacy.id} className="bg-white border border-emerald-100 rounded-2xl p-6 shadow-sm hover:shadow-xl transition-all duration-300 relative overflow-hidden flex flex-col w-full h-full group">
+            {pharmacies.map((pharmacy, idx) => (
+              <div key={`oncall-${pharmacy.id}-${idx}`} className="bg-white border border-emerald-100 rounded-2xl p-6 shadow-sm hover:shadow-xl transition-all duration-300 relative overflow-hidden flex flex-col w-full h-full group">
                 <PharmacySchema pharmacy={pharmacy} />
                 <div className="absolute top-0 right-0 bg-emerald-600 text-white text-[10px] font-extrabold px-4 py-1.5 rounded-bl-2xl flex items-center gap-1.5 uppercase tracking-widest z-10 shadow-sm transition-all group-hover:scale-105 origin-top-right">
                   <Clock className="w-3.5 h-3.5" />

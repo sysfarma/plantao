@@ -249,8 +249,8 @@ export default function Home() {
         dayHighlights.length === 2 ? 'grid-cols-1 md:grid-cols-2' :
         'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
       }`}>
-        {dayHighlights.map(pharmacy => (
-          <PharmacyCard key={pharmacy.id} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
+        {dayHighlights.map((pharmacy, idx) => (
+          <PharmacyCard key={`day-highlight-${pharmacy.id}-${idx}`} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
         ))}
       </div>
         </section>
@@ -267,8 +267,8 @@ export default function Home() {
         weekHighlights.length === 2 ? 'grid-cols-1 md:grid-cols-2' :
         'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
       }`}>
-        {weekHighlights.map(pharmacy => (
-          <PharmacyCard key={pharmacy.id} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
+        {weekHighlights.map((pharmacy, idx) => (
+          <PharmacyCard key={`week-highlight-${pharmacy.id}-${idx}`} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
         ))}
       </div>
         </section>
@@ -285,8 +285,8 @@ export default function Home() {
         monthHighlights.length === 2 ? 'grid-cols-1 md:grid-cols-2' :
         'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
       }`}>
-        {monthHighlights.map(pharmacy => (
-          <PharmacyCard key={pharmacy.id} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
+        {monthHighlights.map((pharmacy, idx) => (
+          <PharmacyCard key={`month-highlight-${pharmacy.id}-${idx}`} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
         ))}
       </div>
         </section>
@@ -344,7 +344,7 @@ export default function Home() {
       {loading || locationStatus === 'detecting' ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {[1, 2, 3, 4, 5, 6].map(i => (
-            <PharmacyCardSkeleton key={i} />
+            <PharmacyCardSkeleton key={`skeleton-${i}`} />
           ))}
         </div>
       ) : pharmacies.length > 0 ? (
@@ -354,8 +354,8 @@ export default function Home() {
             pharmacies.length === 2 ? 'grid-cols-1 md:grid-cols-2' :
             'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
           }`}>
-            {pharmacies.map(pharmacy => (
-              <PharmacyCard key={pharmacy.id} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
+            {pharmacies.map((pharmacy, idx) => (
+              <PharmacyCard key={`pharmacy-${pharmacy.id}-${idx}`} pharmacy={pharmacy} onTrackClick={handleTrackClick} />
             ))}
           </div>
 

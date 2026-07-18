@@ -53,7 +53,8 @@ const pharmacySchema = z.object({
   }).nullable().optional(),
   operating_hours: z.any().optional(),
   is_active: z.number().optional(),
-  sub_status: z.string().optional()
+  sub_status: z.string().optional(),
+  is_24h: z.union([z.number(), z.boolean()]).optional()
 });
 
 // --- Geocoding Helper ---
@@ -885,6 +886,7 @@ async function startServer() {
     logo_url: data.logo_url || null,
     operating_hours: data.operating_hours || null,
     is_active: data.is_active,
+    is_24h: data.is_24h || false,
     created_at: data.created_at,
     updated_at: data.updated_at
   });
@@ -1219,83 +1221,147 @@ async function startServer() {
         }
       }
 
-      // 2. Extract active shifts for today
+      // 2. Fetch all 24h pharmacies
+      let p24hQuery: any = db.collection('pharmacies')
+        .where('is_active', 'in', [1, true])
+        .where('is_24h', 'in', [1, true]);
+      
+      if (state) {
+        p24hQuery = p24hQuery.where('state', '==', state.toUpperCase());
+      }
+      
+      const p24hSnapshot = await p24hQuery.get();
+
+      // We'll keep track of seen pharmacy IDs to avoid duplicates
+      const seenPharmacyIds = new Set<string>();
+      const onCallPharmacies: any[] = [];
+      const cleanSearchCep = cep ? cep.replace(/\D/g, '').substring(0, 5) : null;
+
+      // Add matching 24h pharmacies first
+      for (const doc of p24hSnapshot.docs) {
+        const data = doc.data();
+        const id = doc.id;
+        
+        // Filter by allowedPharmacyIds if applicable (which encapsulates city & coordinates filtering on the state level)
+        if (allowedPharmacyIds && !allowedPharmacyIds.includes(id)) {
+          continue;
+        }
+
+        // Filter by city if state-level allowedPharmacyIds is NOT set but city is provided
+        if (!allowedPharmacyIds && city && normalize(data.city || '') !== normalize(city)) {
+          continue;
+        }
+        
+        // Filter by CEP if applicable
+        if (cleanSearchCep && lat === null) {
+          const pharmCep = (data.cep || data.zip || '').replace(/\D/g, '').substring(0, 5);
+          if (!pharmCep.startsWith(cleanSearchCep) && !cleanSearchCep.startsWith(pharmCep.substring(0, 5))) {
+            continue;
+          }
+        }
+        
+        // Filter by coordinates if allowedPharmacyIds is NOT set but coords are provided
+        let distance: number | null = null;
+        if (!allowedPharmacyIds && lat !== null && lng !== null) {
+          const pLat = data.lat || data.latitude;
+          const pLng = data.lng || data.longitude;
+          if (pLat && pLng) {
+            const dist = getDistance(lat, lng, Number(pLat), Number(pLng));
+            if (dist > 20) continue;
+            distance = dist;
+          } else {
+            continue;
+          }
+        } else if (lat !== null && lng !== null) {
+          const pLat = data.lat || data.latitude;
+          const pLng = data.lng || data.longitude;
+          if (pLat && pLng) {
+            distance = getDistance(lat, lng, Number(pLat), Number(pLng));
+          }
+        }
+        
+        const sanitized = sanitizePublicPharmacy(id, data);
+        seenPharmacyIds.add(id);
+        
+        onCallPharmacies.push({
+          ...sanitized,
+          distance: distance !== null ? distance : undefined,
+          shift: {
+            start_time: '00:00',
+            end_time: '23:59',
+            is_24h: 1
+          }
+        });
+      }
+
+      // 3. Extract active shifts for today
       let shiftsQuery: any = db.collection('shifts').where('date', '==', today);
       
       if (state) {
         shiftsQuery = shiftsQuery.where('state', '==', state.toUpperCase());
       }
       
-      // Note: city in shifts is stored as it appears in the pharmacy profile.
-      // If we had a normalized_city, we would use it here.
-      // For now, filtering by state already dramatically improves the 500-limit bottleneck.
-      
       const shiftsSnapshot = await shiftsQuery.limit(1000).get();
       
-      if (shiftsSnapshot.empty) {
-        return res.json([]);
-      }
-
-      let pharmacyIds = [...new Set(shiftsSnapshot.docs.map(doc => (doc.data() as any).pharmacy_id))];
+      let pharmacyIds: string[] = [...new Set<string>(shiftsSnapshot.docs.map(doc => (doc.data() as any).pharmacy_id as string))];
       
-      // Secondary filter: Match against the localized allowedPharmacyIds if coordinates or city were provided
+      // Filter out those we already processed as 24h
+      pharmacyIds = pharmacyIds.filter(id => !seenPharmacyIds.has(id));
+
       if (allowedPharmacyIds) {
         pharmacyIds = (pharmacyIds as string[]).filter(id => allowedPharmacyIds!.includes(id));
       }
 
-      if (pharmacyIds.length === 0) {
-        return res.json([]);
-      }
+      // If there are other shifts to process
+      if (pharmacyIds.length > 0) {
+        const pharmaciesMap = new Map();
+        const chunks = [];
+        for (let i = 0; i < pharmacyIds.length; i += 30) {
+          chunks.push(pharmacyIds.slice(i, i + 30));
+        }
 
-  // 1. Load the corresponding pharmacy documents (PARALLELIZED)
-      const pharmaciesMap = new Map();
-      const chunks = [];
-      for (let i = 0; i < pharmacyIds.length; i += 30) {
-        chunks.push(pharmacyIds.slice(i, i + 30));
-      }
-
-      await Promise.all(chunks.map(async (chunk) => {
-        const pharmacysSnapshot = await db.collection('pharmacies')
-          .where(admin.firestore.FieldPath.documentId(), 'in', chunk)
-          .where('is_active', 'in', [1, true])
-          .get();
-        
-        pharmacysSnapshot.docs.forEach(doc => {
-          // Store already sanitized data in the map to ensure consistency
-          pharmaciesMap.set(doc.id, sanitizePublicPharmacy(doc.id, doc.data()));
-        });
-      }));
-
-      const onCallPharmacies = [];
-      const cleanSearchCep = cep ? cep.replace(/\D/g, '').substring(0, 5) : null;
-
-      for (const shiftDoc of shiftsSnapshot.docs) {
-        const shift = shiftDoc.data() as any;
-        const sanitizedPharmacy = pharmaciesMap.get(shift.pharmacy_id);
-        
-        if (sanitizedPharmacy) {
-          // Filter by CEP if needed
-          if (cleanSearchCep && lat === null) {
-            const pharmCep = (sanitizedPharmacy.cep || sanitizedPharmacy.zip || '').replace(/\D/g, '').substring(0, 5);
-            if (!pharmCep.startsWith(cleanSearchCep) && !cleanSearchCep.startsWith(pharmCep.substring(0, 5))) {
-              continue;
-            }
-          }
+        await Promise.all(chunks.map(async (chunk) => {
+          const pharmacysSnapshot = await db.collection('pharmacies')
+            .where(admin.firestore.FieldPath.documentId(), 'in', chunk)
+            .where('is_active', 'in', [1, true])
+            .get();
           
-          const onCallResult = {
-            ...sanitizedPharmacy,
-            shift: {
-              start_time: shift.start_time,
-              end_time: shift.end_time,
-              is_24h: shift.is_24h
-            }
-          };
+          pharmacysSnapshot.docs.forEach(doc => {
+            pharmaciesMap.set(doc.id, sanitizePublicPharmacy(doc.id, doc.data()));
+          });
+        }));
 
-          if (lat !== null && lng !== null) {
-            (onCallResult as any).distance = getDistance(lat, lng, Number(onCallResult.lat), Number(onCallResult.lng));
+        for (const shiftDoc of shiftsSnapshot.docs) {
+          const shift = shiftDoc.data() as any;
+          if (seenPharmacyIds.has(shift.pharmacy_id)) {
+            continue; // Skip already added
           }
+          const sanitizedPharmacy = pharmaciesMap.get(shift.pharmacy_id);
+          
+          if (sanitizedPharmacy) {
+            if (cleanSearchCep && lat === null) {
+              const pharmCep = (sanitizedPharmacy.cep || sanitizedPharmacy.zip || '').replace(/\D/g, '').substring(0, 5);
+              if (!pharmCep.startsWith(cleanSearchCep) && !cleanSearchCep.startsWith(pharmCep.substring(0, 5))) {
+                continue;
+              }
+            }
+            
+            const onCallResult = {
+              ...sanitizedPharmacy,
+              shift: {
+                start_time: shift.start_time,
+                end_time: shift.end_time,
+                is_24h: shift.is_24h
+              }
+            };
 
-          onCallPharmacies.push(onCallResult);
+            if (lat !== null && lng !== null) {
+              (onCallResult as any).distance = getDistance(lat, lng, Number(onCallResult.lat), Number(onCallResult.lng));
+            }
+
+            onCallPharmacies.push(onCallResult);
+            seenPharmacyIds.add(shift.pharmacy_id);
+          }
         }
       }
 
@@ -1583,13 +1649,17 @@ async function startServer() {
       const { 
         name = '', phone = '', whatsapp = '', 
         street = '', number = '', neighborhood = '', 
-        city = '', state = '', cep = '' 
+        city = '', state = '', cep = '', is_24h
       } = req.body;
       
-      const updatedData = {
+      const updatedData: any = {
         name, phone, whatsapp, street, number, neighborhood, city, state, cep,
         updated_at: new Date().toISOString()
       };
+
+      if (is_24h !== undefined) {
+        updatedData.is_24h = is_24h ? 1 : 0;
+      }
       
       await db.collection('pharmacies').doc(pharmacyDoc.id).update(updatedData);
       
@@ -2800,7 +2870,7 @@ async function startServer() {
   // User: Update Profile (Self)
   app.put('/api/user/profile', authenticateToken, async (req: any, res) => {
     const userId = req.user.id;
-    const { password, cep, street, number, neighborhood, city, state, name, phone, whatsapp, lat, lng } = req.body;
+    const { password, cep, street, number, neighborhood, city, state, name, phone, whatsapp, lat, lng, is_24h } = req.body;
     
     try {
       // Update User Document
@@ -2838,6 +2908,7 @@ async function startServer() {
           if (lng !== undefined) pharmacyUpdate.lng = lng;
           // Sync denormalized name
           if (name) pharmacyUpdate.name = name;
+          if (is_24h !== undefined) pharmacyUpdate.is_24h = is_24h ? 1 : 0;
           
           await db.collection('pharmacies').doc(pharmacyId).update(pharmacyUpdate);
         }
@@ -3168,7 +3239,7 @@ async function startServer() {
         street, number, neighborhood, city, state, cep,
         website, description, logo_url,
         cnpj, coordinates, operating_hours,
-        is_active, sub_status
+        is_active, sub_status, is_24h
       } = req.body;
       
       const email = rawEmail?.toString().trim().toLowerCase();
@@ -3278,7 +3349,8 @@ async function startServer() {
         operating_hours: operating_hours || null,
         is_active, sub_status,
         zip: cep,
-        slug
+        slug,
+        is_24h: is_24h !== undefined ? (is_24h ? 1 : 0) : undefined
       };
 
       Object.entries(fieldsToSave).forEach(([key, val]) => {
@@ -3350,7 +3422,7 @@ async function startServer() {
         street, number, neighborhood, city, state, cep,
         website, description, logo_url,
         cnpj, coordinates, operating_hours,
-        is_active, sub_status
+        is_active, sub_status, is_24h
       } = req.body;
       
       const email = rawEmail?.toString().trim().toLowerCase() || '';
@@ -3430,6 +3502,7 @@ async function startServer() {
         zip: cep || '',
         slug,
         is_active: is_active !== undefined ? is_active : 1,
+        is_24h: is_24h ? 1 : 0,
         created_at: now,
         updated_at: now
       });
