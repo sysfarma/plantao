@@ -422,6 +422,109 @@ async function updateDashboardStats(force = false) {
   }
 }
 
+async function generateAndCacheSitemap() {
+  try {
+    console.log('[Sitemap] Automatically pre-generating sitemap.xml...');
+    const snapshot = await db.collection('pharmacies').where('is_active', 'in', [1, true]).get();
+    const cities = new Set<string>();
+    
+    snapshot.docs.forEach((doc: any) => {
+      const data = doc.data();
+      if (data.city && data.state) {
+        const slug = `${data.state.toLowerCase()}/${data.city.toLowerCase().trim().replace(/\s+/g, '-')}`;
+        cities.add(slug);
+      }
+    });
+
+    const frontendUrl = process.env.VITE_APP_URL || 'https://farmaciasdeplantao.app.br';
+    let xml = '<?xml version="1.0" encoding="UTF-8"?>';
+    xml += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">';
+    
+    // Home
+    xml += `<url><loc>${frontendUrl}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>`;
+    // Main On-Call page
+    xml += `<url><loc>${frontendUrl}/plantao</loc><changefreq>hourly</changefreq><priority>0.9</priority></url>`;
+    
+    // Dynamic Cities
+    cities.forEach(slug => {
+      xml += `<url><loc>${frontendUrl}/plantao/${slug}</loc><changefreq>daily</changefreq><priority>0.8</priority></url>`;
+    });
+
+    xml += '</urlset>';
+
+    sitemapCache = xml;
+    sitemapCacheTimestamp = Date.now();
+    console.log('[Sitemap] Sitemap.xml successfully cached.');
+    return xml;
+  } catch (err) {
+    console.error('[Sitemap] Error pre-generating sitemap:', err);
+    return null;
+  }
+}
+
+async function syncSystemData() {
+  console.log('[Sync] Running system data synchronization...');
+  const pharmaciesSnapshot = await db.collection('pharmacies').get();
+  const pharmaciesMap = new Map();
+  
+  for (const pDoc of pharmaciesSnapshot.docs) {
+    const p = pDoc.data();
+    pharmaciesMap.set(pDoc.id, p);
+    
+    // Fetch user email if missing
+    let email = p.user_email;
+    if (!email) {
+      const userDoc = await db.collection('users').doc(p.user_id).get();
+      email = userDoc.data()?.email || '';
+    }
+    
+    // Fetch last subscription if missing
+    let status = p.sub_status;
+    if (!status) {
+      const subsSnapshot = await db.collection('subscriptions')
+        .where('pharmacy_id', '==', pDoc.id)
+        .get();
+      const subs = subsSnapshot.docs.map(doc => doc.data());
+      subs.sort((a, b) => new Date(b.updated_at || b.created_at).getTime() - new Date(a.updated_at || a.created_at).getTime());
+      status = subs[0]?.status || 'pending';
+    }
+    
+    await pDoc.ref.update({
+      user_email: email,
+      sub_status: status
+    });
+  }
+
+  // Sync locations in shifts and cleanup orphans
+  const shiftsSnapshot = await db.collection('shifts').get();
+  let shiftCleanupCount = 0;
+  let shiftSyncCount = 0;
+
+  for (const sDoc of shiftsSnapshot.docs) {
+    const s = sDoc.data();
+    const pharm = pharmaciesMap.get(s.pharmacy_id);
+    
+    if (!pharm) {
+      // Orphan shift detected - delete it
+      await sDoc.ref.delete();
+      shiftCleanupCount++;
+    } else {
+      // Check if location needs sync
+      if (s.city !== pharm.city || s.state !== pharm.state) {
+        await sDoc.ref.update({
+          city: pharm.city || '',
+          state: pharm.state || ''
+        });
+        shiftSyncCount++;
+      }
+    }
+  }
+  
+  await updateDashboardStats(true);
+  console.log(`[Sync] Sync complete. Cleaned: ${shiftCleanupCount}, Synced: ${shiftSyncCount}`);
+  return { shiftCleanupCount, shiftSyncCount };
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -958,37 +1061,10 @@ async function startServer() {
         return res.send(sitemapCache);
       }
 
-      console.log('Refreshing sitemap.xml cache...');
-      const snapshot = await db.collection('pharmacies').where('is_active', 'in', [1, true]).get();
-      const cities = new Set<string>();
-      
-      snapshot.docs.forEach((doc: any) => {
-        const data = doc.data();
-        if (data.city && data.state) {
-          const slug = `${data.state.toLowerCase()}/${data.city.toLowerCase().trim().replace(/\s+/g, '-')}`;
-          cities.add(slug);
-        }
-      });
-
-      const frontendUrl = process.env.VITE_APP_URL || 'https://farmaciasdeplantao.app.br';
-      let xml = '<?xml version="1.0" encoding="UTF-8"?>';
-      xml += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">';
-      
-      // Home
-      xml += `<url><loc>${frontendUrl}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>`;
-      // Main On-Call page
-      xml += `<url><loc>${frontendUrl}/plantao</loc><changefreq>hourly</changefreq><priority>0.9</priority></url>`;
-      
-      // Dynamic Cities
-      cities.forEach(slug => {
-        xml += `<url><loc>${frontendUrl}/plantao/${slug}</loc><changefreq>daily</changefreq><priority>0.8</priority></url>`;
-      });
-
-      xml += '</urlset>';
-
-      // Update cache
-      sitemapCache = xml;
-      sitemapCacheTimestamp = now;
+      const xml = await generateAndCacheSitemap();
+      if (!xml) {
+        return res.status(500).end();
+      }
 
       res.header('Content-Type', 'application/xml');
       res.send(xml);
@@ -3753,66 +3829,10 @@ async function startServer() {
     if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
     
     try {
-      const pharmaciesSnapshot = await db.collection('pharmacies').get();
-      const pharmaciesMap = new Map();
-      
-      for (const pDoc of pharmaciesSnapshot.docs) {
-        const p = pDoc.data();
-        pharmaciesMap.set(pDoc.id, p);
-        
-        // Fetch user email if missing
-        let email = p.user_email;
-        if (!email) {
-          const userDoc = await db.collection('users').doc(p.user_id).get();
-          email = userDoc.data()?.email || '';
-        }
-        
-        // Fetch last subscription if missing
-        let status = p.sub_status;
-        if (!status) {
-          const subsSnapshot = await db.collection('subscriptions')
-            .where('pharmacy_id', '==', pDoc.id)
-            .get();
-          const subs = subsSnapshot.docs.map(doc => doc.data());
-          subs.sort((a, b) => new Date(b.updated_at || b.created_at).getTime() - new Date(a.updated_at || a.created_at).getTime());
-          status = subs[0]?.status || 'pending';
-        }
-        
-        await pDoc.ref.update({
-          user_email: email,
-          sub_status: status
-        });
-      }
-
-      // Sync locations in shifts and cleanup orphans
-      const shiftsSnapshot = await db.collection('shifts').get();
-      let shiftCleanupCount = 0;
-      let shiftSyncCount = 0;
-
-      for (const sDoc of shiftsSnapshot.docs) {
-        const s = sDoc.data();
-        const pharm = pharmaciesMap.get(s.pharmacy_id);
-        
-        if (!pharm) {
-          // Orphan shift detected - delete it
-          await sDoc.ref.delete();
-          shiftCleanupCount++;
-        } else {
-          // Check if location needs sync
-          if (s.city !== pharm.city || s.state !== pharm.state) {
-            await sDoc.ref.update({
-              city: pharm.city || '',
-              state: pharm.state || ''
-            });
-            shiftSyncCount++;
-          }
-        }
-      }
-      
-      await updateDashboardStats();
+      const result = await syncSystemData();
       res.json({ 
         success: true, 
-        message: `Dados sincronizados. Plantões limpos: ${shiftCleanupCount}. Plantões atualizados: ${shiftSyncCount}.` 
+        message: `Dados sincronizados. Plantões limpos: ${result.shiftCleanupCount}. Plantões atualizados: ${result.shiftSyncCount}.` 
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -4578,9 +4598,18 @@ async function startServer() {
     });
   }
 
-  // Cron job to check expiring subscriptions daily at 00:00
+  // Cron job to check expiring subscriptions and sync system daily at exactly 00:00 Brasília time
   cron.schedule('0 0 * * *', async () => {
     try {
+      console.log('[Cron] Starting daily 00:00 Brasília time system update...');
+      
+      // 1. Run full system synchronization & update stats
+      await syncSystemData();
+
+      // 2. Pre-generate and cache sitemap for search engines/SEO discoverability
+      await generateAndCacheSitemap();
+
+      // 3. Process expiring subscriptions (7 days notification)
       const today = new Date();
       const sevenDaysFromNow = new Date();
       sevenDaysFromNow.setDate(today.getDate() + 7);
@@ -4607,14 +4636,25 @@ async function startServer() {
           emailService.sendSubscriptionExpiringEmail(pharmacy.email, pharmacy.name, 7);
         }
       }
+
+      console.log('[Cron] Daily 00:00 Brasília time update completed successfully.');
     } catch (err) {
-      console.error('Cron job error:', err);
+      console.error('[Cron] Cron job error:', err);
     }
+  }, {
+    timezone: "America/Sao_Paulo"
   });
 
   app.listen(PORT, '0.0.0.0', async () => {
     console.log(`Server running on http://localhost:${PORT}`);
     
+    // Pre-generate sitemap on startup so cache is immediately hot
+    try {
+      await generateAndCacheSitemap();
+    } catch (sitemapErr) {
+      console.error('Failed to pre-generate sitemap on startup:', sitemapErr);
+    }
+
     // Migration: Populate missing slugs for pharmacies
     try {
       const snapshot = await db.collection('pharmacies').get();
