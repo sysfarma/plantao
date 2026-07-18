@@ -5,7 +5,7 @@ import MobileBottomNav from '../components/MobileBottomNav';
 import { usePWA } from '../hooks/usePWA';
 import { useToast } from '../components/Toast';
 
-export default function PharmacyLayout() {
+export default function PharmacyLayout({ children }: { children?: React.ReactNode }) {
   const navigate = useNavigate();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const { canInstall, promptInstall } = usePWA();
@@ -126,7 +126,7 @@ export default function PharmacyLayout() {
       </aside>
       
       <main className="flex-1 overflow-auto w-full">
-        <Outlet />
+        {children || <Outlet />}
       </main>
       <MobileBottomNav onMenuClick={() => setIsMenuOpen(!isMenuOpen)} />
     </div>

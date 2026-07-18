@@ -3,6 +3,8 @@ import { User, MapPin, Lock, Save, Loader2, CheckCircle, AlertCircle } from 'luc
 import { useNavigate } from 'react-router-dom';
 import { geocodeAddress } from '../lib/geocoding';
 import { getAuthToken } from '../lib/firebase';
+import AdminLayout from '../layouts/AdminLayout';
+import PharmacyLayout from '../layouts/PharmacyLayout';
 
 export default function Profile() {
   const [formData, setFormData] = useState<any>({
@@ -142,7 +144,7 @@ export default function Profile() {
     );
   }
 
-  return (
+  const content = (
     <div className="max-w-4xl mx-auto px-4 py-12">
       <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
         <div className="bg-emerald-600 px-8 py-6 text-white">
@@ -370,4 +372,12 @@ export default function Profile() {
       </div>
     </div>
   );
+
+  if (formData.role === 'admin') {
+    return <AdminLayout>{content}</AdminLayout>;
+  }
+  if (formData.role === 'pharmacy') {
+    return <PharmacyLayout>{content}</PharmacyLayout>;
+  }
+  return content;
 }
