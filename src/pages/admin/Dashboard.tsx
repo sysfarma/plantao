@@ -1,10 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { 
   CheckCircle, XCircle, Star, Trash2, Ban, Edit, Plus, X, Calendar, Search, 
   Filter, History, DollarSign, FileText, RefreshCw, ShieldCheck, AlertCircle, 
   CheckCircle2, Download, ArrowUp, ArrowDown, Loader2, CheckSquare, Square, 
-  Key, Upload, Copy, Check 
+  Key, Upload, Copy, Check, UserCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { storage } from '../../lib/firebase';
@@ -45,6 +45,7 @@ interface Pharmacy {
 export default function AdminDashboard() {
   const { user: firebaseUser } = useFirebase();
   const { showToast } = useToast();
+  const navigate = useNavigate();
   const [pharmacies, setPharmacies] = useState<Pharmacy[]>([]);
   const [totalPharmacies, setTotalPharmacies] = useState(0);
   const [pharmacyPage, setPharmacyPage] = useState(1);
@@ -58,6 +59,24 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<any>(null);
   const [loadingTable, setLoadingTable] = useState(false);
+  
+  // Admin states
+  const [admins, setAdmins] = useState<any[]>([]);
+  const [loadingAdmins, setLoadingAdmins] = useState(false);
+  const [isNewAdminModalOpen, setIsNewAdminModalOpen] = useState(false);
+  const [newAdminForm, setNewAdminForm] = useState({ name: '', email: '', password: '' });
+  const [editingAdmin, setEditingAdmin] = useState<any>(null);
+  const [isEditAdminModalOpen, setIsEditAdminModalOpen] = useState(false);
+  const [editAdminForm, setEditAdminForm] = useState({ name: '', email: '', password: '', status: 'active' });
+  
+  // Promotion states
+  const [availableUsers, setAvailableUsers] = useState<any[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [isPromoteModalOpen, setIsPromoteModalOpen] = useState(false);
+  const [searchUserTerm, setSearchUserTerm] = useState('');
+  const [userToPromote, setUserToPromote] = useState<any>(null);
+  const [isPromoteConfirmOpen, setIsPromoteConfirmOpen] = useState(false);
+
   const [searchParams] = useSearchParams();
   const initialTab = searchParams.get('tab') || 'pharmacies';
   const [activeTab, setActiveTab] = useState(initialTab);
@@ -148,9 +167,45 @@ export default function AdminDashboard() {
   const rawAdmin = import.meta.env.VITE_ADMIN_EMAIL;
   const adminEmail = rawAdmin ? rawAdmin.replace(/['"]/g, '').trim() : 'sys.farmaciasdeplantao@gmail.com';
   
+  const [userRole, setUserRole] = useState<string>(() => {
+    try {
+      const userStr = localStorage.getItem('user');
+      if (userStr) {
+        return JSON.parse(userStr).role || '';
+      }
+    } catch (_) {}
+    return '';
+  });
+
   const isAdminMaster = useMemo(() => {
+    if (userRole === 'admin') return true;
     return firebaseUser?.email === 'sys.farmaciasdeplantao@gmail.com' || (adminEmail && firebaseUser?.email === adminEmail);
-  }, [firebaseUser, adminEmail]);
+  }, [firebaseUser, adminEmail, userRole]);
+
+  // Synchronize user profile role on mount
+  useEffect(() => {
+    const syncProfile = async () => {
+      try {
+        const data = await safeFetch('/api/user/profile');
+        if (data && data.role) {
+          setUserRole(data.role);
+          const userStr = localStorage.getItem('user');
+          if (userStr) {
+            const u = JSON.parse(userStr);
+            if (u.role !== data.role) {
+              u.role = data.role;
+              localStorage.setItem('user', JSON.stringify(u));
+            }
+          } else {
+            localStorage.setItem('user', JSON.stringify(data));
+          }
+        }
+      } catch (err) {
+        console.error('Error syncing user profile:', err);
+      }
+    };
+    syncProfile();
+  }, []);
 
   const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
@@ -595,6 +650,171 @@ export default function AdminDashboard() {
     } finally { setLoadingTable(false); }
   };
 
+  const fetchAdmins = async () => {
+    if (!isAdminMaster) return;
+    setLoadingAdmins(true);
+    try {
+      const data = await safeFetch('/api/admin/administradores');
+      if (data && typeof data !== 'string') {
+        setAdmins(data);
+      }
+    } catch (e) {
+      console.error('Error fetching administrators:', e);
+      showToast('Erro ao carregar administradores', 'error');
+    } finally {
+      setLoadingAdmins(false);
+    }
+  };
+
+  const fetchAvailableUsers = async () => {
+    setLoadingUsers(true);
+    try {
+      const data = await safeFetch('/api/admin/usuarios-disponiveis');
+      if (data && typeof data !== 'string') {
+        setAvailableUsers(data);
+      }
+    } catch (e) {
+      console.error('Error fetching available users:', e);
+      showToast('Erro ao carregar usuários cadastrados', 'error');
+    } finally {
+      setLoadingUsers(false);
+    }
+  };
+
+  const handlePromoteUser = (user: any) => {
+    setUserToPromote(user);
+    setIsPromoteConfirmOpen(true);
+  };
+
+  const confirmPromoteUser = async () => {
+    if (!userToPromote) return;
+    try {
+      const res = await safeFetch('/api/admin/administradores/promover', {
+        method: 'POST',
+        body: JSON.stringify({ userId: userToPromote.id })
+      });
+      if (res && res.success) {
+        showToast('Usuário promovido a administrador com sucesso!', 'success');
+        setIsPromoteConfirmOpen(false);
+        setIsPromoteModalOpen(false);
+        setUserToPromote(null);
+        fetchAdmins();
+      } else {
+        showToast(res.error || 'Erro ao promover usuário', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Erro ao promover usuário', 'error');
+    }
+  };
+
+  const handleCreateAdmin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newAdminForm.name || !newAdminForm.email || !newAdminForm.password) {
+      showToast('Preencha todos os campos obrigatórios', 'error');
+      return;
+    }
+    try {
+      const res = await safeFetch('/api/admin/administradores', {
+        method: 'POST',
+        body: JSON.stringify(newAdminForm)
+      });
+      if (res && res.id) {
+        showToast('Administrador adicionado com sucesso!', 'success');
+        setIsNewAdminModalOpen(false);
+        setNewAdminForm({ name: '', email: '', password: '' });
+        fetchAdmins();
+      } else {
+        showToast(res.error || 'Erro ao adicionar administrador', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Erro ao adicionar administrador', 'error');
+    }
+  };
+
+  const handleOpenEditAdmin = (adm: any) => {
+    setEditingAdmin(adm);
+    setEditAdminForm({
+      name: adm.name || '',
+      email: adm.email || '',
+      password: '',
+      status: adm.status || 'active'
+    });
+    setIsEditAdminModalOpen(true);
+  };
+
+  const handleUpdateAdmin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editAdminForm.name || !editAdminForm.email) {
+      showToast('Nome e e-mail são obrigatórios', 'error');
+      return;
+    }
+    try {
+      const body: any = {
+        name: editAdminForm.name,
+        email: editAdminForm.email,
+        status: editAdminForm.status
+      };
+      if (editAdminForm.password) {
+        body.password = editAdminForm.password;
+      }
+      const res = await safeFetch(`/api/admin/administradores/${editingAdmin.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(body)
+      });
+      if (res && res.success) {
+        showToast('Administrador atualizado com sucesso!', 'success');
+        setIsEditAdminModalOpen(false);
+        setEditingAdmin(null);
+        fetchAdmins();
+      } else {
+        showToast(res.error || 'Erro ao atualizar administrador', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Erro ao atualizar administrador', 'error');
+    }
+  };
+
+  const handleToggleStatusAdmin = async (adm: any) => {
+    const newStatus = adm.status === 'inactive' ? 'active' : 'inactive';
+    const actionText = newStatus === 'active' ? 'ativar' : 'desativar';
+    if (!window.confirm(`Tem certeza que deseja ${actionText} este administrador?`)) {
+      return;
+    }
+    try {
+      const res = await safeFetch(`/api/admin/administradores/${adm.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ status: newStatus })
+      });
+      if (res && res.success) {
+        showToast(`Administrador ${newStatus === 'active' ? 'ativado' : 'desativado'} com sucesso!`, 'success');
+        fetchAdmins();
+      } else {
+        showToast(res.error || 'Erro ao alterar status', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Erro ao alterar status', 'error');
+    }
+  };
+
+  const handleDeleteAdmin = async (id: string) => {
+    if (!window.confirm('Tem certeza que deseja remover este administrador? Ele perderá todo o acesso à plataforma.')) {
+      return;
+    }
+    try {
+      const res = await safeFetch(`/api/admin/administradores/${id}`, {
+        method: 'DELETE'
+      });
+      if (res && res.success) {
+        showToast('Administrador removido com sucesso!', 'success');
+        fetchAdmins();
+      } else {
+        showToast(res.error || 'Erro ao remover administrador', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Erro ao remover administrador', 'error');
+    }
+  };
+
   const fetchData = async (refreshTab = false) => {
     if (!stats) setLoading(true);
     try {
@@ -613,6 +833,7 @@ export default function AdminDashboard() {
         if (activeTab === 'subscribers') fetchSubscribers();
         if (activeTab === 'audit') fetchAuditLogs();
         if (activeTab === 'api_integration') fetchApiKeys();
+        if (activeTab === 'admins') fetchAdmins();
       }
     } finally {
       setLoading(false);
@@ -644,6 +865,9 @@ export default function AdminDashboard() {
         break;
       case 'api_integration':
         fetchApiKeys();
+        break;
+      case 'admins':
+        if (isAdminMaster) fetchAdmins();
         break;
       case 'settings':
         fetchConfig();
@@ -1099,17 +1323,23 @@ export default function AdminDashboard() {
       <h1 className="text-2xl font-bold text-gray-900 mb-6">Painel Admin Master</h1>
       
       {/* Tabs */}
-      <div className="border-b border-gray-200 mb-8 overflow-x-auto">
-        <nav className="-mb-px flex space-x-8 min-w-max">
-          {['pharmacies', 'shifts', 'highlights', 'subscribers', 'subscriptions', 'reports', 'finance', 'audit', 'api_integration', 'settings'].filter(tab => (tab !== 'reports' && tab !== 'subscriptions' && tab !== 'settings' && tab !== 'subscribers' && tab !== 'audit' && tab !== 'finance' && tab !== 'api_integration') || isAdminMaster).map((tab) => (
+      <div className="mb-8 w-full">
+        <nav className="grid grid-cols-1 md:grid-cols-5 gap-3 w-full">
+          {['pharmacies', 'shifts', 'highlights', 'subscribers', 'subscriptions', 'reports', 'finance', 'audit', 'api_integration', 'admins', 'footer', 'settings'].filter(tab => (tab !== 'reports' && tab !== 'subscriptions' && tab !== 'settings' && tab !== 'subscribers' && tab !== 'audit' && tab !== 'finance' && tab !== 'api_integration' && tab !== 'admins' && tab !== 'footer') || isAdminMaster).map((tab) => (
             <button
               key={tab}
-              onClick={() => setActiveTab(tab)}
+              onClick={() => {
+                if (tab === 'footer') {
+                  navigate('/admin/footer');
+                } else {
+                  setActiveTab(tab);
+                }
+              }}
               className={`${
                 activeTab === tab
-                  ? 'border-emerald-500 text-emerald-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm capitalize`}
+                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                  : 'bg-white text-gray-600 hover:text-gray-900 hover:bg-gray-50 border-gray-200 shadow-sm'
+              } w-full py-3 px-4 border rounded-xl font-medium text-sm transition-all duration-200 flex items-center justify-center text-center cursor-pointer`}
             >
               {tab === 'pharmacies' && 'Gerenciar Farmácias'}
               {tab === 'shifts' && 'Cadastro de Plantões'}
@@ -1117,8 +1347,11 @@ export default function AdminDashboard() {
               {tab === 'subscribers' && 'Assinantes'}
               {tab === 'reports' && 'Relatórios e Métricas'}
               {tab === 'subscriptions' && 'Planos de Assinatura'}
+              {tab === 'finance' && 'Painel Financeiro'}
               {tab === 'audit' && 'Logs de Auditoria'}
               {tab === 'api_integration' && 'Integração API'}
+              {tab === 'admins' && 'Administradores'}
+              {tab === 'footer' && 'Configurar Rodapé'}
               {tab === 'settings' && 'Configurações'}
             </button>
           ))}
@@ -3117,6 +3350,478 @@ curl -X GET "${window.location.origin}/api/external/v1/shifts?apiKey=${sandboxAp
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {activeTab === 'admins' && isAdminMaster && (
+        <div className="space-y-6">
+          <div className="flex flex-col md:flex-row justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-gray-200 gap-4">
+            <div>
+              <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                <ShieldCheck className="w-6 h-6 text-emerald-600" />
+                Controle de Administradores
+              </h2>
+              <p className="text-sm text-gray-500 mt-1">
+                Adicione ou remova privilégios administrativos para gerenciar a plataforma.
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
+              <button
+                onClick={() => {
+                  fetchAvailableUsers();
+                  setIsPromoteModalOpen(true);
+                }}
+                className="bg-white text-emerald-700 border border-emerald-200 px-5 py-2.5 rounded-xl font-semibold hover:bg-emerald-50 flex items-center justify-center gap-2 transition-all shadow-sm hover:shadow cursor-pointer"
+              >
+                <UserCheck className="w-5 h-5" /> Promover Usuário Existente
+              </button>
+              <button
+                onClick={() => setIsNewAdminModalOpen(true)}
+                className="bg-emerald-600 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-emerald-700 flex items-center justify-center gap-2 transition-all shadow-md hover:shadow-lg cursor-pointer"
+              >
+                <Plus className="w-5 h-5" /> Novo Administrador
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+            {loadingAdmins ? (
+              <div className="p-8">
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="w-8 h-8 text-emerald-600 animate-spin" />
+                </div>
+              </div>
+            ) : admins.length === 0 ? (
+              <div className="text-center py-12">
+                <ShieldCheck className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                <p className="text-gray-500 text-sm font-medium">Nenhum administrador encontrado.</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Nome</th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">E-mail</th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Criado em</th>
+                      <th className="px-6 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {admins.map((adm) => (
+                      <tr key={adm.id} className="hover:bg-gray-50 transition-all">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900">
+                          {adm.name || 'Sem nome'}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                          {adm.email}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          {adm.status === 'inactive' ? (
+                            <span className="px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800 border border-red-200">
+                              Inativo
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                              Ativo
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {adm.created_at ? new Date(adm.created_at).toLocaleDateString('pt-BR') : '-'}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                          {firebaseUser?.uid === adm.id ? (
+                            <span className="text-xs bg-emerald-50 text-emerald-700 px-2.5 py-1 rounded-full font-semibold border border-emerald-100">
+                              Seu Usuário
+                            </span>
+                          ) : (
+                            <div className="flex items-center justify-end gap-2">
+                              <button
+                                onClick={() => handleOpenEditAdmin(adm)}
+                                className="text-emerald-600 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg transition-all text-xs font-semibold inline-flex items-center gap-1 cursor-pointer"
+                                title="Editar Administrador"
+                              >
+                                <Edit className="w-3.5 h-3.5" /> Editar
+                              </button>
+                              <button
+                                onClick={() => handleToggleStatusAdmin(adm)}
+                                className={`${
+                                  adm.status === 'inactive'
+                                    ? 'text-emerald-600 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100'
+                                    : 'text-amber-600 hover:text-amber-900 bg-amber-50 hover:bg-amber-100'
+                                } px-3 py-1.5 rounded-lg transition-all text-xs font-semibold inline-flex items-center gap-1 cursor-pointer`}
+                                title={adm.status === 'inactive' ? 'Ativar Administrador' : 'Desativar Administrador'}
+                              >
+                                {adm.status === 'inactive' ? (
+                                  <>
+                                    <CheckCircle className="w-3.5 h-3.5" /> Ativar
+                                  </>
+                                ) : (
+                                  <>
+                                    <Ban className="w-3.5 h-3.5" /> Desativar
+                                  </>
+                                )}
+                              </button>
+                              <button
+                                onClick={() => handleDeleteAdmin(adm.id)}
+                                className="text-red-600 hover:text-red-900 bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-lg transition-all text-xs font-semibold inline-flex items-center gap-1 cursor-pointer"
+                                title="Remover Administrador"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" /> Remover
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal Novo Administrador */}
+      {isNewAdminModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 transition-all">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 10 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            className="bg-white rounded-2xl shadow-2xl max-w-md w-full border border-gray-100 overflow-hidden"
+          >
+            <div className="flex justify-between items-center p-6 border-b border-gray-100 bg-gray-50/50">
+              <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-emerald-600" />
+                Novo Administrador
+              </h2>
+              <button
+                onClick={() => setIsNewAdminModalOpen(false)}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-all"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleCreateAdmin} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nome Completo</label>
+                <input
+                  type="text"
+                  required
+                  value={newAdminForm.name}
+                  onChange={(e) => setNewAdminForm({ ...newAdminForm, name: e.target.value })}
+                  placeholder="Ex: João Silva"
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all text-gray-900 placeholder:text-gray-400"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">E-mail</label>
+                <input
+                  type="email"
+                  required
+                  value={newAdminForm.email}
+                  onChange={(e) => setNewAdminForm({ ...newAdminForm, email: e.target.value })}
+                  placeholder="Ex: admin@exemplo.com"
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all text-gray-900 placeholder:text-gray-400"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Senha Provisória</label>
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  value={newAdminForm.password}
+                  onChange={(e) => setNewAdminForm({ ...newAdminForm, password: e.target.value })}
+                  placeholder="Mínimo de 6 caracteres"
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all text-gray-900 placeholder:text-gray-400"
+                />
+              </div>
+              <div className="pt-4 flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsNewAdminModalOpen(false)}
+                  className="flex-1 py-2.5 px-4 border border-gray-200 rounded-xl text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-all"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-semibold shadow-md hover:shadow-lg transition-all"
+                >
+                  Salvar
+                </button>
+              </div>
+            </form>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Modal Editar Administrador */}
+      {isEditAdminModalOpen && editingAdmin && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 transition-all">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 10 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            className="bg-white rounded-2xl shadow-2xl max-w-md w-full border border-gray-100 overflow-hidden"
+          >
+            <div className="flex justify-between items-center p-6 border-b border-gray-100 bg-gray-50/50">
+              <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-emerald-600" />
+                Editar Administrador
+              </h2>
+              <button
+                onClick={() => {
+                  setIsEditAdminModalOpen(false);
+                  setEditingAdmin(null);
+                }}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-all"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleUpdateAdmin} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nome Completo</label>
+                <input
+                  type="text"
+                  required
+                  value={editAdminForm.name}
+                  onChange={(e) => setEditAdminForm({ ...editAdminForm, name: e.target.value })}
+                  placeholder="Ex: João Silva"
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all text-gray-900 placeholder:text-gray-400"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">E-mail</label>
+                <input
+                  type="email"
+                  required
+                  value={editAdminForm.email}
+                  onChange={(e) => setEditAdminForm({ ...editAdminForm, email: e.target.value })}
+                  placeholder="Ex: admin@exemplo.com"
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all text-gray-900 placeholder:text-gray-400"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nova Senha (opcional)</label>
+                <input
+                  type="password"
+                  minLength={6}
+                  value={editAdminForm.password}
+                  onChange={(e) => setEditAdminForm({ ...editAdminForm, password: e.target.value })}
+                  placeholder="Deixe em branco para não alterar"
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all text-gray-900 placeholder:text-gray-400"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Status da Conta</label>
+                <select
+                  value={editAdminForm.status}
+                  onChange={(e) => setEditAdminForm({ ...editAdminForm, status: e.target.value })}
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all text-gray-900 bg-white"
+                >
+                  <option value="active">Ativo (Acesso Liberado)</option>
+                  <option value="inactive">Inativo (Acesso Bloqueado)</option>
+                </select>
+              </div>
+              <div className="pt-4 flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsEditAdminModalOpen(false);
+                    setEditingAdmin(null);
+                  }}
+                  className="flex-1 py-2.5 px-4 border border-gray-200 rounded-xl text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-all"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-semibold shadow-md hover:shadow-lg transition-all"
+                >
+                  Salvar
+                </button>
+              </div>
+            </form>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Modal Promover Usuário Existente */}
+      {isPromoteModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 transition-all">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 10 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            className="bg-white rounded-2xl shadow-2xl max-w-lg w-full border border-gray-100 overflow-hidden animate-in fade-in zoom-in-95 duration-250"
+          >
+            <div className="flex justify-between items-center p-6 border-b border-gray-100 bg-gray-50/50">
+              <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                <UserCheck className="w-5 h-5 text-emerald-600" />
+                Promover Usuário Existente
+              </h2>
+              <button
+                onClick={() => {
+                  setIsPromoteModalOpen(false);
+                  setSearchUserTerm('');
+                }}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-all cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-gray-500">
+                Selecione um usuário cadastrado no sistema para promovê-lo a administrador. Ele terá acesso completo ao painel.
+              </p>
+              
+              <div className="relative">
+                <Search className="absolute left-3 top-3.5 h-4 w-4 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Buscar por nome ou e-mail..."
+                  value={searchUserTerm}
+                  onChange={(e) => setSearchUserTerm(e.target.value)}
+                  className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all text-gray-900 placeholder:text-gray-400 text-sm"
+                />
+              </div>
+
+              <div className="border border-gray-100 rounded-xl max-h-64 overflow-y-auto divide-y divide-gray-100 bg-gray-50/50">
+                {loadingUsers ? (
+                  <div className="flex items-center justify-center py-12">
+                    <Loader2 className="w-6 h-6 text-emerald-600 animate-spin" />
+                  </div>
+                ) : (() => {
+                  const filtered = availableUsers.filter(u => {
+                    const term = normalizeString(searchUserTerm).toLowerCase();
+                    const name = normalizeString(u.name || '').toLowerCase();
+                    const email = normalizeString(u.email || '').toLowerCase();
+                    return name.includes(term) || email.includes(term);
+                  });
+
+                  if (filtered.length === 0) {
+                    return (
+                      <div className="text-center py-12 text-gray-500 text-sm">
+                        Nenhum usuário disponível encontrado.
+                      </div>
+                    );
+                  }
+
+                  return filtered.map((u) => (
+                    <div key={u.id} className="flex items-center justify-between p-4 hover:bg-white transition-all bg-white">
+                      <div>
+                        <p className="font-bold text-gray-900 text-sm">{u.name || 'Sem nome'}</p>
+                        <p className="text-xs text-gray-500 mt-0.5">{u.email}</p>
+                        <span className="inline-block mt-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200/50">
+                          {u.role === 'pharmacy' ? 'Farmácia' : u.role || 'Usuário'}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => handlePromoteUser(u)}
+                        className="bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all border border-emerald-100 hover:border-emerald-600 cursor-pointer"
+                      >
+                        <UserCheck className="w-3.5 h-3.5" /> Promover
+                      </button>
+                    </div>
+                  ));
+                })()}
+              </div>
+
+              <div className="pt-2 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsPromoteModalOpen(false);
+                    setSearchUserTerm('');
+                  }}
+                  className="px-5 py-2.5 border border-gray-200 rounded-xl text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-all cursor-pointer"
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Modal de Confirmação de Promoção */}
+      {isPromoteConfirmOpen && userToPromote && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-[60] transition-all">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 10 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            className="bg-white rounded-2xl shadow-2xl max-w-md w-full border border-gray-100 overflow-hidden"
+          >
+            <div className="flex justify-between items-center p-6 border-b border-gray-100 bg-gray-50/50">
+              <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-amber-500" />
+                Confirmar Promoção
+              </h2>
+              <button
+                onClick={() => {
+                  setIsPromoteConfirmOpen(false);
+                  setUserToPromote(null);
+                }}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-all cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-gray-600 leading-relaxed">
+                Você tem certeza de que deseja promover o seguinte usuário a <strong className="text-gray-900">Administrador</strong>?
+              </p>
+
+              <div className="bg-gray-50 rounded-xl p-4 border border-gray-150 space-y-2">
+                <div>
+                  <span className="text-[10px] font-bold text-gray-400 uppercase block">Nome</span>
+                  <span className="text-sm font-bold text-gray-900">{userToPromote.name || 'Sem nome'}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold text-gray-400 uppercase block">E-mail</span>
+                  <span className="text-sm text-gray-700 font-mono">{userToPromote.email}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold text-gray-400 uppercase block">Função Atual</span>
+                  <span className="inline-block mt-0.5 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-gray-200 text-gray-700 border border-gray-300/30">
+                    {userToPromote.role === 'pharmacy' ? 'Farmácia' : userToPromote.role || 'Usuário'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex gap-3">
+                <ShieldCheck className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                <p className="text-xs text-amber-800 leading-relaxed">
+                  <strong>Atenção:</strong> Esta ação concederá controle completo sobre o sistema, incluindo o gerenciamento de farmácias, plantões, configurações e outros administradores.
+                </p>
+              </div>
+
+              <div className="pt-4 flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsPromoteConfirmOpen(false);
+                    setUserToPromote(null);
+                  }}
+                  className="flex-1 py-2.5 px-4 border border-gray-200 rounded-xl text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-all cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmPromoteUser}
+                  className="flex-1 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-semibold shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <ShieldCheck className="w-4 h-4" /> Promover Admin
+                </button>
+              </div>
+            </div>
+          </motion.div>
         </div>
       )}
 

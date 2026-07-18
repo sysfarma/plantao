@@ -535,12 +535,26 @@ async function startServer() {
       const isConfigAdmin = adminEnv && decodedToken.email === adminEnv;
       const isAdmin = (isMasterAdmin || isConfigAdmin) && emailVerified;
 
+      let role = isAdmin ? 'admin' : (decodedToken.role || 'pharmacy');
+      
+      // Dynamic fallback check to Firestore to allow instant admin promotion authorization
+      if (role !== 'admin') {
+        try {
+          const userDoc = await db.collection('users').doc(decodedToken.uid).get();
+          if (userDoc.exists && userDoc.data()?.role === 'admin') {
+            role = 'admin';
+          }
+        } catch (dbErr) {
+          console.error('Error fetching admin fallback role from Firestore:', dbErr);
+        }
+      }
+
       req.user = {
         id: decodedToken.uid,
         uid: decodedToken.uid,
         email: decodedToken.email,
         email_verified: emailVerified,
-        role: isAdmin ? 'admin' : (decodedToken.role || 'pharmacy')
+        role: role
       };
       next();
     } catch (err) {
@@ -4179,6 +4193,157 @@ async function startServer() {
       await logAdminAction(req.user.id, 'api_keys', id, 'delete', { name });
 
       res.json({ success: true, message: 'Chave de API excluída com sucesso!' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Get non-admin users available for promotion
+  app.get('/api/admin/usuarios-disponiveis', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
+    try {
+      const snapshot = await db.collection('users').get();
+      const list = snapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() }))
+        .filter((u: any) => u.role !== 'admin');
+      res.json(list);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Promote existing user to administrator
+  app.post('/api/admin/administradores/promover', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: 'ID do usuário é obrigatório.' });
+    try {
+      const userDocRef = db.collection('users').doc(userId);
+      const userDoc = await userDocRef.get();
+      if (!userDoc.exists) {
+        return res.status(404).json({ error: 'Usuário não encontrado.' });
+      }
+      
+      // Set custom claims for Admin in Firebase Auth
+      await auth.setCustomUserClaims(userId, { role: 'admin' });
+      
+      // Update Firestore doc role
+      const now = new Date().toISOString();
+      await userDocRef.update({
+        role: 'admin',
+        status: 'active',
+        updated_at: now
+      });
+      
+      res.json({ success: true, message: 'Usuário promovido a administrador com sucesso!' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Get Administrators list
+  app.get('/api/admin/administradores', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
+    try {
+      const snapshot = await db.collection('users').where('role', '==', 'admin').get();
+      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      res.json(list);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Add new Administrator
+  app.post('/api/admin/administradores', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
+    const { email, password, name } = req.body;
+    if (!email || !password || !name) return res.status(400).json({ error: 'Dados incompletos' });
+    try {
+      // Create auth user using firebase-admin auth SDK
+      const userRecord = await auth.createUser({
+        email,
+        password,
+        displayName: name
+      });
+      // Set custom user claims so the role is securely associated
+      await auth.setCustomUserClaims(userRecord.uid, { role: 'admin' });
+      
+      const now = new Date().toISOString();
+      await db.collection('users').doc(userRecord.uid).set({
+        email,
+        name,
+        role: 'admin',
+        status: 'active',
+        created_at: now,
+        updated_at: now
+      });
+      
+      res.status(201).json({ id: userRecord.uid, email, name, role: 'admin', status: 'active' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Update Administrator
+  app.put('/api/admin/administradores/:id', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
+    const { id } = req.params;
+    const { email, password, name, status } = req.body;
+    
+    try {
+      // Prevent deactivating self
+      if (req.user.uid === id && status === 'inactive') {
+        return res.status(400).json({ error: 'Não é possível desativar seu próprio usuário administrador.' });
+      }
+
+      const updateData: any = {};
+      if (email) updateData.email = email;
+      if (password) updateData.password = password;
+      if (name) updateData.displayName = name;
+      if (status) updateData.disabled = status === 'inactive';
+
+      // Update firebase auth user
+      if (Object.keys(updateData).length > 0) {
+        await auth.updateUser(id, updateData);
+      }
+
+      // Update Firestore user document
+      const docRef = db.collection('users').doc(id);
+      const docSnap = await docRef.get();
+      if (!docSnap.exists) {
+        return res.status(404).json({ error: 'Administrador não encontrado.' });
+      }
+
+      const firestoreUpdates: any = {
+        updated_at: new Date().toISOString()
+      };
+      if (name !== undefined) firestoreUpdates.name = name;
+      if (email !== undefined) firestoreUpdates.email = email;
+      if (status !== undefined) firestoreUpdates.status = status;
+
+      await docRef.update(firestoreUpdates);
+
+      res.json({ success: true, message: 'Administrador atualizado com sucesso!' });
+    } catch (err: any) {
+      console.error('Update Admin Error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Delete Administrator
+  app.delete('/api/admin/administradores/:id', authenticateToken, async (req: any, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: ERRORS.ACCESS_DENIED });
+    const { id } = req.params;
+    try {
+      // Prevent deleting self
+      if (req.user.uid === id) {
+        return res.status(400).json({ error: 'Não é possível remover seu próprio usuário administrador.' });
+      }
+      // Delete auth user using firebase-admin auth SDK
+      await auth.deleteUser(id);
+      // Delete from users collection
+      await db.collection('users').doc(id).delete();
+      res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
