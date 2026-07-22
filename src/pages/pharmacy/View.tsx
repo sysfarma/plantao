@@ -10,6 +10,7 @@ import { safeJsonFetch } from '../../lib/api';
 import { isPharmacyOpen, getSyncedDate } from '../../lib/dateUtils';
 import { toZonedTime } from 'date-fns-tz';
 import SEOHandler from '../../components/SEOHandler';
+import PharmacySchema from '../../components/PharmacySchema';
 import { useToast } from '../../components/Toast';
 
 interface Pharmacy {
@@ -115,6 +116,7 @@ export default function PharmacyView() {
         title={`${pharmacy.name} - Endereço, Telefones e Horários`} 
         description={`Veja telefone, whatsapp, horário de funcionamento e localização no mapa de ${pharmacy.name} em ${pharmacy.city}, ${pharmacy.state}.`}
       />
+      <PharmacySchema pharmacy={pharmacy} />
 
       {/* Header / Cover Area */}
       <div className="bg-emerald-600 text-white pt-12 pb-24 relative overflow-hidden">

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Lock } from 'lucide-react';
 import { safeJsonFetch } from '../lib/api';
+import SEOHandler from '../components/SEOHandler';
 
 export default function Privacy() {
   const [lastUpdate, setLastUpdate] = useState<string>('');
@@ -19,6 +20,10 @@ export default function Privacy() {
 
   return (
     <div className="max-w-4xl mx-auto py-12 px-4 sm:px-6 lg:px-8">
+      <SEOHandler 
+        title="Política de Privacidade - Farmácias de Plantão" 
+        description="Política de Privacidade e proteção de dados do Farmácias de Plantão."
+      />
       <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-8 md:p-12">
         <div className="flex items-center gap-4 mb-8">
           <div className="p-3 bg-emerald-100 rounded-2xl text-emerald-600">

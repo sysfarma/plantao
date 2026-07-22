@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { Mail, Phone, MessageSquare, Clock, MapPin } from 'lucide-react';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import SEOHandler from '../components/SEOHandler';
 
 export default function Contact() {
   const [config, setConfig] = useState<any>(null);
@@ -34,6 +35,10 @@ export default function Contact() {
       transition={{ duration: 0.5 }}
       className="max-w-4xl mx-auto py-12 px-4 sm:px-6 lg:px-8"
     >
+      <SEOHandler 
+        title="Fale Conosco - Farmácias de Plantão" 
+        description="Entre em contato com a equipe do Farmácias de Plantão para dúvidas, sugestões e suporte."
+      />
       <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-8 md:p-12">
         <div className="text-center mb-12">
           <motion.h1 

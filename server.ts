@@ -427,12 +427,17 @@ async function generateAndCacheSitemap() {
     console.log('[Sitemap] Automatically pre-generating sitemap.xml...');
     const snapshot = await db.collection('pharmacies').where('is_active', 'in', [1, true]).get();
     const cities = new Set<string>();
+    const pharmacies = new Set<string>();
     
     snapshot.docs.forEach((doc: any) => {
       const data = doc.data();
       if (data.city && data.state) {
         const slug = `${data.state.toLowerCase()}/${data.city.toLowerCase().trim().replace(/\s+/g, '-')}`;
         cities.add(slug);
+      }
+      const pSlug = data.slug || doc.id;
+      if (pSlug) {
+        pharmacies.add(pSlug);
       }
     });
 
@@ -448,6 +453,11 @@ async function generateAndCacheSitemap() {
     // Dynamic Cities
     cities.forEach(slug => {
       xml += `<url><loc>${frontendUrl}/plantao/${slug}</loc><changefreq>daily</changefreq><priority>0.8</priority></url>`;
+    });
+
+    // Dynamic Pharmacies
+    pharmacies.forEach(pSlug => {
+      xml += `<url><loc>${frontendUrl}/farmacia/${pSlug}</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>`;
     });
 
     xml += '</urlset>';
@@ -1048,6 +1058,12 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
+  });
+
+  // Public: Robots.txt
+  app.get('/robots.txt', (req, res) => {
+    res.header('Content-Type', 'text/plain');
+    res.sendFile(path.join(process.cwd(), 'public', 'robots.txt'));
   });
 
   // Public: Sitemap
