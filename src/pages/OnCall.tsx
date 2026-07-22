@@ -412,29 +412,21 @@ export default function OnCall() {
                 </div>
 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 sm:gap-2">
-                  <Link 
-                    to={`/farmacia/${pharmacy.slug || pharmacy.id}`} 
-                    className="flex flex-col items-center justify-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white py-1.5 px-1 sm:py-2.5 sm:px-2 rounded-xl text-[6.5px] sm:text-[8.5px] font-bold uppercase tracking-tight transition-all border border-emerald-600 shadow-sm text-center"
-                    title={`Ver página e informações completas da ${pharmacy.name}`}
-                  >
-                    <Info className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white flex-shrink-0" />
-                    <span>MAIS</span>
-                  </Link>
                   <a 
                     onClick={() => handleTrackClick(pharmacy.id, 'map')} 
                     href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(pharmacy.street + ', ' + pharmacy.number + ' - ' + pharmacy.city)}`} 
                     target="_blank" 
                     rel="noreferrer" 
-                    className="flex flex-col items-center justify-center gap-1 bg-blue-50 text-blue-700 py-1.5 px-1 sm:py-2.5 sm:px-2 rounded-xl hover:bg-blue-100 text-[6.5px] sm:text-[8.5px] font-bold uppercase tracking-tight transition-all border border-blue-100 shadow-sm text-center"
+                    className="flex flex-col items-center justify-center gap-1 bg-blue-50 text-blue-700 py-2 px-1.5 sm:py-2.5 sm:px-2 rounded-xl hover:bg-blue-100 text-xs sm:text-[8.5px] font-bold uppercase tracking-tight transition-all border border-blue-100 shadow-sm text-center"
                   >
-                    <Navigation className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-500 flex-shrink-0" />
+                    <Navigation className="w-4 h-4 text-blue-500 flex-shrink-0" />
                     <span>MAPA</span>
                   </a>
                   <a 
                     href={`tel:${pharmacy.phone}`} 
-                    className="flex flex-col items-center justify-center gap-1 bg-gray-50 text-gray-700 py-1.5 px-1 sm:py-2.5 sm:px-2 rounded-xl hover:bg-gray-100 text-[6.5px] sm:text-[8.5px] font-bold uppercase tracking-tight transition-all border border-gray-100 shadow-sm text-center"
+                    className="flex flex-col items-center justify-center gap-1 bg-gray-50 text-gray-700 py-2 px-1.5 sm:py-2.5 sm:px-2 rounded-xl hover:bg-gray-100 text-xs sm:text-[8.5px] font-bold uppercase tracking-tight transition-all border border-gray-100 shadow-sm text-center"
                   >
-                    <Phone className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-600 flex-shrink-0" />
+                    <Phone className="w-4 h-4 text-emerald-600 flex-shrink-0" />
                     <span>LIGAR</span>
                   </a>
                   <a 
@@ -442,11 +434,19 @@ export default function OnCall() {
                     href={`https://wa.me/55${pharmacy.whatsapp.replace(/\D/g, '')}`} 
                     target="_blank" 
                     rel="noreferrer" 
-                    className="flex flex-col items-center justify-center gap-1 bg-emerald-50 text-emerald-700 py-1.5 px-1 sm:py-2.5 sm:px-2 rounded-xl hover:bg-emerald-100 text-[6.5px] sm:text-[8.5px] font-bold uppercase tracking-tight transition-all border border-emerald-100 shadow-sm text-center"
+                    className="flex flex-col items-center justify-center gap-1 bg-emerald-50 text-emerald-700 py-2 px-1.5 sm:py-2.5 sm:px-2 rounded-xl hover:bg-emerald-100 text-xs sm:text-[8.5px] font-bold uppercase tracking-tight transition-all border border-emerald-100 shadow-sm text-center"
                   >
-                    <MessageCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-500 flex-shrink-0" />
+                    <MessageCircle className="w-4 h-4 text-emerald-500 flex-shrink-0" />
                     <span>WHATSAPP</span>
                   </a>
+                  <Link 
+                    to={`/farmacia/${pharmacy.slug || pharmacy.id}`} 
+                    className="flex flex-col items-center justify-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2 px-1.5 sm:py-2.5 sm:px-2 rounded-xl text-xs sm:text-[8.5px] font-bold uppercase tracking-tight transition-all border border-emerald-600 shadow-sm text-center"
+                    title={`Ver página e informações completas da ${pharmacy.name}`}
+                  >
+                    <Info className="w-4 h-4 text-white flex-shrink-0" />
+                    <span>MAIS</span>
+                  </Link>
                 </div>
               </div>
             ))}

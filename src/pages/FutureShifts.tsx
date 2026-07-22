@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
-import { Clock, Calendar, Store, MapPin, Phone, Plus, MessageCircle } from 'lucide-react';
+import { Clock, Calendar, Store, MapPin, Phone, Plus, MessageCircle, Info } from 'lucide-react';
 import { formatToBRDate } from '../lib/dateUtils';
 import { doc, getDoc } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../lib/firebaseError';
@@ -205,12 +205,20 @@ export default function FutureShifts() {
                       href={`https://wa.me/55${shift.pharmacy.whatsapp.replace(/\D/g, '')}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="flex items-center justify-center gap-2 px-6 py-3 bg-emerald-600 text-white font-bold rounded-2xl hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-200 md:w-auto"
+                      className="flex items-center justify-center gap-2 px-6 py-3 bg-emerald-50 text-emerald-700 font-bold rounded-2xl hover:bg-emerald-100 transition-colors border border-emerald-100 md:w-auto"
                     >
-                      <MessageCircle className="w-4 h-4 text-white" />
+                      <MessageCircle className="w-4 h-4 text-emerald-600" />
                       WhatsApp
                     </a>
                   )}
+                  <Link 
+                    to={`/farmacia/${shift.pharmacy.slug || shift.pharmacy.id || shift.pharmacy_id}`}
+                    className="flex items-center justify-center gap-2 px-6 py-3 bg-emerald-600 text-white font-bold rounded-2xl hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-200 md:w-auto"
+                    title={`Ver página e informações completas da ${shift.pharmacy.name}`}
+                  >
+                    <Info className="w-4 h-4 text-white" />
+                    Mais
+                  </Link>
                 </div>
               </div>
             </div>
