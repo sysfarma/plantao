@@ -1,6 +1,7 @@
 User-agent: *
 Allow: /
 Allow: /plantao/
+Allow: /farmacia/
 Allow: /api/public/
 Allow: /api/external/v1/
 Allow: /sitemap.xml

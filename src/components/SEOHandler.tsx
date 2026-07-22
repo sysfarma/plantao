@@ -7,6 +7,7 @@ interface SEOHandlerProps {
   title?: string;
   description?: string;
   canonicalUrl?: string;
+  children?: React.ReactNode;
 }
 
 const SEOHandler: React.FC<SEOHandlerProps> = ({ 
@@ -14,7 +15,8 @@ const SEOHandler: React.FC<SEOHandlerProps> = ({
   uf, 
   title: customTitle, 
   description: customDescription,
-  canonicalUrl: customCanonical
+  canonicalUrl: customCanonical,
+  children
 }) => {
   const now = new Date();
   const monthNames = [
@@ -56,6 +58,7 @@ const SEOHandler: React.FC<SEOHandlerProps> = ({
       <meta name="twitter:title" content={title} />
       <meta name="twitter:description" content={description} />
       <meta name="twitter:image" content="https://farmaciasdeplantao.app.br/images/FARMACIAS-DE-PLANTAO.png" />
+      {children}
     </Helmet>
   );
 };

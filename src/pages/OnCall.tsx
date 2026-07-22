@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, MapPin, Phone, MessageCircle, Clock, Navigation, ChevronDown, ChevronUp, ChevronRight } from 'lucide-react';
+import { Search, MapPin, Phone, MessageCircle, Clock, Navigation, ChevronDown, ChevronUp, ChevronRight, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { safeJsonFetch } from '../lib/api';
 import { useSearchParams, useParams, useNavigate, Link } from 'react-router-dom';
@@ -411,20 +411,28 @@ export default function OnCall() {
                   </div>
                 </div>
 
-                <div className="flex flex-col gap-2 sm:flex-row">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <Link 
+                    to={`/farmacia/${pharmacy.slug || pharmacy.id}`} 
+                    className="flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white p-2.5 rounded-xl text-xs font-bold transition-all border border-emerald-600 shadow-sm"
+                    title={`Ver página e informações completas da ${pharmacy.name}`}
+                  >
+                    <Info className="w-4 h-4 text-white" />
+                    VER PÁGINA
+                  </Link>
                   <a 
                     onClick={() => handleTrackClick(pharmacy.id, 'map')} 
                     href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(pharmacy.street + ', ' + pharmacy.number + ' - ' + pharmacy.city)}`} 
                     target="_blank" 
                     rel="noreferrer" 
-                    className="flex items-center justify-center gap-2 bg-blue-50 text-blue-700 p-3 rounded-xl hover:bg-blue-100 text-xs font-bold transition-all border border-blue-100 sm:flex-1 order-1 sm:order-3"
+                    className="flex items-center justify-center gap-1.5 bg-blue-50 text-blue-700 p-2.5 rounded-xl hover:bg-blue-100 text-xs font-bold transition-all border border-blue-100 shadow-sm"
                   >
                     <Navigation className="w-4 h-4 text-blue-500" />
-                    VER NO MAPA
+                    MAPA
                   </a>
                   <a 
                     href={`tel:${pharmacy.phone}`} 
-                    className="flex items-center justify-center gap-2 bg-gray-50 text-gray-700 p-3 rounded-xl hover:bg-gray-100 text-xs font-bold transition-all border border-gray-100 sm:flex-1 order-2 sm:order-1"
+                    className="flex items-center justify-center gap-1.5 bg-gray-50 text-gray-700 p-2.5 rounded-xl hover:bg-gray-100 text-xs font-bold transition-all border border-gray-100 shadow-sm"
                   >
                     <Phone className="w-4 h-4 text-emerald-600" />
                     LIGAR
@@ -434,7 +442,7 @@ export default function OnCall() {
                     href={`https://wa.me/55${pharmacy.whatsapp.replace(/\D/g, '')}`} 
                     target="_blank" 
                     rel="noreferrer" 
-                    className="flex items-center justify-center gap-2 bg-emerald-50 text-emerald-700 p-3 rounded-xl hover:bg-emerald-100 text-xs font-bold transition-all sm:flex-1 order-3 sm:order-2"
+                    className="flex items-center justify-center gap-1.5 bg-emerald-50 text-emerald-700 p-2.5 rounded-xl hover:bg-emerald-100 text-xs font-bold transition-all border border-emerald-100 shadow-sm"
                   >
                     <MessageCircle className="w-4 h-4 text-emerald-500" />
                     WHATSAPP

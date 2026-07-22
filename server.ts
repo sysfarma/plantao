@@ -1090,6 +1090,80 @@ async function startServer() {
     }
   });
 
+  // Public: List cities with active pharmacies or shifts for SEO & Directory
+  let citiesCacheData: any[] | null = null;
+  let citiesCacheTime: number = 0;
+
+  app.get('/api/public/cities', publicLimiter, async (req, res) => {
+    try {
+      const now = Date.now();
+      if (citiesCacheData && (now - citiesCacheTime < 10 * 60 * 1000)) {
+        return res.json(citiesCacheData);
+      }
+
+      const pSnapshot = await db.collection('pharmacies').where('is_active', 'in', [1, true]).get();
+      const sSnapshot = await db.collection('shifts').get();
+
+      const cityMap = new Map<string, { city: string, state: string, slug: string, pharmaciesCount: number, shiftsCount: number }>();
+
+      const getCityKey = (c: string, s: string) => `${s.toUpperCase()}_${c.toLowerCase().trim()}`;
+
+      const pharmacyCityMap = new Map<string, { city: string, state: string }>();
+
+      pSnapshot.docs.forEach((doc: any) => {
+        const data = doc.data();
+        if (data && data.city && data.state) {
+          const rawCity = String(data.city).trim();
+          const state = String(data.state).toUpperCase().trim();
+          const slug = `${state.toLowerCase()}/${rawCity.toLowerCase().replace(/\s+/g, '-')}`;
+          const key = getCityKey(rawCity, state);
+
+          pharmacyCityMap.set(doc.id, { city: rawCity, state });
+
+          if (!cityMap.has(key)) {
+            const formatted = rawCity
+              .toLowerCase()
+              .split(' ')
+              .map(word => (['de', 'da', 'do', 'das', 'dos', 'e'].includes(word) ? word : word.charAt(0).toUpperCase() + word.slice(1)))
+              .join(' ');
+
+            cityMap.set(key, {
+              city: formatted,
+              state,
+              slug,
+              pharmaciesCount: 0,
+              shiftsCount: 0
+            });
+          }
+          const item = cityMap.get(key)!;
+          item.pharmaciesCount += 1;
+        }
+      });
+
+      sSnapshot.docs.forEach((doc: any) => {
+        const data = doc.data();
+        if (!data || !data.pharmacy_id) return;
+        const pInfo = pharmacyCityMap.get(data.pharmacy_id);
+        if (pInfo) {
+          const key = getCityKey(pInfo.city, pInfo.state);
+          const item = cityMap.get(key);
+          if (item) {
+            item.shiftsCount += 1;
+          }
+        }
+      });
+
+      const citiesList = Array.from(cityMap.values()).sort((a, b) => a.city.localeCompare(b.city, 'pt-BR'));
+      citiesCacheData = citiesList;
+      citiesCacheTime = now;
+
+      res.json(citiesList);
+    } catch (err) {
+      console.error('[API] Error fetching cities list:', err);
+      res.status(500).json({ error: 'Erro ao buscar cidades' });
+    }
+  });
+
   // Public: Get Pharmacies by City/State
   app.get('/api/public/pharmacies', publicLimiter, validate(publicSearchSchema), async (req, res) => {
     const city = ensureString(req.query.city);
@@ -4584,6 +4658,146 @@ async function startServer() {
       });
     } catch (err: any) {
       res.status(500).json({ error: 'Erro ao processar requisição: ' + err.message });
+    }
+  });
+
+  // --- SEO Prerendering & Dynamic HTML Meta Tags Handler ---
+  const getIndexHtml = async () => {
+    const distIndexPath = path.join(process.cwd(), 'dist', 'index.html');
+    const rootIndexPath = path.join(process.cwd(), 'index.html');
+    if (fs.existsSync(distIndexPath)) {
+      return fs.readFileSync(distIndexPath, 'utf-8');
+    }
+    if (fs.existsSync(rootIndexPath)) {
+      return fs.readFileSync(rootIndexPath, 'utf-8');
+    }
+    return '';
+  };
+
+  // SEO Prerender for Individual Pharmacy Pages (/farmacia/:id or /farmacia/:slug)
+  app.get('/farmacia/:id', async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      let pharmacyDoc = await db.collection('pharmacies').doc(id).get();
+      let pharmacyId = id;
+
+      if (!pharmacyDoc.exists) {
+        const snapshot = await db.collection('pharmacies')
+          .where('slug', '==', id)
+          .where('is_active', 'in', [1, true])
+          .limit(1)
+          .get();
+
+        if (!snapshot.empty) {
+          pharmacyDoc = snapshot.docs[0] as any;
+          pharmacyId = pharmacyDoc.id;
+        }
+      }
+
+      if (!pharmacyDoc || !pharmacyDoc.exists) {
+        return next();
+      }
+
+      const pData = pharmacyDoc.data();
+      if (!pData || !pData.is_active) {
+        return next();
+      }
+
+      let html = await getIndexHtml();
+      if (!html) return next();
+
+      const pharmacyName = String(pData.name || 'Farmácia').trim();
+      const city = String(pData.city || '').trim();
+      const state = String(pData.state || '').toUpperCase().trim();
+      const pSlug = pData.slug || pharmacyId;
+      const canonicalUrl = `https://farmaciasdeplantao.app.br/farmacia/${pSlug}`;
+
+      const title = `${pharmacyName} - Endereço, Telefones e Horários em ${city}/${state} | Farmácias de Plantão`;
+      const description = `Veja telefone, WhatsApp, horário de atendimento, endereço e localização no mapa de ${pharmacyName} em ${city}, ${state}.`;
+
+      html = html.replace(/<title>.*?<\/title>/gi, `<title>${title}</title>`);
+      html = html.replace(/<meta name="description" content=".*?" \/>/gi, `<meta name="description" content="${description}" />`);
+      html = html.replace(/<meta property="og:title" content=".*?" \/>/gi, `<meta property="og:title" content="${title}" />`);
+      html = html.replace(/<meta property="og:description" content=".*?" \/>/gi, `<meta property="og:description" content="${description}" />`);
+      html = html.replace(/<meta property="og:url" content=".*?" \/>/gi, `<meta property="og:url" content="${canonicalUrl}" />`);
+
+      if (html.includes('<link rel="canonical"')) {
+        html = html.replace(/<link rel="canonical" href=".*?" \/>/gi, `<link rel="canonical" href="${canonicalUrl}" />`);
+      } else {
+        html = html.replace('</head>', `  <link rel="canonical" href="${canonicalUrl}" />\n</head>`);
+      }
+
+      const citySlug = `${state.toLowerCase()}/${city.toLowerCase().replace(/\s+/g, '-')}`;
+      const jsonLd = {
+        '@context': 'https://schema.org',
+        '@graph': [
+          {
+            '@type': 'Pharmacy',
+            '@id': `${canonicalUrl}#pharmacy`,
+            'name': pharmacyName,
+            'url': canonicalUrl,
+            'telephone': pData.phone || '',
+            'address': {
+              '@type': 'PostalAddress',
+              'streetAddress': `${pData.street || ''}, ${pData.number || ''}`,
+              'addressLocality': city,
+              'addressRegion': state,
+              'addressCountry': 'BR'
+            }
+          },
+          {
+            '@type': 'BreadcrumbList',
+            '@id': `${canonicalUrl}#breadcrumb`,
+            'itemListElement': [
+              { '@type': 'ListItem', 'position': 1, 'name': 'Início', 'item': 'https://farmaciasdeplantao.app.br/' },
+              { '@type': 'ListItem', 'position': 2, 'name': `Plantão ${city} - ${state}`, 'item': `https://farmaciasdeplantao.app.br/plantao/${citySlug}` },
+              { '@type': 'ListItem', 'position': 3, 'name': pharmacyName, 'item': canonicalUrl }
+            ]
+          }
+        ]
+      };
+
+      const schemaScript = `\n  <script type="application/ld+json">${JSON.stringify(jsonLd)}</script>\n`;
+      html = html.replace('</head>', `${schemaScript}</head>`);
+
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.send(html);
+    } catch (err) {
+      console.error('[SEO Prerender] Error rendering pharmacy page:', err);
+      return next();
+    }
+  });
+
+  // SEO Prerender for City On-Call Pages (/plantao/:uf/:city)
+  app.get('/plantao/:uf/:city', async (req, res, next) => {
+    try {
+      const { uf, city } = req.params;
+      const formattedCity = city.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+      const stateUpper = uf.toUpperCase();
+      const canonicalUrl = `https://farmaciasdeplantao.app.br/plantao/${uf.toLowerCase()}/${city.toLowerCase()}`;
+
+      let html = await getIndexHtml();
+      if (!html) return next();
+
+      const title = `Farmácia de Plantão em ${formattedCity} - ${stateUpper} Hoje | Farmácias de Plantão`;
+      const description = `Confira a escala de plantão das farmácias de ${formattedCity} (${stateUpper}) atualizada para hoje. Veja endereços, telefones e localização no mapa.`;
+
+      html = html.replace(/<title>.*?<\/title>/gi, `<title>${title}</title>`);
+      html = html.replace(/<meta name="description" content=".*?" \/>/gi, `<meta name="description" content="${description}" />`);
+      html = html.replace(/<meta property="og:title" content=".*?" \/>/gi, `<meta property="og:title" content="${title}" />`);
+      html = html.replace(/<meta property="og:description" content=".*?" \/>/gi, `<meta property="og:description" content="${description}" />`);
+      html = html.replace(/<meta property="og:url" content=".*?" \/>/gi, `<meta property="og:url" content="${canonicalUrl}" />`);
+
+      if (html.includes('<link rel="canonical"')) {
+        html = html.replace(/<link rel="canonical" href=".*?" \/>/gi, `<link rel="canonical" href="${canonicalUrl}" />`);
+      } else {
+        html = html.replace('</head>', `  <link rel="canonical" href="${canonicalUrl}" />\n</head>`);
+      }
+
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.send(html);
+    } catch (err) {
+      return next();
     }
   });
 

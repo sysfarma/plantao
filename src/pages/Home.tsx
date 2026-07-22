@@ -1,5 +1,5 @@
 import React, { useState, useEffect, Fragment } from 'react';
-import { Search, MapPin, Phone, MessageCircle, Star, Clock, ChevronDown, ChevronUp, Navigation } from 'lucide-react';
+import { Search, MapPin, Phone, MessageCircle, Star, Clock, ChevronDown, ChevronUp, Navigation, Info } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { safeJsonFetch } from '../lib/api';
@@ -35,6 +35,14 @@ interface Highlight extends Pharmacy {
   date_end?: string;
 }
 
+interface CityInfo {
+  city: string;
+  state: string;
+  slug: string;
+  pharmaciesCount: number;
+  shiftsCount: number;
+}
+
 export default function Home() {
   const navigate = useNavigate();
   const { 
@@ -53,6 +61,7 @@ export default function Home() {
   const [name, setName] = useState('');
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [pharmacies, setPharmacies] = useState<Pharmacy[]>([]);
+  const [activeCities, setActiveCities] = useState<CityInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -74,6 +83,16 @@ export default function Home() {
   useEffect(() => {
     detectLocation();
   }, [detectLocation]);
+
+  useEffect(() => {
+    safeJsonFetch<CityInfo[]>('/api/public/cities')
+      .then(data => {
+        if (Array.isArray(data)) {
+          setActiveCities(data);
+        }
+      })
+      .catch(err => console.error('Error fetching active cities:', err));
+  }, []);
 
   useEffect(() => {
     if (locationStatus === 'detected' && location && !hasSearched) {
@@ -401,9 +420,69 @@ export default function Home() {
     </section>
   );
 
+  const citiesDirectorySection = activeCities.length > 0 && (
+    <section className="bg-white rounded-3xl p-6 sm:p-8 border border-gray-100 shadow-sm mt-8">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 pb-4 border-b border-gray-100">
+        <div>
+          <h2 className="text-xl sm:text-2xl font-bold text-gray-900 flex items-center gap-2">
+            <MapPin className="w-6 h-6 text-emerald-600" />
+            Cidades com Plantões e Farmácias Registradas
+          </h2>
+          <p className="text-gray-500 text-sm mt-1">
+            Selecione um município para acessar a escala de plantão atualizada e farmácias cadastradas
+          </p>
+        </div>
+        <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-100 px-3 py-1.5 rounded-full self-start sm:self-auto">
+          {activeCities.length} {activeCities.length === 1 ? 'município cadastrado' : 'municípios cadastrados'}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        {activeCities.map((item) => (
+          <Link
+            key={item.slug}
+            to={`/plantao/${item.slug}`}
+            title={`Ver escala de plantão de farmácias em ${item.city} - ${item.state}`}
+            className="group flex flex-col justify-between p-4 rounded-2xl border border-gray-100 hover:border-emerald-300 bg-gray-50/60 hover:bg-emerald-50/40 transition-all hover:shadow-md"
+          >
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <span className="font-bold text-gray-900 group-hover:text-emerald-700 transition-colors">
+                {item.city} <span className="text-emerald-600 text-xs font-bold uppercase">({item.state})</span>
+              </span>
+              <span className="text-[11px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full">
+                Plantão
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-xs text-gray-500 mt-2">
+              <span>{item.pharmaciesCount} {item.pharmaciesCount === 1 ? 'farmácia' : 'farmácias'}</span>
+              <span className="text-emerald-600 font-bold group-hover:underline">Ver plantão →</span>
+            </div>
+          </Link>
+        ))}
+      </div>
+    </section>
+  );
+
   return (
     <div className="pb-12">
-      <SEOHandler />
+      <SEOHandler>
+        {activeCities.length > 0 && (
+          <script type="application/ld+json">
+            {JSON.stringify({
+              '@context': 'https://schema.org',
+              '@type': 'ItemList',
+              'name': 'Cidades com Farmácias de Plantão',
+              'description': 'Diretório de municípios com plantões de farmácias e drogarias cadastradas no Brasil.',
+              'itemListElement': activeCities.map((item, idx) => ({
+                '@type': 'ListItem',
+                'position': idx + 1,
+                'name': `Farmácias de Plantão em ${item.city} - ${item.state}`,
+                'url': `https://farmaciasdeplantao.app.br/plantao/${item.slug}`
+              }))
+            })}
+          </script>
+        )}
+      </SEOHandler>
       {/* Hero Search Section */}
       <section className="bg-emerald-600 text-white pt-4 pb-16 px-4">
         <div className="w-full max-w-[90%] mx-auto text-center">
@@ -543,6 +622,7 @@ export default function Home() {
               {resultsSection}
             </div>
             {highlightsSection}
+            {citiesDirectorySection}
           </>
         ) : (
           <>
@@ -550,6 +630,7 @@ export default function Home() {
             <div className="w-full">
               {resultsSection}
             </div>
+            {citiesDirectorySection}
           </>
         )}
       </div>
@@ -588,20 +669,28 @@ function PharmacyCard({ pharmacy, onTrackClick }: { pharmacy: Pharmacy; onTrackC
         </p>
       </div>
 
-      <div className="flex flex-col gap-2 sm:flex-row">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <Link 
+          to={`/farmacia/${pharmacy.slug || pharmacy.id}`} 
+          className="flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white p-2.5 rounded-xl text-xs font-bold transition-all border border-emerald-600 shadow-sm"
+          title={`Ver página e informações completas da ${pharmacy.name}`}
+        >
+          <Info className="w-4 h-4 text-white" />
+          VER PÁGINA
+        </Link>
         <a 
           onClick={() => onTrackClick(pharmacy.id, 'map')} 
           href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(pharmacy.street + ', ' + pharmacy.number + ' - ' + pharmacy.city)}`} 
           target="_blank" 
           rel="noreferrer" 
-          className="flex items-center justify-center gap-2 bg-blue-50 text-blue-700 p-3 rounded-xl hover:bg-blue-100 text-xs font-bold transition-all sm:flex-1 border border-blue-100 shadow-sm order-1 sm:order-3"
+          className="flex items-center justify-center gap-1.5 bg-blue-50 text-blue-700 p-2.5 rounded-xl hover:bg-blue-100 text-xs font-bold transition-all border border-blue-100 shadow-sm"
         >
           <MapPin className="w-4 h-4 text-blue-500" />
           MAPA
         </a>
         <a 
           href={`tel:${pharmacy.phone}`} 
-          className="flex items-center justify-center gap-2 bg-gray-50 text-gray-700 p-3 rounded-xl hover:bg-gray-100 text-xs font-bold transition-all sm:flex-1 order-2 sm:order-1"
+          className="flex items-center justify-center gap-1.5 bg-gray-50 text-gray-700 p-2.5 rounded-xl hover:bg-gray-100 text-xs font-bold transition-all border border-gray-100 shadow-sm"
         >
           <Phone className="w-4 h-4 text-emerald-600" />
           LIGAR
@@ -611,7 +700,7 @@ function PharmacyCard({ pharmacy, onTrackClick }: { pharmacy: Pharmacy; onTrackC
           href={`https://wa.me/55${pharmacy.whatsapp.replace(/\D/g, '')}`} 
           target="_blank" 
           rel="noreferrer" 
-          className="flex items-center justify-center gap-2 bg-emerald-50 text-emerald-700 p-3 rounded-xl hover:bg-emerald-100 text-xs font-bold transition-all sm:flex-1 order-3 sm:order-2"
+          className="flex items-center justify-center gap-1.5 bg-emerald-50 text-emerald-700 p-2.5 rounded-xl hover:bg-emerald-100 text-xs font-bold transition-all border border-emerald-100 shadow-sm"
         >
           <MessageCircle className="w-4 h-4 text-emerald-500" />
           WHATSAPP
