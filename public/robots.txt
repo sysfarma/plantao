@@ -1,9 +1,35 @@
 User-agent: *
 Allow: /
-Disallow: /api/
+Allow: /plantao/
+Allow: /api/public/
+Allow: /api/external/v1/
+Allow: /sitemap.xml
 Disallow: /admin/
 Disallow: /checkout/
 
-# Crawl-delay: 1 (opcional para diminuir carga do servidor)
+# Rules for Search Engines & AI Agents
+User-agent: Googlebot
+Allow: /
+
+User-agent: Bingbot
+Allow: /
+
+User-agent: GPTBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Bytespider
+Allow: /
 
 Sitemap: https://farmaciasdeplantao.app.br/sitemap.xml
